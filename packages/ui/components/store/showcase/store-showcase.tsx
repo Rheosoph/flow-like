@@ -15,7 +15,7 @@ import { ShowcaseActivity } from "./showcase-activity";
 import { ShowcaseData } from "./showcase-data";
 import { ShowcaseHood } from "./showcase-hood";
 import { ShowcaseMap } from "./showcase-map";
-import { type ShowcaseSelection, ShowcaseSheet } from "./showcase-sheet";
+import { ShowcaseDetail, type ShowcaseSelection } from "./showcase-sheet";
 import {
 	ShowcasePages,
 	ShowcaseTemplates,
@@ -101,7 +101,7 @@ export function StoreShowcase({
 			{sections.map((k) => (
 				<div key={k}>{render(k)}</div>
 			))}
-			<ShowcaseSheet
+			<ShowcaseDetail
 				showcase={showcase}
 				graph={graph}
 				access={access}

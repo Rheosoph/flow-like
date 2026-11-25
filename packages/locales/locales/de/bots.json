@@ -37,7 +37,7 @@
 			"label": "Datenverbindungen"
 		},
 		"data_studio": {
-			"description": "Speichert Tabellen und fragt sie ab, wie im Data Studio einer App",
+			"description": "Speichert Tabellen und fragt sie ab, liest die Tabellen und Graphen deiner Apps und fügt Knoten und Kanten zu Graphen hinzu, nachdem du jede Änderung bestätigt hast",
 			"label": "Data Studio"
 		},
 		"delegation": {
@@ -1483,6 +1483,52 @@
 		"deleteFailed": "Erinnerung konnte nicht gelöscht werden",
 		"details": "Details zur Erinnerung",
 		"emptyTitle": "Noch keine Erinnerungen gespeichert",
+		"entities": {
+			"aliases": "Auch genannt",
+			"also": "auch: {{names}}",
+			"back": "Alle Personen & Dinge",
+			"cancelRename": "Abbrechen",
+			"factCount_one": "{{count}} Fakt",
+			"factCount_other": "{{count}} Fakten",
+			"facts_one": "{{count}} Fakt",
+			"facts_other": "{{count}} Fakten",
+			"forget": "Alles über {{name}} vergessen",
+			"forgetBody_one": "{{count}} Fakt, der {{name}} erwähnt, wird gelöscht. Der Chat behält, was gesagt wurde.",
+			"forgetBody_other": "{{count}} Fakten, die {{name}} erwähnen, werden gelöscht. Der Chat behält, was gesagt wurde.",
+			"forgetConfirm": "Vergessen",
+			"forgetTitle": "{{name}} vergessen?",
+			"graph": "Verbindungen von {{name}}",
+			"kindLabel": "Art",
+			"kindNames": {
+				"organization": "Organisation",
+				"person": "Person",
+				"place": "Ort",
+				"project": "Projekt",
+				"thing": "Ding"
+			},
+			"kinds": {
+				"organization": "Organisationen",
+				"person": "Personen",
+				"place": "Orte",
+				"project": "Projekte",
+				"thing": "Dinge"
+			},
+			"merge": "Zusammenführen mit…",
+			"mergeEmpty": "Niemand gefunden",
+			"mergeSearch": "Suchen, mit wem {{name}} identisch ist…",
+			"moreConnections_one": "+{{count}} weitere Verbindung",
+			"moreConnections_other": "+{{count}} weitere Verbindungen",
+			"noFacts": "Noch keine Fakten über {{name}}.",
+			"noResults": "Niemand passt",
+			"openNeighbour": "{{name}} öffnen",
+			"ownerHint": "Die Person, für die dieser Bot arbeitet",
+			"pick": "Wähle eine Person oder ein Ding, um die Verbindungen zu sehen.",
+			"rename": "Umbenennen",
+			"room": "Gruppenchat",
+			"saveName": "Namen speichern",
+			"searchPlaceholder": "Personen & Dinge durchsuchen…",
+			"you": "Du"
+		},
 		"expires": "Läuft ab",
 		"exploreHistory": "Chatverlauf durchsuchen",
 		"factsEmpty": "{{name}} notiert hier Fakten, Vorlieben und Entscheidungen, während ihr chattet.",
@@ -1557,6 +1603,7 @@
 			"until": "Bis {{date}}"
 		},
 		"views": {
+			"entities": "Personen & Dinge",
 			"label": "Erinnerungen anzeigen als",
 			"map_one": "Karte mit {{count}} Ort",
 			"map_other": "Karte mit {{count}} Orten",

@@ -947,7 +947,13 @@ mod tests {
         assert!(validate_hosting_region(&Bit::default()).is_ok());
         assert!(validate_hosting_region(&with_region(serde_json::Value::Null)).is_ok());
         assert!(validate_hosting_region(&with_region(json!("eu"))).is_ok());
-        for rejected in [json!("EU"), json!("us"), json!(""), json!(true), json!(["eu"])] {
+        for rejected in [
+            json!("EU"),
+            json!("us"),
+            json!(""),
+            json!(true),
+            json!(["eu"]),
+        ] {
             assert!(
                 validate_hosting_region(&with_region(rejected.clone())).is_err(),
                 "{rejected} must be rejected"

@@ -39,7 +39,8 @@ pub enum BotCapability {
     Location,
     /// Files, stored like app storage.
     Storage,
-    /// Tables, stored like app databases.
+    /// Tables, stored like app databases; reads the allowed apps' tables and graphs and adds
+    /// graph nodes and edges to them, each write approved by the owner.
     DataStudio,
     /// Remembers across chats: recall and the memory tools. FlowPilot bots always have it.
     Memory,

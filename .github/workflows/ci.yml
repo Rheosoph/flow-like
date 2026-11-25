@@ -111,6 +111,7 @@ jobs:
     if: needs.changes.outputs.alpha == 'true'
     permissions:
       contents: write
+      id-token: write
     uses: ./.github/workflows/alpha-release.yml
     secrets: inherit
 

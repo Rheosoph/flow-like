@@ -1321,7 +1321,10 @@ pub async fn global_chat_native(
                 };
                 let bridge: Arc<dyn PlatformToolBridge> = match &bot {
                     Some(bot) if !bot.runs_flowpilot() => {
-                        Arc::new(bot_chat::BotDesktopBridge(desktop_bridge))
+                        Arc::new(bot_chat::BotDesktopBridge(
+                            desktop_bridge,
+                            bot.context.workspace_app_id.clone(),
+                        ))
                     }
                     _ => Arc::new(desktop_bridge),
                 };

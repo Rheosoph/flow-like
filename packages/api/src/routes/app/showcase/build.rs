@@ -300,6 +300,15 @@ pub async fn pages(
         .collect()
 }
 
+fn component_total(page: &flow_like::a2ui::widget::Page) -> u32 {
+    let widget_components: usize = page
+        .widget_refs
+        .values()
+        .map(|widget| widget.components.len())
+        .sum();
+    (page.components.len() + widget_components) as u32
+}
+
 async fn load_outlines(
     state: &AppState,
     app_id: &str,
@@ -349,7 +358,7 @@ async fn load_outlines(
                 let route = Some(page.route.clone()).filter(|route| !route.trim().is_empty());
                 Some((
                     page_id,
-                    (route, page_outline(&page), page.components.len() as u32),
+                    (route, page_outline(&page), component_total(&page)),
                 ))
             }
         })

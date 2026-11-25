@@ -5,11 +5,13 @@
 
 mod commit;
 mod draft;
+mod entities;
 mod maintenance;
 mod reset;
 mod telemetry;
 
 pub(crate) use commit::CommitOutcome;
+pub use entities::NoEntity;
 
 use draft::SegmentDraft;
 
@@ -27,9 +29,10 @@ use flow_like_types::{Result, create_id};
 use crate::compaction::{
     CompactionConfig, CompactionPlan, PlannerInput, TurnPhase, TurnPlan, plan_turn,
 };
+use crate::entities::mentioned_in;
 use crate::facts::{
-    ExtractionInput, Fact, Rejection, UpdateReport, apply_prepared_facts, extract_facts,
-    prepare_facts,
+    Candidates, ExtractionInput, Fact, Rejection, UpdateReport, apply_prepared_facts,
+    extract_facts, prepare_facts,
 };
 use crate::llm::MemoryLlm;
 use crate::model::{HistoryItem, Seq, SeqSpan};
@@ -132,19 +135,24 @@ const CLAIM_ATTEMPTS: usize = 3;
 const WRITE_LEASE_WAIT: WaitDuration = WaitDuration::from_secs(30);
 const WRITE_LEASE_POLL: WaitDuration = WaitDuration::from_millis(250);
 const MAINTENANCE_HOURS: i64 = 6;
+/// The most entities a message can name for recall.
+const MAX_RECALLED_ENTITIES: usize = 3;
+/// Facts one maintenance run gives subject entities.
+const BACKFILL_BATCH: usize = 2_000;
 const MAINTENANCE_HEARTBEAT: WaitDuration = WaitDuration::from_secs(120);
 
 /// What mining produced, with the spans whose extraction failed.
 #[derive(Default)]
 struct Mined {
-    candidates: Vec<Fact>,
+    candidates: Candidates,
     rejected: Vec<Rejection>,
     unmined: Vec<SeqSpan>,
 }
 
 impl Mined {
     fn absorb(&mut self, other: Mined) {
-        self.candidates.extend(other.candidates);
+        self.candidates.facts.extend(other.candidates.facts);
+        self.candidates.entities.extend(other.candidates.entities);
         self.rejected.extend(other.rejected);
         self.unmined.extend(other.unmined);
     }
@@ -201,10 +209,14 @@ impl MemoryEngine {
         }
         let revision = state.revision;
         let prepared = self.stores.prepare_optimization(now).await;
+        let upkeep = self
+            .check_preparation(revision, self.prepare_entity_upkeep(now))
+            .await?;
         let commit_now = now + Duration::from_std(started.elapsed())?;
         let (expired, _) = self
             .commit(revision, commit_now, move |stores, mut state| async move {
                 let expired = stores.facts.purge_expired(now).await?;
+                upkeep.apply(&stores).await?;
                 stores.apply_optimization(prepared).await?;
                 state.last_maintenance_at = Some(now);
                 state.updated_at = Some(now);
@@ -341,7 +353,10 @@ impl MemoryEngine {
         )
         .await?;
         Ok(Mined {
-            candidates: outcome.facts,
+            candidates: Candidates {
+                facts: outcome.facts,
+                entities: outcome.entities,
+            },
             rejected: outcome.rejected,
             unmined: outcome.unmined,
         })
@@ -509,6 +524,7 @@ impl MemoryEngine {
                 revision,
                 prepare_facts(
                     &self.stores.facts,
+                    Some(&self.stores.entities),
                     self.llm.as_ref(),
                     mined.candidates,
                     tz,
@@ -530,7 +546,8 @@ impl MemoryEngine {
         match self
             .commit(revision, commit_now, move |stores, _| async move {
                 changes.apply(&stores.segments).await?;
-                let report = apply_prepared_facts(&stores.facts, facts, now).await?;
+                let report =
+                    apply_prepared_facts(&stores.facts, Some(&stores.entities), facts, now).await?;
                 stores.history.index(&evicted).await?;
                 Ok(((segments, merged, report, mined.rejected), state))
             })
@@ -640,6 +657,7 @@ impl MemoryEngine {
                 revision,
                 prepare_facts(
                     &self.stores.facts,
+                    Some(&self.stores.entities),
                     self.llm.as_ref(),
                     mined.candidates,
                     self.timezone,
@@ -651,7 +669,8 @@ impl MemoryEngine {
         let commit_now = now + Duration::from_std(started.elapsed())?;
         let ((report, rejected), _) = self
             .commit(revision, commit_now, move |stores, _| async move {
-                let report = apply_prepared_facts(&stores.facts, facts, now).await?;
+                let report =
+                    apply_prepared_facts(&stores.facts, Some(&stores.entities), facts, now).await?;
                 Ok(((report, mined.rejected), state))
             })
             .await?
@@ -661,34 +680,65 @@ impl MemoryEngine {
 
     /// The facts to inject before the user's message: hybrid search, events weighted by
     /// recency, time cues as a ranking hint (lasting facts stay eligible), superseded facts only
-    /// for questions about how things were.
+    /// for questions about how things were. Entities the message names add their best facts
+    /// after the hits, up to half the budget again.
     pub async fn recall(
         &self,
         query: &str,
         budget: &ModelBudget,
         now: DateTime<Utc>,
     ) -> Result<Vec<Fact>> {
-        let found = self
+        let search = |limit: usize, entity: Option<String>| FactQuery {
+            text: query.to_string(),
+            filter: FactFilter {
+                include_superseded: is_temporal_question(query),
+                entity,
+                ..FactFilter::default()
+            },
+            time_hint: parse_time_range(query, now, self.timezone),
+            limit,
+            offset: 0,
+            now,
+            recency: Recency::default(),
+            sort: Default::default(),
+            geojson: None,
+            radius_m: None,
+            area: None,
+        };
+        let mut facts: Vec<Fact> = self
             .stores
             .facts
-            .search(&FactQuery {
-                text: query.to_string(),
-                filter: FactFilter {
-                    include_superseded: is_temporal_question(query),
-                    ..FactFilter::default()
-                },
-                time_hint: parse_time_range(query, now, self.timezone),
-                limit: budget.facts_count,
-                offset: 0,
-                now,
-                recency: Recency::default(),
-                sort: Default::default(),
-                geojson: None,
-                radius_m: None,
-                area: None,
-            })
-            .await?;
-        Ok(found.into_iter().map(|scored| scored.fact).collect())
+            .search(&search(budget.facts_count, None))
+            .await?
+            .into_iter()
+            .map(|scored| scored.fact)
+            .collect();
+        if budget.facts_count == 0 {
+            return Ok(facts);
+        }
+        let extra = (budget.facts_count / 2).max(1);
+        let entities = self.stores.entities.all().await?;
+        let mut added = 0;
+        for entity in mentioned_in(query, &entities)
+            .into_iter()
+            .take(MAX_RECALLED_ENTITIES)
+        {
+            let hits = self
+                .stores
+                .facts
+                .search(&search(extra, Some(entity.id.clone())))
+                .await?;
+            for hit in hits {
+                if added == extra {
+                    return Ok(facts);
+                }
+                if !facts.iter().any(|known| known.id == hit.fact.id) {
+                    facts.push(hit.fact);
+                    added += 1;
+                }
+            }
+        }
+        Ok(facts)
     }
 
     /// Follows deleted messages. Facts lose that evidence and keep only the trust the rest
@@ -782,6 +832,8 @@ mod tests {
             evidence_seq: None,
             kind: None,
             subject: None,
+            object: None,
+            relation: None,
             valid_from: None,
             valid_to: None,
         };
@@ -816,6 +868,7 @@ mod tests {
             area: None,
 
             query: "query".into(),
+            about: None,
             kind: None,
             time_range: None,
             include_superseded: None,

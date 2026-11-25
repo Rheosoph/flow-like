@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { IApp } from "../../../lib/schema/app/app";
 import type { IAppShowcase } from "../../../lib/schema/app/showcase";
 import { cn } from "../../../lib/utils";
@@ -44,6 +44,19 @@ export function ShowcaseNav({
 		[sections, labels, t],
 	);
 	const [current, setCurrent] = useState(ABOUT_DOM_ID);
+	const sentinelRef = useRef<HTMLDivElement>(null);
+	const [stuck, setStuck] = useState(false);
+
+	useEffect(() => {
+		const el = sentinelRef.current;
+		if (sections.length === 0 || !el) return;
+		if (typeof IntersectionObserver === "undefined") return;
+		const observer = new IntersectionObserver(([entry]) =>
+			setStuck(!entry.isIntersecting),
+		);
+		observer.observe(el);
+		return () => observer.disconnect();
+	}, [sections.length]);
 
 	useEffect(() => {
 		if (typeof IntersectionObserver === "undefined") return;
@@ -66,26 +79,35 @@ export function ShowcaseNav({
 	if (sections.length === 0) return null;
 
 	return (
-		<nav
-			aria-label={t("showcaseNavLabel", "Sections")}
-			className="sticky top-0 z-30 mt-6 border-b border-border bg-background/90 backdrop-blur-md"
-		>
-			<div className="mx-auto flex max-w-5xl gap-0.5 overflow-x-auto px-6 py-1.5 no-scrollbar md:px-10">
-				{items.map((i) => (
-					<button
-						key={i.id}
-						type="button"
-						aria-current={current === i.id ? "true" : undefined}
-						onClick={() => scrollToSection(i.id)}
-						className={cn(
-							"whitespace-nowrap rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-							current === i.id && "bg-muted text-foreground",
-						)}
-					>
-						{i.label}
-					</button>
-				))}
-			</div>
-		</nav>
+		<>
+			<div ref={sentinelRef} aria-hidden="true" className="mt-6 h-px" />
+			<nav
+				aria-label={t("showcaseNavLabel", "Sections")}
+				data-stuck={stuck || undefined}
+				className={cn(
+					"sticky top-0 z-30 -mt-px border-b transition-[background-color,border-color] duration-200",
+					stuck
+						? "border-border bg-background/85 backdrop-blur-md"
+						: "border-border/40 bg-transparent",
+				)}
+			>
+				<div className="mx-auto flex max-w-5xl gap-0.5 overflow-x-auto px-6 py-1.5 no-scrollbar md:px-10">
+					{items.map((i) => (
+						<button
+							key={i.id}
+							type="button"
+							aria-current={current === i.id ? "true" : undefined}
+							onClick={() => scrollToSection(i.id)}
+							className={cn(
+								"whitespace-nowrap rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+								current === i.id && "bg-muted text-foreground",
+							)}
+						>
+							{i.label}
+						</button>
+					))}
+				</div>
+			</nav>
+		</>
 	);
 }

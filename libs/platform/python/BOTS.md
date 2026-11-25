@@ -90,6 +90,34 @@ if news.next_before:
 pass the same `message_id` again to retry and the server returns the first result instead of
 sending twice.
 
+## Memory
+
+What a bot remembers is readable and editable by its owner. Facts are statements with evidence
+(`quote`, message, time); entities are the people, places, organizations, projects and things they
+are about. Every method has an `a`-prefixed async twin.
+
+| Method | Notes |
+|---|---|
+| `list_bot_memory_facts(bot_id, include_superseded=False)` | newest first; superseded facts only on request |
+| `forget_bot_memory_fact(bot_id, fact_id)` | returns the forgotten `BotMemoryFact` |
+| `reset_bot_memory(bot_id)` | forgets everything the bot remembered |
+| `list_bot_memory_entities(bot_id)` | `BotMemoryEntity` list |
+| `update_bot_memory_entity(bot_id, entity_id, name=, kind=, scope=)` | |
+| `merge_bot_memory_entity(bot_id, entity_id, into, scope=)` | folds the entity into `into` |
+| `forget_bot_memory_entity(bot_id, entity_id, scope=)` | returns the facts that went with it |
+
+Entity ids are unique only within a conversation scope. Pass the `conversation_scope` of the entity
+(or fact) as `scope`; leave it out for the owner's direct chat.
+
+```python
+facts = client.list_bot_memory_facts(bot.id)
+people = [e for e in client.list_bot_memory_entities(bot.id) if e.kind == "person"]
+client.merge_bot_memory_entity(bot.id, "e_ann", "e_anna", scope=facts[0].conversation_scope)
+```
+
+Merging away or forgetting the owner entity `e_user` is refused (400). While another process works
+on the memory the calls answer 409 (`APIError`): retry later.
+
 ## Errors
 
 Failures raise `APIError` (`NotFoundError` for 404) with `status_code` and the raw

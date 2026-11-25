@@ -110,6 +110,34 @@ let news = client
 fix one with `SendInboxEntry::message(text).with_message_id(id)` and send it again to retry: the
 server returns the first result instead of sending twice.
 
+## Memory
+
+What a bot remembers is readable and editable by its owner. Facts are statements with evidence
+(`quote`, message, time); entities are the people, places, organizations, projects and things they
+are about.
+
+| Method | Notes |
+|---|---|
+| `list_bot_memory_facts(bot_id, include_superseded)` | newest first; superseded facts only when `true` |
+| `forget_bot_memory_fact(bot_id, fact_id)` | returns the forgotten `BotMemoryFact` |
+| `reset_bot_memory(bot_id)` | forgets everything the bot remembered |
+| `list_bot_memory_entities(bot_id)` | `Vec<BotMemoryEntity>` |
+| `update_bot_memory_entity(bot_id, entity_id, &UpdateBotMemoryEntity, scope)` | `name` and/or `kind` |
+| `merge_bot_memory_entity(bot_id, entity_id, into, scope)` | folds the entity into `into` |
+| `forget_bot_memory_entity(bot_id, entity_id, scope)` | returns the facts that went with it |
+
+Entity ids are unique only within a conversation scope. Pass the `conversation_scope` of the entity
+(or fact) as `scope`; use `None` for the owner's direct chat.
+
+```rust
+let facts = client.list_bot_memory_facts(&bot.id, false).await?;
+let scope = facts[0].conversation_scope.as_deref();
+client.merge_bot_memory_entity(&bot.id, "e_ann", "e_anna", scope).await?;
+```
+
+Merging away or forgetting the owner entity `e_user` is refused (400). While another process works
+on the memory the calls answer 409 (`Error::Api`): retry later.
+
 ## Errors
 
 Failures are `Error::Api { status, body, .. }` (`is_auth()` for 401/403, `is_not_found()` for

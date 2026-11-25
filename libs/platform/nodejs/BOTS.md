@@ -81,6 +81,34 @@ if (news.next_before) { /* page with iterateInboxEntries(id, { after: newestCurs
 **Retries are safe.** Sends without a `messageId` get a fresh one (`newInboxMessageId()`); pass the
 same `messageId` again to retry and the server returns the first result instead of sending twice.
 
+## Memory
+
+What a bot remembers is readable and editable by its owner. Facts are statements with evidence
+(`quote`, message, time); entities are the people, places, organizations, projects and things they
+are about.
+
+| Method | Notes |
+|---|---|
+| `listBotMemoryFacts(botId, { includeSuperseded? })` | newest first; superseded facts only on request |
+| `forgetBotMemoryFact(botId, factId)` | returns the forgotten fact |
+| `resetBotMemory(botId)` | forgets everything the bot remembered |
+| `listBotMemoryEntities(botId)` | |
+| `updateBotMemoryEntity(botId, entityId, { name?, kind? }, { scope? })` | |
+| `mergeBotMemoryEntity(botId, entityId, into, { scope? })` | folds the entity into `into` |
+| `forgetBotMemoryEntity(botId, entityId, { scope? })` | returns the facts that went with it |
+
+Entity ids are unique only within a conversation scope. Pass the `conversation_scope` of the entity
+(or fact) as `scope`; leave it out for the owner's direct chat.
+
+```ts
+const facts = await sdk.listBotMemoryFacts(bot.id);
+const people = (await sdk.listBotMemoryEntities(bot.id)).filter((e) => e.kind === "person");
+await sdk.mergeBotMemoryEntity(bot.id, "e_ann", "e_anna", { scope: facts[0].conversation_scope });
+```
+
+Merging away or forgetting the owner entity `e_user` is refused (400). While another process works
+on the memory the calls answer 409: retry later.
+
 ## Errors
 
 Failures throw `FlowLikeError` (`AuthError` for 401/403, `NotFoundError` for 404) with

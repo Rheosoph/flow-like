@@ -53,6 +53,9 @@ Paths are relative to your hub's API, for example `https://api.flow-like.com/api
 | `GET`, `DELETE` | `/bots/{id}/tool-grants` | List and revoke standing approvals. |
 | `GET` | `/bots/{id}/memory/facts` | What the bot remembers. |
 | `DELETE` | `/bots/{id}/memory/facts/{fact_id}` | Forget one fact. `DELETE /bots/{id}/memory` forgets everything. |
+| `GET` | `/bots/{id}/memory/entities` | The people, places, organizations, projects and things the facts are about, with fact counts. |
+| `PATCH`, `DELETE` | `/bots/{id}/memory/entities/{entity_id}` | Rename an entry or change its kind, or forget it with every fact about it. Pass `?scope=` for an entry from a room. |
+| `POST` | `/bots/{id}/memory/entities/{entity_id}/merge` | Merge an entry into another one (`{"into": "<entity_id>"}`) of the same conversation. |
 | `GET`, `POST` | `/bots/{id}/skills` | List or add skills; approve or disable them under `.../skills/{skill_id}`. |
 | `GET` | `/bots/{id}/usage` | Usage and limits, overall and per room. |
 | `GET` | `/bots/presence` | Which hosts are online. |

@@ -66,6 +66,7 @@ pub use devices::certificates::spawn_sweeper as spawn_device_certificate_sweeper
 pub mod error;
 pub mod execution_usage_rollup;
 pub(crate) mod instances;
+mod interval_lease;
 pub mod locked_storage;
 pub mod mail;
 pub mod mail_ingress;
@@ -88,14 +89,13 @@ mod runtime_config;
 pub mod scoped_usage;
 pub mod state;
 pub mod storage_accounting;
-pub mod storage_reconciler;
-pub mod table_maintenance;
-mod interval_lease;
 pub mod storage_config;
 pub mod storage_identity;
 #[cfg(feature = "storage-queue")]
 mod storage_queue;
+pub mod storage_reconciler;
 pub mod stripe_connect;
+pub mod table_maintenance;
 pub mod teams;
 pub mod telemetry;
 pub mod usage_accounting;

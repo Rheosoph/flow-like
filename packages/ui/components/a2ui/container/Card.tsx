@@ -58,8 +58,9 @@ const LINK_CONTROLS_ABOVE =
 
 const COMPACT_HEADER = "flex flex-col gap-1 px-4";
 
+/** The last block sits on the card's bottom edge, also inside a lone wrapping column. */
 const COMPACT_BODY =
-	"flex flex-col gap-2 px-4 [&>:last-child:not(:first-child)]:mt-auto";
+	"flex flex-col gap-2 px-4 [&>:last-child:not(:first-child)]:mt-auto [&>[data-slot=a2ui-column]:only-child]:flex-1 [&>[data-slot=a2ui-column]:only-child>:last-child:not(:first-child)]:mt-auto";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();

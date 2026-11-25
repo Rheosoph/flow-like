@@ -12,7 +12,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::flow::copilot::memory_open::workspace_connection;
-use flow_like_bot_memory::host::{FactAdmin, FactView};
+use flow_like_bot_memory::host::{EntityUpdate, EntityView, FactAdmin, FactView};
 use flow_like_bot_tools_host::AppAccess;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -155,4 +155,217 @@ pub async fn reset_memory(
     }
     flow_like::flow::copilot::memory_open::forget_bot_memory(&bot_id);
     Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BotEntityList {
+    /// The owner first, then by how much is remembered. Each entity: `id`, `name`, `kind`
+    /// (person, place, organization, project, thing), `owner`, optional `participant`,
+    /// `aliases`, `fact_count`, `created_at`, `updated_at` and, for a room, `conversation_scope`.
+    #[schema(value_type = Vec<Object>)]
+    pub entities: Vec<EntityView>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct EntityScopeQuery {
+    /// The room the entity belongs to; leave out for the direct chat.
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+pub struct EntityPatch {
+    /// A new name; the old one stays an alias.
+    pub name: Option<String>,
+    /// person, place, organization, project or thing.
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct EntityMerge {
+    /// The entity that stays; the merged one's facts move to it.
+    pub into: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BotEntityForgotten {
+    /// The facts that were deleted with the entity.
+    #[schema(value_type = Vec<Object>)]
+    pub forgotten: Vec<FactView>,
+}
+
+fn entity_error(error: flow_like_types::Error) -> ApiError {
+    if error
+        .downcast_ref::<flow_like_bot_memory::MemoryBusy>()
+        .is_some()
+    {
+        ApiError::conflict(error.to_string())
+    } else if error
+        .downcast_ref::<flow_like_bot_memory::NoEntity>()
+        .is_some()
+    {
+        ApiError::not_found(error.to_string())
+    } else {
+        ApiError::bad_request(error.to_string())
+    }
+}
+
+async fn entity_admin(
+    state: &AppState,
+    sub: &str,
+    bot_id: &str,
+    entity_id: &str,
+) -> Result<FactAdmin, ApiError> {
+    admin_for(state, sub, bot_id).await?.ok_or_else(|| {
+        ApiError::not_found(format!("Bot '{bot_id}' remembers no entity '{entity_id}'"))
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/bots/{bot_id}/memory/entities",
+    tag = "Bots",
+    params(("bot_id" = String, Path, description = "Your bot's id")),
+    responses(
+        (status = 200, description = "The people, places, organizations, projects and things the bot remembers facts about, you first. A bot without a workspace remembers none.", body = BotEntityList),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no bot with this id")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "GET /bots/{bot_id}/memory/entities", skip(state, user))]
+pub async fn list_entities(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(bot_id): Path<String>,
+) -> Result<Json<BotEntityList>, ApiError> {
+    let sub = user.sub()?;
+    let Some(admin) = admin_for(&state, &sub, &bot_id).await? else {
+        return Ok(Json(BotEntityList {
+            entities: Vec::new(),
+        }));
+    };
+    let entities = admin.list_entities().await.map_err(|error| {
+        ApiError::internal(format!("Listing the bot's entities failed: {error}"))
+    })?;
+    Ok(Json(BotEntityList { entities }))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/bots/{bot_id}/memory/entities/{entity_id}",
+    tag = "Bots",
+    params(
+        ("bot_id" = String, Path, description = "Your bot's id"),
+        ("entity_id" = String, Path, description = "The entity's id"),
+        EntityScopeQuery
+    ),
+    request_body = EntityPatch,
+    responses(
+        (status = 200, description = "The entity is renamed or re-typed; the old name stays one of its names.", body = Object),
+        (status = 400, description = "The change is not allowed, for example renaming you or an unknown kind"),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no bot with this id, or it has no such entity"),
+        (status = 409, description = "The bot is working on its memory right now; try again shortly")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(
+    name = "PATCH /bots/{bot_id}/memory/entities/{entity_id}",
+    skip(state, user, patch)
+)]
+pub async fn update_entity(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((bot_id, entity_id)): Path<(String, String)>,
+    Query(query): Query<EntityScopeQuery>,
+    Json(patch): Json<EntityPatch>,
+) -> Result<Json<EntityView>, ApiError> {
+    let sub = user.sub()?;
+    let admin = entity_admin(&state, &sub, &bot_id, &entity_id).await?;
+    let update = EntityUpdate {
+        name: patch.name,
+        kind: patch.kind,
+    };
+    admin
+        .update_entity(query.scope.as_deref(), &entity_id, &update)
+        .await
+        .map(Json)
+        .map_err(entity_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/bots/{bot_id}/memory/entities/{entity_id}/merge",
+    tag = "Bots",
+    params(
+        ("bot_id" = String, Path, description = "Your bot's id"),
+        ("entity_id" = String, Path, description = "The entity to merge away"),
+        EntityScopeQuery
+    ),
+    request_body = EntityMerge,
+    responses(
+        (status = 200, description = "The entity is merged: its facts and names move to the other one.", body = Object),
+        (status = 400, description = "The merge is not allowed, for example merging yourself away"),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no bot with this id, or it has no such entity"),
+        (status = 409, description = "The bot is working on its memory right now; try again shortly")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(
+    name = "POST /bots/{bot_id}/memory/entities/{entity_id}/merge",
+    skip(state, user, merge)
+)]
+pub async fn merge_entity(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((bot_id, entity_id)): Path<(String, String)>,
+    Query(query): Query<EntityScopeQuery>,
+    Json(merge): Json<EntityMerge>,
+) -> Result<Json<EntityView>, ApiError> {
+    let sub = user.sub()?;
+    let admin = entity_admin(&state, &sub, &bot_id, &entity_id).await?;
+    admin
+        .merge_entities(query.scope.as_deref(), &entity_id, &merge.into)
+        .await
+        .map(Json)
+        .map_err(entity_error)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/bots/{bot_id}/memory/entities/{entity_id}",
+    tag = "Bots",
+    params(
+        ("bot_id" = String, Path, description = "Your bot's id"),
+        ("entity_id" = String, Path, description = "The entity's id"),
+        EntityScopeQuery
+    ),
+    responses(
+        (status = 200, description = "The entity and every fact about it are deleted. The chat keeps what was said.", body = BotEntityForgotten),
+        (status = 400, description = "You cannot be forgotten as an entity"),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no bot with this id, or it has no such entity"),
+        (status = 409, description = "The bot is working on its memory right now; try again shortly")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(
+    name = "DELETE /bots/{bot_id}/memory/entities/{entity_id}",
+    skip(state, user)
+)]
+pub async fn forget_entity(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((bot_id, entity_id)): Path<(String, String)>,
+    Query(query): Query<EntityScopeQuery>,
+) -> Result<Json<BotEntityForgotten>, ApiError> {
+    let sub = user.sub()?;
+    let admin = entity_admin(&state, &sub, &bot_id, &entity_id).await?;
+    let forgotten = admin
+        .forget_entity(query.scope.as_deref(), &entity_id)
+        .await
+        .map_err(entity_error)?;
+    Ok(Json(BotEntityForgotten { forgotten }))
 }

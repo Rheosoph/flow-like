@@ -82,7 +82,7 @@ async fn held_by_host<C: ConnectionTrait>(
     params(
         ("bot_id" = String, Path, description = "Your bot's id"),
         ("turn_id" = String, Path, description = "The running turn the device host holds"),
-        ("tool" = String, Path, description = "An app tool: list_apps, describe_app_interface, get_app_detail, call_app_event, call_app_chat, database_tool or graph_query_tool"),
+        ("tool" = String, Path, description = "An app tool: list_apps, describe_app_interface, get_app_detail, call_app_event, call_app_chat, database_tool, graph_query_tool, graph_element_tool (add_nodes, add_edges) or graph_overlay_tool (read operations only)"),
         AppToolQuery
     ),
     request_body(content = Object, description = "The tool's arguments"),

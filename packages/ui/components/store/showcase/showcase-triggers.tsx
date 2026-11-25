@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { Clock, KeyRound, Users, Zap } from "lucide-react";
+import { cronWords } from "../../../lib/cron-words";
 import type { IShowcaseEvent } from "../../../lib/schema/app/showcase";
 import { cn } from "../../../lib/utils";
 import { endpointMethod, eventKind, isEndpointEvent } from "./model";
@@ -54,15 +55,19 @@ export function EventTechnical({ event }: Readonly<{ event: IShowcaseEvent }>) {
 		);
 	}
 	if (tech.cron) {
+		const words = cronWords(tech.cron);
 		return (
-			<div className="space-y-0.5">
-				<b className="block font-mono text-sm font-semibold">{tech.cron}</b>
-				{tech.timezone ? (
-					<small className="flex items-center gap-1 text-xs text-muted-foreground">
-						<Clock className="h-3 w-3" aria-hidden="true" />
-						{tech.timezone}
-					</small>
-				) : null}
+			<div className="flex flex-col gap-0.5">
+				<span className="text-[13px] font-medium">{words ?? tech.cron}</span>
+				<small className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+					{words ? <code className="font-mono">{tech.cron}</code> : null}
+					{tech.timezone ? (
+						<span className="inline-flex items-center gap-1">
+							<Clock className="h-3 w-3" aria-hidden="true" />
+							{tech.timezone}
+						</span>
+					) : null}
+				</small>
 			</div>
 		);
 	}
@@ -80,11 +85,9 @@ export function EventTechnical({ event }: Readonly<{ event: IShowcaseEvent }>) {
 
 function EventCard({
 	event,
-	access,
 	onOpen,
 }: Readonly<{
 	event: IShowcaseEvent;
-	access: ShowcaseAccess;
 	onOpen: (id: string) => void;
 }>) {
 	const kind = eventKind(event.event_type);
@@ -92,25 +95,30 @@ function EventCard({
 	return (
 		<button
 			type="button"
-			className={`${interactiveCardClass} flex flex-col gap-2.5`}
+			className={`${interactiveCardClass} flex h-full flex-col gap-3`}
 			onClick={() => onOpen(event.id)}
 		>
-			<span className="flex items-center justify-between gap-2">
-				<span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary">
-					<kind.icon className="h-4 w-4" aria-hidden="true" />
-					{label}
+			<span className="flex items-center gap-3">
+				<span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+					<kind.icon className="h-4.5 w-4.5" aria-hidden="true" />
 				</span>
-				<AccessChip access={access} />
-			</span>
-			<span className="wrap-anywhere text-[15px] font-semibold">
-				{event.name}
+				<span className="flex min-w-0 flex-col">
+					<small className="text-xs text-muted-foreground">{label}</small>
+					<span className="wrap-anywhere text-[15px] font-semibold leading-snug">
+						{event.name}
+					</span>
+				</span>
 			</span>
 			{event.description ? (
 				<span className="line-clamp-3 text-[13px] text-muted-foreground">
 					{event.description}
 				</span>
 			) : null}
-			<EventTechnical event={event} />
+			{event.technical ? (
+				<span className="mt-auto block border-t border-border pt-3">
+					<EventTechnical event={event} />
+				</span>
+			) : null}
 		</button>
 	);
 }
@@ -135,10 +143,11 @@ export function ShowcaseTriggers({
 				"showcaseTriggersSubtitle",
 				"Each of these starts the app. Open one to see how it works.",
 			)}
+			aside={<AccessChip access={access} />}
 		>
-			<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3">
+			<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))] gap-3">
 				{events.map((e) => (
-					<EventCard key={e.id} event={e} access={access} onOpen={onOpen} />
+					<EventCard key={e.id} event={e} onOpen={onOpen} />
 				))}
 			</div>
 		</ShowcaseSection>

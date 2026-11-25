@@ -1120,6 +1120,8 @@ mod specialist_tool_spec_tests {
             "get_app_detail",
             "database_tool",
             "graph_query_tool",
+            "graph_element_tool",
+            "graph_overlay_tool",
             "storage_tool",
         ] {
             assert!(bridge.tool_spec(tool_name).is_some(), "{tool_name}");

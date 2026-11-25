@@ -408,7 +408,14 @@ mod tests {
         let near = Place::new(Some(&origin), Some(200_000.0), None).unwrap();
         assert!(near.matches(&point(1.0, 0.0)).unwrap());
         assert!(!near.matches(&point(5.0, 0.0)).unwrap());
-        assert!(Place::new(Some(&json!({"type":"LineString","coordinates":[[0,0],[1,1]]})), None, None).is_err());
+        assert!(
+            Place::new(
+                Some(&json!({"type":"LineString","coordinates":[[0,0],[1,1]]})),
+                None,
+                None
+            )
+            .is_err()
+        );
         assert!(Place::new(None, None, None).unwrap().is_empty());
     }
 }

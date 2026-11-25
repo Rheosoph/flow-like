@@ -1,6 +1,7 @@
-//! The data tools of a headless server turn: table changes in the bot's own workspace app and
-//! the read-only graph queries. Both call the route handlers as the bot, so its rights,
-//! row and column restrictions and quotas apply.
+//! The data tools of a headless server turn: table changes in the bot's own workspace app, the
+//! graph queries, ontology reads and graph element writes (the owner approves each write before
+//! it reaches this host). All call the route handlers as the bot, so its rights, row and column
+//! restrictions and quotas apply.
 
 use std::collections::HashMap;
 
@@ -12,7 +13,10 @@ use flow_like_bot_memory::store::is_memory_table;
 use flow_like_storage::contracts::database::DatabaseSelector;
 use serde_json::{Map, Value, json};
 
-use super::{AppTools, MAX_ROWS, ToolResult, bounded, failed, required, text};
+use super::{
+    AppTools, GRAPH_ELEMENT_TOOL, GRAPH_QUERY_TOOL, MAX_ROWS, ToolResult, bounded, failed,
+    required, text,
+};
 use crate::routes::app::{
     db::{
         ScopeParams,
@@ -32,12 +36,17 @@ use crate::routes::app::{
     graph::{
         analytics::{AnalyticsParams, graph_analytics},
         cypher::{CypherPayload, run_cypher},
+        get_overlay::get_overlay,
+        list_overlays::list_overlays,
         neighbors::{NeighborsPayload, neighbors},
         paths::{PathsPayload, find_paths},
         sample::{SampleParams, sample_nodes},
+        schema::graph_schema,
         search::{SearchNodesPayload, search_nodes},
         sql::{SqlPayload, run_sql},
         subgraph::{SubgraphPayload, subgraph},
+        upsert_edges::{UpsertEdgesPayload, upsert_edges},
+        upsert_nodes::{UpsertNodesPayload, upsert_nodes},
     },
 };
 
@@ -45,6 +54,8 @@ const MAX_GRAPH_DEPTH: u64 = 5;
 const MAX_SAMPLE_ROWS: u64 = 50;
 const MAX_GRAPH_NODES: usize = 200;
 const MAX_GRAPH_EDGES: usize = 400;
+const MAX_ELEMENT_ROWS: usize = 500;
+const GRAPH_OVERLAY_READ_OPERATIONS: [&str; 3] = ["list_overlays", "get_overlay", "get_schema"];
 const COLUMN_METADATA_KEYS: [&str; 5] = [
     "display_name",
     "description",
@@ -274,6 +285,80 @@ fn graph_payload(operation: &str, args: &Value, limit: u64) -> Result<Value, Str
     Ok(Value::Object(payload))
 }
 
+enum ElementKind {
+    Nodes,
+    Edges,
+}
+
+struct ElementWrite {
+    kind: ElementKind,
+    overlay_id: String,
+    label: String,
+    rows: Vec<Value>,
+}
+
+fn shared_graph_only(args: &Value, tool: &str) -> Result<(), String> {
+    if flag(args, "user_scoped") == Some(true) {
+        return Err(format!(
+            "A bot uses an app's shared graph only; call {tool} again without user_scoped."
+        ));
+    }
+    Ok(())
+}
+
+fn parse_element_write(args: &Value) -> Result<ElementWrite, String> {
+    shared_graph_only(args, "graph_element_tool")?;
+    let kind = match required(args, "operation")? {
+        "add_nodes" => ElementKind::Nodes,
+        "add_edges" => ElementKind::Edges,
+        other => {
+            return Err(format!(
+                "Unsupported graph_element_tool operation '{other}'."
+            ));
+        }
+    };
+    let overlay_id = required(args, "overlay_id")?.to_string();
+    let label = required(args, "label")?.to_string();
+    let rows = args
+        .get("rows")
+        .and_then(Value::as_array)
+        .filter(|rows| !rows.is_empty())
+        .ok_or_else(|| "graph_element_tool requires rows as a non-empty array.".to_string())?;
+    if rows.len() > MAX_ELEMENT_ROWS {
+        return Err(format!(
+            "graph_element_tool takes at most {MAX_ELEMENT_ROWS} rows per call; got {}. Nothing was written.",
+            rows.len()
+        ));
+    }
+    if let Some(position) = rows.iter().position(|row| !row.is_object()) {
+        return Err(format!(
+            "graph_element_tool row {position} is not an object. Nothing was written."
+        ));
+    }
+    Ok(ElementWrite {
+        kind,
+        overlay_id,
+        label,
+        rows: rows.clone(),
+    })
+}
+
+fn parse_overlay_read(args: &Value) -> Result<(&str, Option<&str>), String> {
+    shared_graph_only(args, "graph_overlay_tool")?;
+    let operation = required(args, "operation")?;
+    if !GRAPH_OVERLAY_READ_OPERATIONS.contains(&operation) {
+        return Err(format!(
+            "A bot may run only these graph_overlay_tool operations: {}. Operation '{operation}' was not run.",
+            GRAPH_OVERLAY_READ_OPERATIONS.join(", ")
+        ));
+    }
+    let overlay_id = text(args, "overlay_id");
+    if operation != "list_overlays" && overlay_id.is_none() {
+        return Err(format!("Operation '{operation}' requires overlay_id."));
+    }
+    Ok((operation, overlay_id))
+}
+
 fn ok_with(key: &str, value: Value) -> Value {
     json!({ "status": "ok", key: value })
 }
@@ -439,6 +524,112 @@ impl AppTools {
         }
     }
 
+    /// A graph in the bot's workspace that maps a memory table is refused before it is read or
+    /// written: only the memory tools may touch those tables.
+    async fn workspace_graph_refusal(
+        &self,
+        tool: &str,
+        app_id: &str,
+        overlay_id: &str,
+    ) -> Result<Option<Value>, String> {
+        if self.bot.workspace_app_id.as_deref() != Some(app_id) {
+            return Ok(None);
+        }
+        let overlay = get_overlay(
+            State(self.state.clone()),
+            Extension(self.user()),
+            Path((app_id.to_string(), overlay_id.to_string())),
+            Query(ScopeParams::default()),
+        )
+        .await
+        .map_err(failed)?;
+        flow_like::flow::copilot::workspace_graph_refusal(tool, &to_json(&overlay.0)?)
+            .map(|refusal| serde_json::from_str(&refusal).map_err(|error| error.to_string()))
+            .transpose()
+    }
+
+    pub(super) async fn graph_element(&self, args: &Value) -> ToolResult {
+        let app_id = self.app_id(args)?;
+        let write = parse_element_write(args)?;
+        if let Some(refusal) = self
+            .workspace_graph_refusal(GRAPH_ELEMENT_TOOL, app_id, &write.overlay_id)
+            .await?
+        {
+            return Ok(refusal);
+        }
+        let (state, user) = (State(self.state.clone()), Extension(self.user()));
+        let path = Path((app_id.to_string(), write.overlay_id.clone()));
+        let scope = Query(ScopeParams::default());
+        let written = match write.kind {
+            ElementKind::Nodes => {
+                let payload = UpsertNodesPayload {
+                    label: write.label.clone(),
+                    rows: write.rows,
+                };
+                upsert_nodes(state, user, path, scope, Json(payload))
+                    .await
+                    .map_err(failed)?
+                    .0
+                    .upserted
+            }
+            ElementKind::Edges => {
+                let payload = UpsertEdgesPayload {
+                    label: write.label.clone(),
+                    rows: write.rows,
+                };
+                upsert_edges(state, user, path, scope, Json(payload))
+                    .await
+                    .map_err(failed)?
+                    .0
+                    .upserted
+            }
+        };
+        Ok(json!({
+            "status": "ok",
+            "app_id": app_id,
+            "overlay_id": write.overlay_id,
+            "label": write.label,
+            "upserted": written,
+        }))
+    }
+
+    pub(super) async fn graph_overlay(&self, args: &Value) -> ToolResult {
+        let app_id = self.app_id(args)?;
+        let (operation, overlay_id) = parse_overlay_read(args)?;
+        let (state, user) = (State(self.state.clone()), Extension(self.user()));
+        let scope = Query(ScopeParams::default());
+        let path = |overlay_id: &str| Path((app_id.to_string(), overlay_id.to_string()));
+        let mut answer = match (operation, overlay_id) {
+            ("list_overlays", _) => {
+                let listed = list_overlays(state, user, Path(app_id.to_string()), scope)
+                    .await
+                    .map_err(failed)?;
+                ok_with("overlays", to_json(&listed.0)?)
+            }
+            ("get_overlay", Some(overlay_id)) => {
+                let found = get_overlay(state, user, path(overlay_id), scope)
+                    .await
+                    .map_err(failed)?;
+                ok_with("overlay", to_json(&found.0)?)
+            }
+            ("get_schema", Some(overlay_id)) => {
+                let found = graph_schema(state, user, path(overlay_id), scope)
+                    .await
+                    .map_err(failed)?;
+                ok_with("schema", to_json(&found.0)?)
+            }
+            _ => {
+                return Err(format!(
+                    "Unsupported graph_overlay_tool operation '{operation}'."
+                ));
+            }
+        };
+        if cap(&mut answer, "overlays", MAX_ROWS as usize) {
+            answer["truncated"] = json!(true);
+        }
+        Ok(answer)
+    }
+
     pub(super) async fn graph_query(&self, args: &Value) -> ToolResult {
         let app_id = self.app_id(args)?;
         if flag(args, "user_scoped") == Some(true) {
@@ -449,6 +640,12 @@ impl AppTools {
         }
         let operation = required(args, "operation")?;
         let overlay_id = required(args, "overlay_id")?;
+        if let Some(refusal) = self
+            .workspace_graph_refusal(GRAPH_QUERY_TOOL, app_id, overlay_id)
+            .await?
+        {
+            return Ok(refusal);
+        }
         let limit = bounded(args, "limit", 100, MAX_ROWS);
         let payload = graph_payload(operation, args, limit)?;
         let (state, user) = (State(self.state.clone()), Extension(self.user()));
@@ -672,5 +869,85 @@ mod tests {
         let mut small = json!({ "nodes": [json!({})] });
         bound_graph_result(&mut small);
         assert!(small.get("truncated").is_none());
+    }
+
+    #[test]
+    fn graph_element_writes_are_validated_before_anything_is_written() {
+        let call = |extra: Value| {
+            let mut args = json!({
+                "operation": "add_nodes",
+                "app_id": "app-crm",
+                "overlay_id": "o1",
+                "label": "Person",
+                "rows": [{ "id": 1 }],
+            });
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            args
+        };
+        let write = parse_element_write(&call(json!({}))).unwrap();
+        assert!(matches!(write.kind, ElementKind::Nodes));
+        assert_eq!(
+            (write.overlay_id.as_str(), write.label.as_str()),
+            ("o1", "Person")
+        );
+        assert!(matches!(
+            parse_element_write(&call(json!({ "operation": "add_edges" })))
+                .unwrap()
+                .kind,
+            ElementKind::Edges
+        ));
+        let refused = |extra: Value| parse_element_write(&call(extra)).err().unwrap();
+        assert!(refused(json!({ "operation": "delete_nodes" })).contains("'delete_nodes'"));
+        assert!(refused(json!({ "user_scoped": true })).contains("user_scoped"));
+        assert!(refused(json!({ "overlay_id": "" })).contains("overlay_id"));
+        assert!(refused(json!({ "label": null })).contains("label"));
+        assert!(refused(json!({ "rows": [] })).contains("rows"));
+        assert!(refused(json!({ "rows": "x" })).contains("rows"));
+        assert!(refused(json!({ "rows": [{ "id": 1 }, 7] })).contains("row 1"));
+        let many = vec![json!({}); MAX_ELEMENT_ROWS + 1];
+        assert!(refused(json!({ "rows": many })).contains("Nothing was written"));
+    }
+
+    #[test]
+    fn a_bot_reads_ontologies_but_never_changes_them() {
+        let read = |operation: &str, overlay: Option<&str>| {
+            let mut args = json!({ "operation": operation });
+            if let Some(overlay) = overlay {
+                args["overlay_id"] = json!(overlay);
+            }
+            args
+        };
+        assert_eq!(
+            parse_overlay_read(&read("list_overlays", None)).unwrap(),
+            ("list_overlays", None)
+        );
+        let schema = read("get_schema", Some("o1"));
+        assert_eq!(
+            parse_overlay_read(&schema).unwrap(),
+            ("get_schema", Some("o1"))
+        );
+        assert!(
+            parse_overlay_read(&read("get_overlay", None))
+                .unwrap_err()
+                .contains("overlay_id")
+        );
+        for operation in [
+            "create_overlay",
+            "update_overlay",
+            "delete_overlay",
+            "validate_overlay",
+        ] {
+            let error = parse_overlay_read(&read(operation, Some("o1"))).unwrap_err();
+            assert!(error.contains(operation), "{operation}");
+            assert!(error.contains("list_overlays, get_overlay, get_schema"));
+        }
+        let scoped = json!({ "operation": "get_schema", "overlay_id": "o1", "user_scoped": true });
+        assert!(
+            parse_overlay_read(&scoped)
+                .unwrap_err()
+                .contains("user_scoped")
+        );
     }
 }

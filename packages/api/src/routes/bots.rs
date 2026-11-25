@@ -173,6 +173,15 @@ pub fn routes() -> Router<AppState> {
             "/{bot_id}/memory/facts/{fact_id}",
             delete(memory::forget_fact),
         )
+        .route("/{bot_id}/memory/entities", get(memory::list_entities))
+        .route(
+            "/{bot_id}/memory/entities/{entity_id}",
+            axum::routing::patch(memory::update_entity).delete(memory::forget_entity),
+        )
+        .route(
+            "/{bot_id}/memory/entities/{entity_id}/merge",
+            post(memory::merge_entity),
+        )
         .route(
             "/{bot_id}/email-address",
             get(crate::mail_ingress::bot_address::get_bot_address)

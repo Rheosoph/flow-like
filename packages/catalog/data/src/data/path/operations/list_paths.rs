@@ -13,7 +13,7 @@ use flow_like_types::{Error, async_trait, json::json};
 use futures::StreamExt;
 
 /// The files under `prefix`. The ETag files FlowPath keeps beside cached copies are not listed.
-async fn list_files(
+pub(crate) async fn list_files(
     store: &dyn ObjectStore,
     prefix: &Path,
     recursive: bool,

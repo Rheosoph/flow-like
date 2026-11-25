@@ -9,6 +9,7 @@ import {
 	MapIcon,
 	SearchIcon,
 	SearchXIcon,
+	UsersRoundIcon,
 	XIcon,
 } from "lucide-react";
 import {
@@ -26,10 +27,12 @@ import { cn } from "../../lib/utils";
 import {
 	type BotFact,
 	forgetBotFact,
+	listBotEntities,
 	listBotFacts,
 } from "../../state/global-chat/bot-memory-facts";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { BotEntitiesView } from "./bot-entities-view";
 import { BotMemoryCard } from "./bot-memory-card";
 import { memoryKindStyle, useMemoryKindLabel } from "./bot-memory-kinds";
 import { MemoryMapFrame } from "./bot-memory-map-frame";
@@ -41,10 +44,14 @@ import {
 	memoryPlace,
 } from "./bot-memory-model";
 
-type MemoryView = "timeline" | "map";
+type MemoryView = "timeline" | "map" | "entities";
 
 export function botFactsKey(botId: string) {
 	return ["bot-memory", "facts", botId] as const;
+}
+
+export function botEntitiesKey(botId: string) {
+	return ["bot-memory", "entities", botId] as const;
 }
 
 /** Relative labels ("in 5 minutes") stay true while the pane is open. */
@@ -89,10 +96,12 @@ function useGroupLabel(format: MemoryFormat, now: number) {
 function ViewSwitch({
 	view,
 	places,
+	entities,
 	onChange,
 }: Readonly<{
 	view: MemoryView;
 	places: number;
+	entities: number;
 	onChange: (view: MemoryView) => void;
 }>) {
 	const { t } = useTranslation("bots");
@@ -102,14 +111,27 @@ function ViewSwitch({
 			icon: ListTreeIcon,
 			label: t("memory.views.timeline", "Timeline"),
 		},
-		{
-			value: "map" as const,
-			icon: MapIcon,
-			label: t("memory.views.map", "Map of {{count}} places", {
-				count: places,
-				defaultValue_one: "Map of {{count}} place",
-			}),
-		},
+		...(places > 0
+			? [
+					{
+						value: "map" as const,
+						icon: MapIcon,
+						label: t("memory.views.map", "Map of {{count}} places", {
+							count: places,
+							defaultValue_one: "Map of {{count}} place",
+						}),
+					},
+				]
+			: []),
+		...(entities > 0
+			? [
+					{
+						value: "entities" as const,
+						icon: UsersRoundIcon,
+						label: t("memory.views.entities", "People & things"),
+					},
+				]
+			: []),
 	];
 	return (
 		<fieldset
@@ -133,6 +155,9 @@ function ViewSwitch({
 				>
 					<Icon className="size-3.5" aria-hidden />
 					{value === "map" && <span className="tabular-nums">{places}</span>}
+					{value === "entities" && (
+						<span className="tabular-nums">{entities}</span>
+					)}
 				</button>
 			))}
 		</fieldset>
@@ -199,12 +224,30 @@ export function BotFactsList({
 		queryFn: () => listBotFacts(owner),
 		retry: false,
 	});
+	const entities = useQuery({
+		queryKey: botEntitiesKey(botId),
+		queryFn: () => listBotEntities(owner),
+		retry: false,
+	});
+	const entityCount = entities.data?.length ?? 0;
+	const refreshMemory = useCallback(
+		() =>
+			Promise.all([
+				queryClient.invalidateQueries({ queryKey: botFactsKey(botId) }),
+				queryClient.invalidateQueries({ queryKey: botEntitiesKey(botId) }),
+			]),
+		[queryClient, botId],
+	);
 	const forget = useMutation({
 		mutationFn: (id: string) => forgetBotFact(owner, id),
-		onSuccess: (_, id) =>
+		onSuccess: (_, id) => {
 			queryClient.setQueryData<BotFact[]>(botFactsKey(botId), (current) =>
 				current?.filter((fact) => fact.id !== id),
-			),
+			);
+			void queryClient.invalidateQueries({
+				queryKey: botEntitiesKey(botId),
+			});
+		},
 		onError: (error) => toast.error(getErrorMessage(error)),
 	});
 	const kinds = useMemo(() => {
@@ -226,7 +269,11 @@ export function BotFactsList({
 	const kind = kinds.some(([value]) => value === selectedKind)
 		? selectedKind
 		: null;
-	const view: MemoryView = placed.size > 0 ? selectedView : "timeline";
+	const view: MemoryView =
+		(selectedView === "map" && placed.size > 0) ||
+		(selectedView === "entities" && entityCount > 0)
+			? selectedView
+			: "timeline";
 	const query = search.trim().toLocaleLowerCase();
 	const visible = useMemo(
 		() =>
@@ -258,6 +305,10 @@ export function BotFactsList({
 		[view, shown, now],
 	);
 	const total = facts.data?.length ?? 0;
+	const searchLabel =
+		view === "entities"
+			? t("memory.entities.searchPlaceholder", "Search people & things…")
+			: t("memory.searchPlaceholder", "Search memories…");
 	const clearFilters = () => {
 		setSearch("");
 		setSelectedKind(null);
@@ -332,11 +383,8 @@ export function BotFactsList({
 									type="search"
 									value={search}
 									onChange={(event) => setSearch(event.target.value)}
-									placeholder={t(
-										"memory.searchPlaceholder",
-										"Search memories…",
-									)}
-									aria-label={t("memory.searchPlaceholder", "Search memories…")}
+									placeholder={searchLabel}
+									aria-label={searchLabel}
 									className="h-9 rounded-xl border-border/65 bg-muted/30 pr-9 pl-9 text-sm shadow-none [&::-webkit-search-cancel-button]:appearance-none"
 								/>
 								{search && (
@@ -352,54 +400,57 @@ export function BotFactsList({
 									</Button>
 								)}
 							</div>
-							{placed.size > 0 && (
+							{(placed.size > 0 || entityCount > 0) && (
 								<ViewSwitch
 									view={view}
 									places={placed.size}
+									entities={entityCount}
 									onChange={setSelectedView}
 								/>
 							)}
 						</div>
-						<fieldset
-							aria-label={t("memory.filter", "Filter memories by category")}
-							className="flex flex-wrap gap-1.5"
-						>
-							<button
-								type="button"
-								aria-pressed={kind === null}
-								onClick={() => setSelectedKind(null)}
-								className={cn(
-									"inline-flex min-h-7 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring",
-									kind === null
-										? "border-foreground/15 bg-foreground text-background"
-										: "border-border/60 text-muted-foreground hover:bg-muted",
-								)}
+						{view !== "entities" && (
+							<fieldset
+								aria-label={t("memory.filter", "Filter memories by category")}
+								className="flex flex-wrap gap-1.5"
 							>
-								{t("memory.all", "All")}
-								<span className="tabular-nums opacity-65">{total}</span>
-							</button>
-							{kinds.map(([value, count]) => {
-								const { icon: Icon, color } = memoryKindStyle(value);
-								return (
-									<button
-										key={value}
-										type="button"
-										aria-pressed={kind === value}
-										onClick={() => setSelectedKind(value)}
-										className={cn(
-											"inline-flex min-h-7 max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring",
-											kind === value
-												? cn("border-current/20", color)
-												: "border-border/60 text-muted-foreground hover:bg-muted",
-										)}
-									>
-										<Icon className="size-3 shrink-0" aria-hidden />
-										<span className="truncate">{kindLabel(value)}</span>
-										<span className="tabular-nums opacity-65">{count}</span>
-									</button>
-								);
-							})}
-						</fieldset>
+								<button
+									type="button"
+									aria-pressed={kind === null}
+									onClick={() => setSelectedKind(null)}
+									className={cn(
+										"inline-flex min-h-7 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring",
+										kind === null
+											? "border-foreground/15 bg-foreground text-background"
+											: "border-border/60 text-muted-foreground hover:bg-muted",
+									)}
+								>
+									{t("memory.all", "All")}
+									<span className="tabular-nums opacity-65">{total}</span>
+								</button>
+								{kinds.map(([value, count]) => {
+									const { icon: Icon, color } = memoryKindStyle(value);
+									return (
+										<button
+											key={value}
+											type="button"
+											aria-pressed={kind === value}
+											onClick={() => setSelectedKind(value)}
+											className={cn(
+												"inline-flex min-h-7 max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring",
+												kind === value
+													? cn("border-current/20", color)
+													: "border-border/60 text-muted-foreground hover:bg-muted",
+											)}
+										>
+											<Icon className="size-3 shrink-0" aria-hidden />
+											<span className="truncate">{kindLabel(value)}</span>
+											<span className="tabular-nums opacity-65">{count}</span>
+										</button>
+									);
+								})}
+							</fieldset>
+						)}
 					</>
 				)}
 			</div>
@@ -437,7 +488,7 @@ export function BotFactsList({
 					<MemoryEmpty name={name} memoryOff={memoryOff} />
 				) : (
 					<>
-						{(query || kind) && (
+						{view !== "entities" && (query || kind) && (
 							<output className="block pt-3 text-[11px] text-muted-foreground">
 								{t("memory.results", "{{shown}} of {{total}} memories", {
 									shown: visible.length,
@@ -445,7 +496,25 @@ export function BotFactsList({
 								})}
 							</output>
 						)}
-						{shown.length === 0 ? (
+						{view === "entities" ? (
+							<BotEntitiesView
+								owner={owner}
+								entities={entities.data ?? []}
+								facts={facts.data ?? []}
+								query={query}
+								actions={{
+									now,
+									format,
+									pendingId: forget.isPending
+										? (forget.variables ?? null)
+										: null,
+									disabled: forget.isPending,
+									onForget: (id) => forget.mutate(id),
+									onJump,
+								}}
+								onChanged={() => void refreshMemory()}
+							/>
+						) : shown.length === 0 ? (
 							<div className="mt-3 flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">
 								<SearchXIcon
 									className="size-6 text-muted-foreground"

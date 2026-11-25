@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{Evidence, Fact, dedupe_batch};
+use crate::entities::{Declared, DeclaredEntity, Entity, Resolver, is_participant_subject};
 use crate::llm::{LlmRequest, LlmTask, MemoryLlm, parse_json_answer};
-use crate::store::{FactStore, embed_or_wait};
+use crate::store::{EntityStore, FactStore, embed_or_wait};
 use crate::text::{content_words, format_day};
 
 /// Above this cosine similarity a fact that adds no content word is the same fact.
@@ -140,6 +141,14 @@ pub fn merge_into(target: &Fact, candidate: &Fact) -> Fact {
     }
     if merged.segment_id.is_none() {
         merged.segment_id = candidate.segment_id.clone();
+    }
+    if merged.subject_id.is_none() {
+        merged.subject_id = candidate.subject_id.clone();
+    }
+    if merged.object_id.is_none() && candidate.object_id != merged.subject_id {
+        merged.object = candidate.object.clone();
+        merged.object_id = candidate.object_id.clone();
+        merged.relation = candidate.relation.clone();
     }
     merged
 }
@@ -526,7 +535,34 @@ struct PreparedFact {
 #[derive(Default)]
 pub(crate) struct PreparedFacts {
     facts: Vec<PreparedFact>,
+    /// New entities and entities that gained names, written before the facts.
+    entities: Vec<Entity>,
     report: UpdateReport,
+}
+
+/// Candidate facts with the entities their extraction declared.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Candidates {
+    pub facts: Vec<Fact>,
+    pub entities: Vec<DeclaredEntity>,
+}
+
+impl Candidates {
+    pub(crate) fn facts(facts: Vec<Fact>) -> Self {
+        Self {
+            facts,
+            entities: Vec::new(),
+        }
+    }
+}
+
+/// Facts about the same subject compete in updates: the same entity, or for a participant's
+/// claims and facts stored before entities, the same subject string.
+fn same_subject(fact: &Fact, candidate: &Fact) -> bool {
+    match (&fact.subject_id, &candidate.subject_id) {
+        (Some(left), Some(right)) if !is_participant_subject(&candidate.subject) => left == right,
+        _ => fact.subject == candidate.subject,
+    }
 }
 
 struct OverlayFact {
@@ -614,10 +650,16 @@ impl FactOverlay {
         store: &FactStore,
         candidate: &Fact,
         vector: Option<&[f32]>,
+        subjects: &[String],
     ) -> Result<Vec<Neighbour>> {
         // Fetch replacements for stored hits that earlier decisions closed in this batch.
         let mut found = store
-            .neighbours(candidate, vector, UPDATE_NEIGHBOURS + self.0.len())
+            .neighbours_about(
+                candidate,
+                vector,
+                UPDATE_NEIGHBOURS + self.0.len(),
+                subjects,
+            )
             .await?;
         if self.0.is_empty() {
             return Ok(found);
@@ -628,7 +670,8 @@ impl FactOverlay {
             }
         }
         let active = |fact: &Fact| {
-            fact.subject == candidate.subject
+            (same_subject(fact, candidate)
+                || (fact.subject_id.is_none() && subjects.contains(&fact.subject)))
                 && fact.is_active()
                 && !fact.is_expired_at(candidate.recorded_at)
         };
@@ -675,21 +718,33 @@ pub async fn integrate_facts(
     tz: Tz,
     now: DateTime<Utc>,
 ) -> Result<UpdateReport> {
-    let prepared = prepare_facts(store, llm, candidates, tz, now, false).await?;
-    apply_prepared_facts(store, prepared, now).await
+    let prepared = prepare_facts(
+        store,
+        None,
+        llm,
+        Candidates::facts(candidates),
+        tz,
+        now,
+        false,
+    )
+    .await?;
+    apply_prepared_facts(store, None, prepared, now).await
 }
 
 /// Embeds and reconciles candidates without writing facts. Later candidates see earlier
-/// decisions through the overlay, including supersession and added evidence.
+/// decisions through the overlay, including supersession and added evidence. With an entity
+/// store, subjects and objects resolve to entities first and updates compare facts about the
+/// same entity.
 pub(crate) async fn prepare_facts(
     store: &FactStore,
+    entities: Option<&EntityStore>,
     llm: &dyn MemoryLlm,
-    candidates: Vec<Fact>,
+    batch: Candidates,
     tz: Tz,
     now: DateTime<Utc>,
     requested: bool,
 ) -> Result<PreparedFacts> {
-    let mut candidates = dedupe_batch(candidates);
+    let mut candidates = dedupe_batch(batch.facts);
     let mut prepared = PreparedFacts::default();
     if !requested {
         let mut retained = Vec::new();
@@ -710,13 +765,31 @@ pub(crate) async fn prepare_facts(
     if candidates.is_empty() {
         return Ok(prepared);
     }
+    let mut resolver = match entities {
+        Some(entities) => Some(Resolver::new(entities.all().await?, now)),
+        None => None,
+    };
+    if let Some(resolver) = resolver.as_mut() {
+        let declared = Declared::new(&batch.entities);
+        for candidate in &mut candidates {
+            resolver.attach(candidate, &declared);
+        }
+        resolver.declare(&declared);
+        prepared.entities = resolver.writes();
+    }
     candidates.sort_by_key(currentness);
     let texts: Vec<String> = candidates.iter().map(|fact| fact.text.clone()).collect();
     let vectors = embed_or_wait(store.embedder().as_ref(), &texts).await;
     let mut overlay = FactOverlay::default();
     for (candidate, vector) in candidates.into_iter().zip(vectors) {
+        let subjects = match (&resolver, &candidate.subject_id) {
+            (Some(resolver), Some(id)) if !is_participant_subject(&candidate.subject) => {
+                resolver.keys(id)
+            }
+            _ => Vec::new(),
+        };
         let mut neighbours = overlay
-            .neighbours(store, &candidate, vector.as_deref())
+            .neighbours(store, &candidate, vector.as_deref(), &subjects)
             .await?;
         let closed = overlay.closed(store, &candidate).await?;
         let (action, decided_by) =
@@ -743,9 +816,13 @@ pub(crate) async fn prepare_facts(
 /// commit lease. It never invokes the embedder or either decision model.
 pub(crate) async fn apply_prepared_facts(
     store: &FactStore,
+    entities: Option<&EntityStore>,
     prepared: PreparedFacts,
     now: DateTime<Utc>,
 ) -> Result<UpdateReport> {
+    if let Some(entities) = entities {
+        entities.upsert(&prepared.entities).await?;
+    }
     let mut report = prepared.report;
     for prepared in prepared.facts {
         let PreparedFact {
@@ -814,6 +891,10 @@ mod tests {
             text: text.into(),
             kind: FactKind::Preference,
             subject: "user".into(),
+            subject_id: None,
+            object: None,
+            object_id: None,
+            relation: None,
             geojson: None,
             time: None,
             expires_at: None,
@@ -868,13 +949,21 @@ mod tests {
             })
             .collect();
         let now = candidates.last().unwrap().recorded_at;
-        let prepared = prepare_facts(&stores.facts, &llm, candidates, Tz::UTC, now, false)
-            .await
-            .unwrap();
+        let prepared = prepare_facts(
+            &stores.facts,
+            Some(&stores.entities),
+            &llm,
+            Candidates::facts(candidates),
+            Tz::UTC,
+            now,
+            false,
+        )
+        .await
+        .unwrap();
         assert!(stores.facts.get("f_blue").await.unwrap().is_none());
         let embeddings = embedder.calls.load(Ordering::SeqCst);
         let requests = llm.requests().len();
-        let report = apply_prepared_facts(&stores.facts, prepared, now)
+        let report = apply_prepared_facts(&stores.facts, Some(&stores.entities), prepared, now)
             .await
             .unwrap();
         assert_eq!(report.added(), 1);
@@ -941,8 +1030,9 @@ mod tests {
         let now = repeated.recorded_at;
         let prepared = prepare_facts(
             &stores.facts,
+            Some(&stores.entities),
             &StubLlm::new(),
-            vec![green, repeated],
+            Candidates::facts(vec![green, repeated]),
             Tz::UTC,
             now,
             false,
@@ -953,7 +1043,7 @@ mod tests {
             stores.facts.get(&blue.id).await.unwrap(),
             Some(blue.clone())
         );
-        let report = apply_prepared_facts(&stores.facts, prepared, now)
+        let report = apply_prepared_facts(&stores.facts, Some(&stores.entities), prepared, now)
             .await
             .unwrap();
         assert_eq!(report.superseded(), 1);
@@ -999,15 +1089,16 @@ mod tests {
         });
         let prepared = prepare_facts(
             &stores.facts,
+            Some(&stores.entities),
             &llm,
-            vec![first, second],
+            Candidates::facts(vec![first, second]),
             Tz::UTC,
             now,
             false,
         )
         .await
         .unwrap();
-        let report = apply_prepared_facts(&stores.facts, prepared, now)
+        let report = apply_prepared_facts(&stores.facts, Some(&stores.entities), prepared, now)
             .await
             .unwrap();
         assert_eq!(report.merged(), 2);

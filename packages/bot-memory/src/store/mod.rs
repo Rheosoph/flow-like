@@ -1,6 +1,7 @@
 //! LanceDB tables at a location the host chooses (the bot's workspace): facts, segment
 //! summaries, the history index and the compaction state. Tables appear on first write.
 
+mod entities;
 mod expiry;
 mod facts;
 mod history;
@@ -18,6 +19,7 @@ use flow_like_storage::lancedb::Connection;
 use flow_like_storage::lancedb::table::WriteOptions;
 use flow_like_types::{Result, anyhow};
 
+pub use entities::EntityStore;
 pub use facts::{FactFilter, FactQuery, FactSort, FactStore, ScoredFact};
 pub use history::{HistoryHit, HistoryIndex, HistoryQuery, projection};
 pub(crate) use lance::embed_or_wait;
@@ -37,6 +39,7 @@ pub fn is_memory_table(name: &str) -> bool {
         || [
             FactStore::TABLE,
             "facts_expiry",
+            EntityStore::TABLE,
             SegmentStore::TABLE,
             HistoryIndex::TABLE,
             StateStore::TABLE,
@@ -51,6 +54,7 @@ pub(crate) struct SharedFacts {
 
 pub struct MemoryStores {
     pub facts: FactStore,
+    pub entities: EntityStore,
     pub segments: SegmentStore,
     pub history: HistoryIndex,
     pub state: StateStore,
@@ -79,6 +83,7 @@ impl MemoryStores {
         Self {
             facts: FactStore::open(connection.clone(), embedder.clone(), write_options.clone())
                 .await,
+            entities: EntityStore::open(connection.clone(), write_options.clone()).await,
             segments: SegmentStore::open(connection.clone(), embedder, write_options.clone()).await,
             history: HistoryIndex::open(connection.clone(), write_options.clone()).await,
             state: StateStore::open(connection.clone(), write_options.clone()).await,
@@ -115,6 +120,12 @@ impl MemoryStores {
                 embedder.clone(),
                 write_options.clone(),
                 name(FactStore::TABLE),
+            )
+            .await,
+            entities: EntityStore::open_named(
+                connection.clone(),
+                write_options.clone(),
+                name(EntityStore::TABLE),
             )
             .await,
             segments: SegmentStore::open_named(
@@ -268,6 +279,7 @@ impl MemoryStores {
             self.segments.apply_reembed(segments).await?;
         }
         self.facts.optimize().await?;
+        self.entities.optimize().await?;
         self.segments.optimize().await?;
         self.history.optimize().await?;
         match prepared.failure {
@@ -280,6 +292,7 @@ impl MemoryStores {
     /// than after the retention window. Runs after each deletion, under the lease.
     pub(crate) async fn prune(&self) -> Result<()> {
         self.facts.prune().await?;
+        self.entities.prune().await?;
         self.segments.prune().await?;
         self.history.prune().await?;
         self.state.prune().await
@@ -288,6 +301,7 @@ impl MemoryStores {
     /// Picks up what other handles on the same tables wrote.
     pub(crate) async fn refresh(&self) -> Result<()> {
         self.facts.refresh().await?;
+        self.entities.refresh().await?;
         self.segments.refresh().await?;
         self.history.refresh().await?;
         self.state.refresh().await?;
@@ -304,6 +318,7 @@ impl MemoryStores {
     /// for the engine to invalidate drafts and release its reset lease.
     pub(crate) async fn clear_content(&self) -> Result<()> {
         self.facts.clear().await?;
+        self.entities.clear().await?;
         self.segments.clear().await?;
         self.history.clear().await
     }
@@ -311,6 +326,7 @@ impl MemoryStores {
     /// Drops every table when removing a memory store permanently.
     pub async fn drop_all(&self) -> Result<()> {
         self.facts.drop_all().await?;
+        self.entities.drop_all().await?;
         self.segments.drop_all().await?;
         self.history.drop_all().await?;
         self.state.drop_all().await
@@ -324,6 +340,7 @@ fn room_scope_of(name: &str) -> Option<&str> {
         && [
             FactStore::TABLE,
             "facts_expiry",
+            EntityStore::TABLE,
             SegmentStore::TABLE,
             HistoryIndex::TABLE,
             StateStore::TABLE,
@@ -341,6 +358,7 @@ mod tests {
         for name in [
             "facts",
             "FACTS_EXPIRY",
+            "memory_entities",
             "SEGMENTS",
             "history",
             "state",
@@ -356,7 +374,14 @@ mod tests {
     #[test]
     fn room_tables_require_the_complete_reserved_name() {
         let scope = "a".repeat(64);
-        for table in ["facts", "facts_expiry", "segments", "history", "state"] {
+        for table in [
+            "facts",
+            "facts_expiry",
+            "memory_entities",
+            "segments",
+            "history",
+            "state",
+        ] {
             let name = format!("memory_room_{scope}_{table}");
             assert_eq!(room_scope_of(&name), Some(scope.as_str()));
         }

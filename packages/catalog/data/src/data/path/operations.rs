@@ -13,5 +13,6 @@ pub mod list_paths;
 pub mod list_with_offset;
 pub mod put;
 pub mod rename;
+pub mod search_files;
 pub mod sign_url;
 pub mod sign_urls;
