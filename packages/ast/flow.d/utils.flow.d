@@ -2924,6 +2924,14 @@ declare namespace types {
     function isEmpty({ value: any, trim?: bool }): bool;
 
     /**
+     * Checks whether a value is null. Empty strings, arrays and structs return false.
+     * @node utils_types_is_null @receiver value @alias utilsTypesIsNull
+     * @param value — Value to inspect (receiver: `this` in `x.isNull(...)`)
+     * @returns isNull — True when the value is null
+     */
+    function isNull(this: any, { value: any }): bool;
+
+    /**
      * Selects between two values based on a boolean condition. Returns A if true, B if false.
      * @node utils_types_select @alias utilsTypesSelect
      * @param a — Value returned when condition is true
@@ -3100,13 +3108,13 @@ declare namespace user {
     function hasPermission({ permission?: string }): bool;
 
     /**
-     * Checks whether a machine rather than a person triggered this run. Machine callers have no human identity (sub): an API key reports its Key ID, an app calling through an app connection reports the calling app instead.
+     * Checks whether a machine rather than a person triggered this run. Machine callers have no human identity (sub): an API key reports its Key ID, an app calling through an app connection reports the calling app instead, and a bot reports its bot id.
      * @node utils_user_is_technical_user @alias utilsUserIsTechnicalUser
-     * @returns isTechnical — True if a machine triggered the run (API key or app connection), false for a person
-     * @returns keyId — The API key identifier, empty for every other caller
-     * @returns principal — How the caller authenticated: 'user', 'apiKey' or 'connectedApp'
+     * @returns isTechnical — True if a machine triggered the run (API key, app connection or bot), false for a person
+     * @returns keyId — The API key identifier, or the bot id when a bot triggered the run, empty for every other caller
+     * @returns principal — How the caller authenticated: 'user', 'apiKey', 'connectedApp' or 'bot'
      * @returns originAppId — The app that made the call when the principal is 'connectedApp', empty otherwise
-     * @returns onBehalfOf — The user the caller reported as the initiator: an API key's creator, or the user an app connection passed through. Attribution only — never authorize against it
+     * @returns onBehalfOf — The user the caller reported as the initiator: an API key's creator, the user an app connection passed through, or the bot's owner. Attribution only — never authorize against it
      */
     function isTechnical(): { isTechnical: bool, keyId: string, principal: string, originAppId: string, onBehalfOf: string };
 

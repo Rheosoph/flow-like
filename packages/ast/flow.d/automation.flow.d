@@ -1800,13 +1800,14 @@ declare namespace computer {
      * @param session (optional) — Optional automation session, passed through for existing flows
      * @param image — Image to copy
      * @param localOnly (optional) — Prevent cross-device clipboard sharing on supported platforms
-     * @param expiresInSeconds (optional) — Seconds before content expires; zero leaves it on the clipboard. Requires platform support
+     * @param expiresInSeconds (optional) — Seconds before content expires. Zero uses the platform default, or 30 minutes for the private Android clipboard
+     * @param appPrivate (optional) — Store in Flow Like's account-scoped Android clipboard instead of the system clipboard. Supports strict expiration; paste using Private clipboard in the app
      * @param timeoutSeconds (optional) — Maximum time to wait for the invoking client
      * @returns sessionOut — Optional automation session
      * @returns error — Structured error code and message
      * @impure has side effects / drives control flow
      */
-    function clipboardSetImage({ session?: Struct, image: Struct, localOnly?: bool, expiresInSeconds?: int, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
+    function clipboardSetImage({ session?: Struct, image: Struct, localOnly?: bool, expiresInSeconds?: int, appPrivate?: bool, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
 
     /**
      * Writes to the local device clipboard, or to the calling frontend when this Event runs remotely
@@ -1815,13 +1816,14 @@ declare namespace computer {
      * @param text — Text to copy
      * @param html (optional) — Optional rich text, with Text as the plain-text fallback
      * @param localOnly (optional) — Prevent cross-device clipboard sharing on supported platforms
-     * @param expiresInSeconds (optional) — Seconds before content expires; zero leaves it on the clipboard. Requires platform support
+     * @param expiresInSeconds (optional) — Seconds before content expires. Zero uses the platform default, or 30 minutes for the private Android clipboard
+     * @param appPrivate (optional) — Store in Flow Like's account-scoped Android clipboard instead of the system clipboard. Supports strict expiration; paste using Private clipboard in the app
      * @param timeoutSeconds (optional) — Maximum time to wait for the invoking client
      * @returns sessionOut — Optional automation session
      * @returns error — Structured error code and message
      * @impure has side effects / drives control flow
      */
-    function clipboardSetText({ session?: Struct, text: string, html?: string, localOnly?: bool, expiresInSeconds?: int, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
+    function clipboardSetText({ session?: Struct, text: string, html?: string, localOnly?: bool, expiresInSeconds?: int, appPrivate?: bool, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
 
     // === Automation/Computer/Display ===
 
