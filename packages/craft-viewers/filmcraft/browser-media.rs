@@ -132,6 +132,7 @@ pub async fn prepare(name: &str, bytes: &[u8]) -> Result<(), String> {
                 has_alpha: false,
                 bitrate: None,
                 hdr: None,
+                color_assumed: None,
             }),
             audio_streams: if channels > 0 {
                 vec![AudioStreamInfo {

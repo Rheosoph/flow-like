@@ -34,6 +34,7 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `avatar` - User avatar
 - `userProfile` - User lookup display by sub with avatar, chip, row, detailed, and card variants
 - `progress` - Progress bar
+- `stat` - Quiet metric tile: label, value, change with trend arrow, caption
 - `spinner` - Loading spinner
 - `divider` - Visual separator
 - `skeleton` - Loading placeholder

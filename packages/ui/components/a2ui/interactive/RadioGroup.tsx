@@ -37,6 +37,8 @@ export function A2UIRadioGroup({
 	const options = normalizeOptions(useResolved<unknown>(component.options));
 	const disabled = useResolved<boolean>(component.disabled);
 	const orientation = useResolved<string>(component.orientation);
+	const label = useResolved<string>(component.label);
+	const labelId = `radio-${componentId}-label`;
 
 	const handleChange = (newValue: string) => {
 		setValue(newValue);
@@ -62,10 +64,12 @@ export function A2UIRadioGroup({
 			className={cn("space-y-2", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>
+			{label && <Label id={labelId}>{label}</Label>}
 			<RadioGroup
 				value={toOptionValue(value)}
 				onValueChange={handleChange}
 				disabled={disabled}
+				aria-labelledby={label ? labelId : undefined}
 				className={cn("flex", orientationClass)}
 			>
 				{options.map((option) => {

@@ -46,6 +46,7 @@ const choices = new Map([
 	["0BSD OR MIT OR Apache-2.0", "MIT"],
 	["Unlicense OR MIT", "MIT"],
 	["CC0-1.0 OR MIT-0 OR Apache-2.0", "Apache-2.0"],
+	["CC-BY-4.0", "CC-BY-4.0"],
 	["CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception", "Apache-2.0"],
 	["Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT", "MIT"],
 	["Unicode-3.0", "Unicode-3.0"],
@@ -120,7 +121,6 @@ export function parseDependencyTree(tree) {
 		if (!match)
 			throw new Error(`Cannot identify editor dependency: ${identity}`);
 		const [, name, version, location] = match;
-		const key = `${name}@${version}`;
 		const entry = {
 			name,
 			version,
@@ -129,6 +129,7 @@ export function parseDependencyTree(tree) {
 			repository,
 			location: location === "proc-macro" ? undefined : location,
 		};
+		const key = JSON.stringify([name, version, entry.location || null]);
 		if (
 			packages.has(key) &&
 			JSON.stringify(packages.get(key)) !== JSON.stringify(entry)
@@ -139,7 +140,9 @@ export function parseDependencyTree(tree) {
 		packages.set(key, entry);
 	}
 	return [...packages.values()].sort((a, b) =>
-		`${a.name}@${a.version}`.localeCompare(`${b.name}@${b.version}`),
+		`${a.name}@${a.version}#${a.location || ""}`.localeCompare(
+			`${b.name}@${b.version}#${b.location || ""}`,
+		),
 	);
 }
 
@@ -209,12 +212,14 @@ function registryPackage(pkg, lock, cargoHome) {
 }
 
 function gitPackage(pkg, lock, cargoHome, run) {
+	const [location, shortRevision] = pkg.location.split("#");
 	const matches = lock.filter(
 		(item) =>
 			item.name === pkg.name &&
 			item.version === pkg.version &&
 			item.source?.startsWith("git+") &&
-			item.source.slice(4).split("#")[0] === pkg.location.split("#")[0],
+			item.source.slice(4).split("#")[0] === location &&
+			(!shortRevision || item.source.split("#")[1]?.startsWith(shortRevision)),
 	);
 	if (matches.length !== 1)
 		throw new Error(`Cannot identify locked Git source for ${pkg.name}.`);
@@ -272,6 +277,7 @@ export function bundleLicenses({
 	pin,
 	cargoPackage,
 	cargoArgs = [],
+	sourceOverrides = [],
 	env = process.env,
 }) {
 	const run = (command, args, options = {}) =>
@@ -312,6 +318,23 @@ export function bundleLicenses({
 	const lock = lockedPackages(source);
 	const cargoHome = env.CARGO_HOME || join(homedir(), ".cargo");
 	const workspace = realpathSync(source);
+	const localSources = new Map();
+	for (const item of sourceOverrides) {
+		const location = realpathSync(item.path);
+		const key = JSON.stringify([item.name, item.version, location]);
+		if (
+			!location.startsWith(`${workspace}${sep}`) ||
+			!/^git\+https?:\/\/.+#[a-f0-9]{40}$/.test(item.source) ||
+			localSources.has(key)
+		)
+			throw new Error(`Invalid validated source override for ${item.name}.`);
+		localSources.set(key, item);
+	}
+	const counts = new Map();
+	for (const pkg of packages) {
+		const key = `${pkg.name}@${pkg.version}`;
+		counts.set(key, (counts.get(key) || 0) + 1);
+	}
 	const put = (path, bytes) => {
 		mkdirSync(dirname(join(licenses, path)), { recursive: true });
 		writeFileSync(join(licenses, path), bytes);
@@ -319,13 +342,24 @@ export function bundleLicenses({
 	};
 	for (const pkg of packages) {
 		const key = `${pkg.name}@${pkg.version}`;
-		const prefix = `dependencies/${pkg.name}-${pkg.version}`;
+		const localPath =
+			pkg.location && !/^https?:/.test(pkg.location)
+				? realpathSync(pkg.location)
+				: undefined;
+		const localSource = localPath
+			? localSources.get(JSON.stringify([pkg.name, pkg.version, localPath]))
+			: undefined;
 		const resolved =
 			!pkg.location || /^https?:/.test(pkg.location)
 				? pkg.location
 					? gitPackage(pkg, lock, cargoHome, run)
 					: registryPackage(pkg, lock, cargoHome)
 				: undefined;
+		const suffix =
+			counts.get(key) > 1
+				? `-${sha256(JSON.stringify([resolved?.source || localSource?.source, localPath])).slice(0, 16)}`
+				: "";
+		const prefix = `dependencies/${pkg.name}-${pkg.version}${suffix}`;
 		const revision = resolved
 			? resolved.archive
 				? existsSync(join(resolved.base, ".cargo_vcs_info.json"))
@@ -334,7 +368,7 @@ export function bundleLicenses({
 						).git?.sha1
 					: undefined
 				: resolved.source.split("#")[1]
-			: undefined;
+			: localSource?.source.split("#")[1];
 		const override = selectNoticeOverride(overrides, key, revision);
 		const additional = (override?.additionalLicenses || []).map(selectLicense);
 		pkg.selectedLicense = [
@@ -350,13 +384,30 @@ export function bundleLicenses({
 				throw new Error(
 					`Package the exact modified/path MPL source for ${key} before distributing it.`,
 				);
-			const location = realpathSync(pkg.location);
+			const location = localPath;
 			if (location !== workspace && !location.startsWith(`${workspace}${sep}`))
 				throw new Error(
 					`Unreviewed path dependency ${pkg.name}: ${pkg.location}`,
 				);
-			pkg.source = `${pin.repository.replace(/\.git$/, "")}/tree/${pin.revision}/${portable(relative(workspace, location))}`;
-			pkg.notices = upstreamFiles;
+			if (localSource) {
+				pkg.source = localSource.source;
+				pkg.modified = true;
+				for (const path of filesBelow(location).filter((path) =>
+					noticeName.test(basename(path)),
+				)) {
+					pkg.notices.push(
+						put(
+							`${prefix}/${portable(relative(location, path))}.txt`,
+							readFileSync(path),
+						),
+					);
+				}
+				if (!pkg.notices.length)
+					throw new Error(`No license text for modified dependency ${key}.`);
+			} else {
+				pkg.source = `${pin.repository.replace(/\.git$/, "")}/tree/${pin.revision}/${portable(relative(workspace, location))}`;
+				pkg.notices = upstreamFiles;
+			}
 		} else {
 			pkg.source = resolved.source;
 			pkg.checksum = resolved.checksum;
@@ -442,16 +493,17 @@ export function bundleLicenses({
 						resolved.archive,
 						resolved.checksum,
 					);
-					pkg.sourceArchive = `sources/${pkg.name}-${pkg.version}.crate`;
+					pkg.sourceArchive = `sources/${pkg.name}-${pkg.version}${suffix}.crate`;
 					cpSync(resolved.archive, join(licenses, pkg.sourceArchive));
 				} else {
-					pkg.sourceArchive = `sources/${pkg.name}-${pkg.version}-${revision.slice(0, 12)}.tar.gz`;
+					pkg.sourceArchive = `sources/${pkg.name}-${pkg.version}-${revision.slice(0, 12)}${suffix}.tar.gz`;
 					archiveGitSource(
 						resolved.base,
 						revision,
 						join(licenses, pkg.sourceArchive),
 					);
 				}
+				Object.assign(pkg, chunkSourceArchive(licenses, pkg.sourceArchive));
 			}
 		}
 		pkg.location = undefined;
@@ -464,6 +516,38 @@ export function bundleLicenses({
 		packages,
 	};
 	put("manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+	put("index.html", renderLicenseIndex(manifest, pin));
+	console.log(
+		`${pin.label || "Flows Word"}: packaged ${packages.length} dependency notices and ${packages.filter((pkg) => pkg.sourceArchive).length} MPL source archives.`,
+	);
+	return manifest;
+}
+
+export function chunkSourceArchive(directory, archive) {
+	const path = join(directory, archive);
+	const bytes = readFileSync(path);
+	const metadata = {
+		sourceArchiveByteLength: bytes.byteLength,
+		sourceArchiveSha256: sha256(bytes),
+	};
+	if (bytes.byteLength <= 25 * 1024 * 1024) return metadata;
+	const partBytes = 8 * 1024 * 1024;
+	const parts = [];
+	for (let offset = 0; offset < bytes.byteLength; offset += partBytes) {
+		const part = bytes.subarray(offset, offset + partBytes);
+		const name = `${archive}.part${String(parts.length + 1).padStart(3, "0")}`;
+		writeFileSync(join(directory, name), part);
+		parts.push({
+			path: name,
+			byteLength: part.byteLength,
+			sha256: sha256(part),
+		});
+	}
+	rmSync(path);
+	return { ...metadata, sourceArchiveParts: parts };
+}
+
+export function renderLicenseIndex({ target, upstreamFiles, packages }, pin) {
 	const renderNotices = (paths) =>
 		paths
 			.map(
@@ -472,38 +556,34 @@ export function bundleLicenses({
 			)
 			.join("");
 	const mpl = packages.filter((pkg) => pkg.sourceArchive);
-	put(
-		"index.html",
-		`<!doctype html>
+	const sourceDownload = (pkg) => {
+		const label = `${escapeHtml(pkg.name)} ${escapeHtml(pkg.version)} source`;
+		if (!pkg.sourceArchiveParts)
+			return `<li><a download href="${href(pkg.sourceArchive)}">${label}</a> (${escapeHtml(pkg.selectedLicense)})</li>`;
+		const archive = basename(pkg.sourceArchive);
+		const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+		const command = `cat ${pkg.sourceArchiveParts.map((part) => quote(basename(part.path))).join(" ")} > ${quote(archive)}\nprintf '%s  %s\\n' ${quote(pkg.sourceArchiveSha256)} ${quote(archive)} | shasum -a 256 -c -`;
+		return `<li>${label} (${escapeHtml(pkg.selectedLicense)}), split into ${pkg.sourceArchiveParts.length} parts.<ol>${pkg.sourceArchiveParts.map((part, index) => `<li><a download href="${href(part.path)}">Part ${index + 1}: ${escapeHtml(basename(part.path))}</a> (${part.byteLength} bytes)</li>`).join("")}</ol><p>Download every part into the same directory. Run these commands there to reconstruct <code>${escapeHtml(archive)}</code> (${pkg.sourceArchiveByteLength} bytes) and verify its SHA-256 checksum. The check must report <code>OK</code> before extracting the archive. The parts preserve the complete source archive.</p><pre>${escapeHtml(command)}</pre></li>`;
+	};
+	return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'">
 <title>${escapeHtml(pin.label || "Flows Word")} licenses and source</title>
-<style>:root{color-scheme:light dark;font:15px system-ui,sans-serif}body{max-width:72rem;margin:0 auto;padding:24px;line-height:1.5}a{color:light-dark(#154fc1,#9ac1ff)}h1{font-size:1.5rem}h2{font-size:1.2rem}details{border-top:1px solid #8886;padding:12px 0}summary{cursor:pointer}li{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}code{overflow-wrap:anywhere}</style></head><body>
+<style>:root{color-scheme:light dark;font:15px system-ui,sans-serif}body{max-width:72rem;margin:0 auto;padding:24px;line-height:1.5}a{color:light-dark(#154fc1,#9ac1ff)}h1{font-size:1.5rem}h2{font-size:1.2rem}details{border-top:1px solid #8886;padding:12px 0}summary{cursor:pointer}li{overflow-wrap:anywhere}code{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}</style></head><body>
 <h1>${escapeHtml(pin.label || "Flows Word")}: third-party licenses and source</h1>
 <p>This editor includes open-source software and other third-party materials. Their own licenses apply to those materials. Flow-Like's license and usage restrictions do not limit the rights those licenses grant, including rights to MPL-covered source.</p>
 <p>Based on ${escapeHtml(pin.repository.replace(/\.git$/, ""))}, revision <code>${escapeHtml(pin.revision)}</code>. The upstream application code is used under MIT. Dependencies may have different terms, listed below. Warranty or support offered by Flow-Like is provided by Rheosoph GmbH alone, not the upstream contributors.</p>
-${mpl.length ? `<h2>MPL source downloads</h2><p>These unmodified dependencies contain code covered by the Mozilla Public License 2.0. Download their exact source archives below. Each .crate or .tar.gz file is a gzip-compressed tar archive containing the source, including MPL-covered files. The full MPL license accompanies each dependency's notices. Covered files remain under MPL-2.0; other files retain their stated licenses.</p><ul>${mpl.map((pkg) => `<li><a download href="${href(pkg.sourceArchive)}">${escapeHtml(pkg.name)} ${escapeHtml(pkg.version)} source</a> (${escapeHtml(pkg.selectedLicense)})</li>`).join("")}</ul>` : ""}
+${mpl.length ? `<h2>MPL source downloads</h2><p>These unmodified dependencies contain code covered by the Mozilla Public License 2.0. Download their exact source archives below. Each .crate or .tar.gz file is a gzip-compressed tar archive containing the source, including MPL-covered files. Large archives have numbered parts and reconstruction instructions. The full MPL license accompanies each dependency's notices. Covered files remain under MPL-2.0; other files retain their stated licenses.</p><ul>${mpl.map(sourceDownload).join("")}</ul>` : ""}
 ${packages.some((pkg) => pkg.selectedLicense.includes("IJG")) ? "<p>This software is based in part on the work of the Independent JPEG Group.</p>" : ""}
 <h2>Application and asset notices</h2><ul>${renderNotices(upstreamFiles)}</ul>
-<h2>Dependency notices</h2><p>The list follows this editor's ${target} dependency graph. <a href="manifest.json">Download the dependency inventory</a>.</p>
+<h2>Dependency notices</h2><p>Open a dependency to read its license, attribution, and source information. Each notice link opens the complete packaged text.</p><p>The list follows this editor's ${target} dependency graph. <a href="manifest.json">Download the dependency inventory</a>.</p>
 ${packages
 	.map(
 		(pkg) =>
-			`<details><summary>${escapeHtml(pkg.name)} ${escapeHtml(pkg.version)} · ${escapeHtml(pkg.selectedLicense)}</summary><p>Declared license: ${escapeHtml(pkg.license)}</p>${pkg.obligations ? `<p>${escapeHtml(pkg.obligations)}</p>` : ""}<ul>${renderNotices(pkg.notices)}</ul>${pkg.notices
-				.filter((path) => !upstreamFiles.includes(path))
-				.map(
-					(path) =>
-						`<details><summary>${escapeHtml(basename(path))}</summary><pre>${escapeHtml(readFileSync(join(licenses, path), "utf8"))}</pre></details>`,
-				)
-				.join("")}</details>`,
+			`<details><summary>${escapeHtml(pkg.name)} ${escapeHtml(pkg.version)} · ${escapeHtml(pkg.selectedLicense)}</summary><p>Declared license: ${escapeHtml(pkg.license)}</p><p>Source: <code>${escapeHtml(pkg.source)}</code>${pkg.modified ? ". Locally modified." : ""}</p>${pkg.obligations ? `<p>${escapeHtml(pkg.obligations)}</p>` : ""}<ul>${renderNotices(pkg.notices)}</ul></details>`,
 	)
 	.join("\n")}
-</body></html>\n`,
-	);
-	console.log(
-		`${pin.label || "Flows Word"}: packaged ${packages.length} dependency notices and ${mpl.length} MPL source archives.`,
-	);
-	return manifest;
+</body></html>\n`;
 }
 
 export function selectNoticeOverride(overrides, key, revision) {

@@ -11,6 +11,7 @@
 //! - `open_url` safely retrieves bounded text from a public web page.
 //! - `archive_lookup` locates historical captures through a fixed Internet Archive endpoint.
 //! - `_memory_store` / `_memory_search` run against the core `AssistantMemory`.
+//! - `ui_patterns` returns one static `a2ui` layout recipe; it needs no host, network or grant.
 
 use flow_like_types::data_classification::DataClassification;
 use rig::completion::ToolDefinition;
@@ -23,6 +24,62 @@ pub const ARCHIVE_LOOKUP_TOOL: &str = "archive_lookup";
 pub const HTTP_REQUEST_TOOL: &str = "http_request";
 pub const MEMORY_STORE_TOOL: &str = "_memory_store";
 pub const MEMORY_SEARCH_TOOL: &str = "_memory_search";
+pub use crate::a2ui::authoring::CHAT_UI_PATTERNS_TOOL as UI_PATTERNS_TOOL;
+/// The recipe `ui_patterns` returns for `args`, or the error naming the valid patterns.
+pub fn ui_patterns_recipe(args: &Value) -> Result<&'static str, String> {
+    let names = || {
+        crate::a2ui::authoring::CHAT_UI_PATTERNS
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let pattern = args
+        .get("pattern")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .ok_or_else(|| format!("ui_patterns requires a pattern string: one of {}", names()))?;
+    crate::a2ui::authoring::chat_ui_pattern(pattern).ok_or_else(|| {
+        format!(
+            "Unknown ui_patterns pattern '{pattern}'. Valid patterns: {}",
+            names()
+        )
+    })
+}
+
+/// [`ui_patterns_recipe`] as the tool result string every host returns.
+pub fn run_ui_patterns(args: &Value) -> String {
+    match ui_patterns_recipe(args) {
+        Ok(recipe) => recipe.to_string(),
+        Err(error) => {
+            json!({ "status": "error", "tool": UI_PATTERNS_TOOL, "error": error }).to_string()
+        }
+    }
+}
+
+pub fn ui_patterns_tool_spec() -> PlatformToolSpec {
+    PlatformToolSpec {
+        name: UI_PATTERNS_TOOL,
+        description: "Returns the layout recipe and an example for one kind of `a2ui` reply. Load it before the first fence of that kind in a conversation.",
+        schema: || {
+            let names: Vec<&str> = crate::a2ui::authoring::CHAT_UI_PATTERNS
+                .iter()
+                .map(|(name, _)| *name)
+                .collect();
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "pattern": { "type": "string", "enum": names, "description": "The kind of reply to build." }
+                },
+                "required": ["pattern"]
+            })
+        },
+        approval: ToolApprovalSpec::None,
+        timeout_secs: 10,
+    }
+}
+
 /// Public-web research directed by the calling assistant. Tool-driven backends delegate it to
 /// the nested `Research` scope; the rig/Bits loop runs an equivalent researcher locally.
 pub const RESEARCH_AGENT_TOOL: &str = "research_agent";
@@ -1860,6 +1917,7 @@ Prefer this over `fork_app` when the existing app already does what the user wan
     // interface discovery/validation; board-scoped agents use `execute_event` from the runtime set.
     specs.push(super::app_build_tool_spec::app_build_tool_spec());
     specs.push(http_request_tool_spec());
+    specs.push(ui_patterns_tool_spec());
     specs.extend(global_runtime_verification_tool_specs());
 
     if memory_enabled {
@@ -4425,6 +4483,36 @@ mod tests {
     }
 
     #[test]
+    fn ui_patterns_schema_lists_exactly_the_pattern_names_and_dispatch_returns_recipes() {
+        use crate::a2ui::authoring::CHAT_UI_PATTERNS;
+
+        let spec = find_global_tool_spec(UI_PATTERNS_TOOL).expect("ui_patterns global spec");
+        assert_eq!(spec.approval.effect(), ToolEffect::ReadOnly);
+        let schema = (spec.schema)();
+        let names: Vec<&str> = CHAT_UI_PATTERNS.iter().map(|(name, _)| *name).collect();
+        assert_eq!(schema["properties"]["pattern"]["enum"], json!(names));
+        assert_eq!(schema["required"], json!(["pattern"]));
+        assert_eq!(schema["properties"].as_object().unwrap().len(), 1);
+        assert_eq!(schema["additionalProperties"], json!(false));
+
+        for (name, recipe) in CHAT_UI_PATTERNS {
+            assert_eq!(run_ui_patterns(&json!({ "pattern": name })), *recipe);
+        }
+        for bad in [
+            json!({ "pattern": "nope" }),
+            json!({}),
+            json!({ "pattern": 3 }),
+        ] {
+            let error: Value = serde_json::from_str(&run_ui_patterns(&bad)).unwrap();
+            assert_eq!(error["status"], "error");
+            let message = error["error"].as_str().unwrap();
+            for name in &names {
+                assert!(message.contains(name), "{message}");
+            }
+        }
+    }
+
+    #[test]
     fn global_tool_descriptions_stay_within_model_facing_budget() {
         let specs = global_assistant_tool_specs(false);
         let total: usize = specs.iter().map(|spec| spec.description.len()).sum();
@@ -4438,9 +4526,10 @@ mod tests {
         // Direct HTTP adds a compact description; detailed authorization rules stay in the prompt.
         // Reviewed 2026-11-11: +~0.15 KB on `research_agent`, whose caller now writes the brief
         // and has to be told what the researcher does and does not receive.
+        // Reviewed 2026-11-24: +~0.15 KB for `ui_patterns`, offered wherever the chat UI prompt is.
         assert!(
-            total <= 16_900,
-            "global tool descriptions grew beyond the reviewed 16.9 KB budget: {total} bytes"
+            total <= 17_100,
+            "global tool descriptions grew beyond the reviewed 17.1 KB budget: {total} bytes"
         );
         for spec in specs {
             assert!(
@@ -4475,7 +4564,8 @@ mod tests {
         // Direct HTTP adds about 1.1 KB for method, headers, and body schemas.
         // Reviewed 2026-11-11: +~0.4 KB for `research_agent`'s `question` and `context`, which
         // replaced an empty schema when the caller began to direct the research.
-        for (memory_enabled, budget) in [(false, 37_250usize), (true, 38_000usize)] {
+        // Reviewed 2026-11-24: +~0.35 KB for `ui_patterns` and its pattern-name enum.
+        for (memory_enabled, budget) in [(false, 37_650usize), (true, 38_400usize)] {
             let specs = global_assistant_tool_specs(memory_enabled);
             let total: usize = specs
                 .iter()

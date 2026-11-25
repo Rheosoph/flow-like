@@ -1,7 +1,7 @@
 {
 	"repository": "https://github.com/storytold/cadcraft.git",
-	"revision": "4b4ec8043ec6e378e1cbe238a56b7bab793ae5d0",
-	"version": "0.16.0",
+	"revision": "ddb9a424ef4af8191e668009cf930c9f4a8435f3",
+	"version": "0.21.0",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "cadcraft-web",
 	"label": "Flows CAD",

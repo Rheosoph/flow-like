@@ -67,6 +67,7 @@ pub(crate) struct DeclarationResolutionMetadata {
     pub candidates: Vec<DeclarationResolutionCandidate>,
 }
 
+#[cfg(any(feature = "copilot", test))]
 pub(crate) fn parse_declaration_resolution_metadata(
     rendered: &str,
 ) -> Option<DeclarationResolutionMetadata> {

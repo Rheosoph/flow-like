@@ -1,3 +1,4 @@
+use crate::runtime_config::LoadConfig;
 #[cfg(feature = "aws")]
 use aws_config::SdkConfig;
 use axum::body::Body;
@@ -958,31 +959,7 @@ async fn load_service_secrets(secrets: &SecretStore) -> ServiceSecrets {
     }
 }
 
-const DEVELOPMENT_ENCRYPTION_KEY: &str = "flow-like-dev-encryption-key-DO-NOT-USE-IN-PRODUCTION";
-
-/// The material the token encryption key is derived from. Bot secrets, webhook secrets, OAuth
-/// grants and push tokens are sealed with it, so only a debug build may use the development key,
-/// and only when the secret is absent: a lookup that failed never falls back.
-fn encryption_key_material(
-    lookup: Result<String, SecretError>,
-    allow_development_key: bool,
-) -> Result<String, String> {
-    match lookup {
-        Ok(material) if !material.trim().is_empty() => Ok(material),
-        Ok(_) => Err(
-            "SINK_TOKEN_ENCRYPTION_KEY is empty; the API does not start without this key".into(),
-        ),
-        Err(error) if allow_development_key && error.is_not_found() => {
-            tracing::warn!(
-                "SINK_TOKEN_ENCRYPTION_KEY not set - this debug build uses the insecure development key"
-            );
-            Ok(DEVELOPMENT_ENCRYPTION_KEY.to_string())
-        }
-        Err(error) => Err(format!(
-            "SINK_TOKEN_ENCRYPTION_KEY could not be loaded ({error}); the API does not start without this key"
-        )),
-    }
-}
+use flow_like_audit::secret_crypto::encryption_key_material;
 
 /// Installs the process-wide backend JWT and audit entry keys; returns `AUDIT_KID`.
 async fn install_signing_keys(secrets: &SecretStore, platform_config: &Hub) -> Option<String> {
@@ -2714,7 +2691,7 @@ mod tests {
 
     #[test]
     fn the_encryption_key_never_falls_back_after_a_failed_lookup() {
-        use super::{DEVELOPMENT_ENCRYPTION_KEY, encryption_key_material};
+        use flow_like_audit::secret_crypto::{DEVELOPMENT_ENCRYPTION_KEY, encryption_key_material};
         use flow_like_secrets::{SecretError, SecretProviderKind};
 
         let throttled = || {

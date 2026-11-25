@@ -2,7 +2,6 @@
 # ============================================================
 # Stage 1: Builder
 # ============================================================
-# Links the API crate like the Lambda API, so it needs the same build packages.
 FROM --platform=linux/arm64 public.ecr.aws/amazonlinux/amazonlinux:2023 AS builder
 COPY rust-toolchain.toml /rust-toolchain.toml
 
@@ -14,15 +13,9 @@ RUN yum update -y && \
         clang \
         git \
         lld \
-        glib2-devel \
-        gtk3-devel \
         openssl-devel \
         pkgconf-pkg-config \
-        unzip \
         xz && \
-    curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-linux-aarch_64.zip && \
-    unzip protoc-25.3-linux-aarch_64.zip -d /usr/local && \
-    rm protoc-25.3-linux-aarch_64.zip && \
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none && \
     /root/.cargo/bin/rustup toolchain install && \
     yum remove -y xz && \

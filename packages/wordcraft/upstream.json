@@ -1,6 +1,6 @@
 {
 	"repository": "https://github.com/storytold/wordcraft.git",
-	"revision": "5cd53f184aab11def13b7fced18727159b9bc96a",
-	"version": "0.14.0",
+	"revision": "4d7100a7f8ad39d4ccdb22311fa89db8e0ccfc6a",
+	"version": "0.18.1",
 	"wasmBindgen": "0.2.129"
 }

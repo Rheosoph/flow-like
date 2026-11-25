@@ -7,7 +7,7 @@ description = "Flow-Like Azure API Service"
 [dependencies]
 flow-like-api = { workspace = true, features = ["azure", "secrets-azure", "cosmos", "storage-queue", "redis", "acs-email", "smtp", "channel-azure"] }
 flow-like-secrets.workspace = true
-flow-like-azure-data.workspace = true
+flow-like-azure-data = { workspace = true, features = ["postgres"] }
 flow-like-storage.workspace = true
 # Match the executor catalog: no ONNX or desktop automation nodes.
 flow-like-catalog = { workspace = true, features = ["remote-metadata"] }

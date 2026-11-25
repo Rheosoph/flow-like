@@ -23,6 +23,14 @@ const variantMap: Record<
 	outline: "outline",
 };
 
+const toneClasses: Record<string, string> = {
+	neutral: "border-unknown-line bg-unknown-bg text-unknown",
+	info: "border-info-line bg-info-bg text-info",
+	success: "border-good-line bg-good-bg text-good",
+	warning: "border-warning-line bg-warning-bg text-warning",
+	danger: "border-critical-line bg-critical-bg text-critical",
+};
+
 export function A2UIBadge({
 	elementRef,
 	component,
@@ -31,12 +39,15 @@ export function A2UIBadge({
 	const content = useResolved<string>(component.content);
 	const variantValue = useResolved<string>(component.variant);
 	const variant = variantMap[variantValue ?? "default"] ?? "default";
+	const tone = useResolved<string>(component.tone);
+	const toneClass = tone ? toneClasses[tone] : undefined;
 
 	return (
 		<Badge
 			ref={elementRef}
-			variant={variant}
-			className={cn(resolveStyle(style))}
+			variant={toneClass ? "outline" : variant}
+			data-tone={toneClass ? tone : undefined}
+			className={cn(toneClass, resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>
 			{content}

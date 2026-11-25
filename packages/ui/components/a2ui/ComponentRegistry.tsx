@@ -43,6 +43,7 @@ import { A2UIOntologyGraph } from "./display/OntologyGraph";
 import { A2UIProgress } from "./display/Progress";
 import { A2UISkeleton } from "./display/Skeleton";
 import { A2UISpinner } from "./display/Spinner";
+import { A2UIStat } from "./display/Stat";
 import { A2UITable, A2UITableCell, A2UITableRow } from "./display/Table";
 import { A2UIText } from "./display/Text";
 import { A2UIUserProfile } from "./display/UserProfile";
@@ -150,6 +151,7 @@ const builtInRenderers = {
 	divider: A2UIDivider as ComponentRenderer,
 	badge: A2UIBadge as ComponentRenderer,
 	avatar: A2UIAvatar as ComponentRenderer,
+	stat: A2UIStat as ComponentRenderer,
 	userProfile: A2UIUserProfile as ComponentRenderer,
 	progress: A2UIProgress as ComponentRenderer,
 	spinner: A2UISpinner as ComponentRenderer,

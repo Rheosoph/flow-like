@@ -83,7 +83,8 @@ export const COMPONENT_PROPS = {
 	lottie: ["src", "autoplay", "loop", "speed", "width", "height"],
 	markdown: ["content", "allowHtml"],
 	divider: ["orientation", "thickness", "color"],
-	badge: ["content", "variant", "color"],
+	badge: ["content", "variant", "tone", "color"],
+	stat: ["label", "value", "change", "trend", "caption", "icon"],
 	avatar: ["src", "fallback", "size"],
 	userProfile: [
 		"value",
@@ -319,6 +320,9 @@ export const COMPONENT_PROPS = {
 		"padding",
 		"headerImage",
 		"headerIcon",
+		"headerImageAspect",
+		"density",
+		"href",
 	],
 	modal: [
 		"open",

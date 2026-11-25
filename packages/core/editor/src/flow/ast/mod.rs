@@ -51,13 +51,15 @@ pub use reconcile::{
     reconcile_text_with_catalog_scoped, reconcile_with_catalog, reconcile_with_catalog_mode,
     reconcile_with_catalog_scoped,
 };
-pub(crate) use reconcile::{
-    catalog_names, flowscript_analysis_ast, parse_pin_occurrence_ref, pin_occurrence_ref,
-};
+pub(crate) use reconcile::{catalog_names, pin_occurrence_ref};
+#[cfg(feature = "copilot")]
 pub(crate) use reconcile::{
     dynamic_placeholder_config_pin, synthesize_dynamic_input_pin_from_template,
 };
+#[cfg(feature = "copilot")]
+pub(crate) use reconcile::{flowscript_analysis_ast, parse_pin_occurrence_ref};
 pub use signatures::{node_name_entry, node_names, node_to_signature, node_to_signature_in};
+#[cfg(feature = "copilot")]
 pub(crate) use template::template_format_call;
 
 use crate::flow::board::Board;

@@ -57,7 +57,7 @@ async fn start_app() -> Result<(), String> {
             },
             Box::new(|cc| {
                 CONTEXT.with(|ctx| *ctx.borrow_mut() = Some(cc.egui_ctx.clone()));
-                let app = create_app(cc);
+                let app = create_app(cc)?;
                 Ok(Box::new(Host {
                     app,
                     opened: false,
@@ -83,6 +83,9 @@ struct Host {
 }
 impl Host {
     fn receive(&mut self, message: JsValue) -> Result<(), String> {
+        let ctx = CONTEXT
+            .with(|context| context.borrow().clone())
+            .ok_or("The editor is not ready.")?;
         match field(&message, "type").as_string().as_deref() {
             Some("mcp-request") => {
                 let request_id = field(&message, "requestId")
@@ -95,7 +98,7 @@ impl Host {
                 let request: serde_json::Value =
                     serde_json::from_str(&text).map_err(|e| e.to_string())?;
                 let response = if self.opened {
-                    self.app.host_mcp(&request, self.read_only)
+                    self.app.host_mcp(&ctx, &request, self.read_only)
                 } else {
                     json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32000,"message":"Open a PDF first."}})
                 };
@@ -141,7 +144,7 @@ impl Host {
                 if bytes.length() == 0 || bytes.length() as usize > MAX_BYTES {
                     return Err("Documents must be between 1 byte and 200 MiB.".into());
                 }
-                self.app.open_bytes(&name, None, bytes.to_vec())?;
+                self.app.open_bytes(&ctx, &name, None, bytes.to_vec())?;
                 self.name = name;
                 self.read_only = field(&message, "readOnly").as_bool().unwrap_or(true);
                 self.opened = true;
@@ -174,7 +177,7 @@ impl Host {
                 if format != "pdf" {
                     return Err("Only PDF export is supported.".into());
                 }
-                let (revision, bytes) = self.app.host_export()?;
+                let (revision, bytes) = self.app.host_export(&ctx)?;
                 if bytes.is_empty() || bytes.len() > MAX_BYTES {
                     return Err("The saved document exceeds 200 MiB.".into());
                 }
@@ -194,7 +197,7 @@ impl Host {
                         && self.revision() as f64 == revision
                     {
                         if let Some(bytes) = self.exported_bytes.clone() {
-                            if self.app.host_saved(revision as u64, bytes)? {
+                            if self.app.host_saved(&ctx, revision as u64, bytes)? {
                                 self.last_exported = None;
                                 self.exported_bytes = None;
                             }
@@ -268,13 +271,36 @@ impl eframe::App for Host {
     }
 }
 
-fn create_app(_cc: &eframe::CreationContext<'_>) -> pdfcraft_ui_egui::PdfCraftApp {
-    let mut app = pdfcraft_ui_egui::PdfCraftApp::new();
+fn create_app(cc: &eframe::CreationContext<'_>) -> Result<pdfcraft_ui_egui::PdfCraftApp, String> {
+    use std::sync::Arc;
+    let ctx = cc.egui_ctx.clone();
+    let system = craft::ui::runtime::env::SystemReader::start(move || ctx.request_repaint());
+    let spec = craft::ui::InstallSpec::new(
+        craft::host::target::ShellInfo::default(),
+        Arc::new(craft::window::system::SystemWindows),
+    )
+    .system(system);
+    let lang = pdfcraft_ui_egui::i18n::Lang::from_pref(pdfcraft_ui_egui::i18n::AUTO);
+    craft::ui::shell::embed::install(&cc.egui_ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(lang))
+        .map_err(|error| format!("The PDF runtime could not start: {error}"))?;
+    let ctx = cc.egui_ctx.clone();
+    let wake = craft::host::Wake::new(move || ctx.request_repaint());
+    let (intake, _) = craft::platform::open::FileIntake::new(wake.clone());
+    let files = craft::platform::browser_files::BrowserFiles::new(move || wake.wake()).limits(
+        craft::platform::browser_files::PickLimits {
+            pending_bytes: MAX_BYTES,
+            ..craft::platform::browser_files::PickLimits::DEFAULT
+        },
+    );
+    let framework_host = craft::host::Host::builder(pdfcraft_ui_egui::APP_INFO)
+        .files(Arc::new(files))
+        .build();
+    let mut app = pdfcraft_ui_egui::PdfCraftApp::with_host(
+        Arc::new(framework_host),
+        pdfcraft_ui_egui::AppServices::system(&cc.egui_ctx, intake),
+    );
     app.comment_prefs.author = "Flows PDF User".into();
-    app.host_save = Some(Box::new(|_, _, _| {
-        event("save-request", json!({}));
-        Ok(())
-    }));
+    app.host_save = Some(Box::new(|| event("save-request", json!({}))));
     app.mode = pdfcraft_ui_egui::Mode::Edit;
-    app
+    Ok(app)
 }

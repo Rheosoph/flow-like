@@ -1,7 +1,7 @@
 {
 	"repository": "https://github.com/storytold/pdfcraft.git",
-	"revision": "7d78f3e14474b978be014715e0cc64895d77025a",
-	"version": "0.17.0",
+	"revision": "6e910675c68dd5092e889065cfe8d0274c1b2742",
+	"version": "0.22.0",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "pdfcraft-web",
 	"label": "Flows PDF",

@@ -369,6 +369,8 @@ function getProcessToolLabel(toolName?: string): string {
 			return "Reading execution logs";
 		case "ask_user":
 			return "Asking for input";
+		case "ui_patterns":
+			return "Checking layout guide";
 		default:
 			return toolName.replace(/_/g, " ");
 	}

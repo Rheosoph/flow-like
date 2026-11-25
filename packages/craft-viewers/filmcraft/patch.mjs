@@ -4,18 +4,25 @@ import { prepareRmcpLive } from "../rmcp-live.mjs";
 import prepareBrowserCodecs from "./codec-patch.mjs";
 
 export default function prepare({
+	root,
 	directory,
 	source,
 	original,
 	write,
 	replaceOnce,
 }) {
-	prepareBrowserCodecs({ directory, original, write, replaceOnce });
+	const pinnedSourceOverrides = prepareBrowserCodecs({
+		root,
+		directory,
+		original,
+		write,
+		replaceOnce,
+	});
 	let lib = original("apps/filmcraft-web/src/lib.rs");
 	lib = replaceOnce(
 		lib,
 		"pub mod api;",
-		"mod host;\nmod browser_export;\npub mod api;",
+		"mod flows_host;\nmod browser_export;\npub mod api;",
 		"host module",
 	);
 	lib = replaceOnce(
@@ -26,7 +33,7 @@ export default function prepare({
 	);
 	write("apps/filmcraft-web/src/lib.rs", lib);
 	write(
-		"apps/filmcraft-web/src/host.rs",
+		"apps/filmcraft-web/src/flows_host.rs",
 		readFileSync(join(directory, "host.rs"), "utf8"),
 	);
 	let engine = original("crates/engine/src/lib.rs");
@@ -127,6 +134,7 @@ export default function prepare({
 	prepareRmcpLive({ id: "filmcraft", source, write, original, replaceOnce });
 	return {
 		reconcileLock: true,
+		pinnedSourceOverrides,
 		assets: [
 			{
 				from: "apps/filmcraft-web/web/audio-worklet.js",

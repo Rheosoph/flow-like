@@ -59,6 +59,7 @@ const TOOL_ACTIVITIES: Record<
 	shell_run: ["terminal", "Running a command"],
 	ask_bot: ["tool", "Asking another bot"],
 	context_checkpoint: ["tool", "Saving progress"],
+	ui_patterns: ["tool", "Checking the layout guide"],
 };
 
 function toolKey(name: string): string {

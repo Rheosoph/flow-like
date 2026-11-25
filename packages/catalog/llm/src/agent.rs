@@ -1,5 +1,8 @@
 use crate::embedding::CachedEmbeddingModel;
-use flow_like::{a2ui::authoring::chat_ui_prompt_section, bit::Bit};
+use flow_like::{
+    a2ui::authoring::{chat_ui_prompt_section, chat_ui_prompt_section_with_patterns},
+    bit::Bit,
+};
 use flow_like_model_provider::history::{History, Tool};
 use flow_like_types::JsonSchema;
 use memory::MemoryConfig;
@@ -446,15 +449,24 @@ const MEMORY_PROMPT: &str = "\n\n## Memory\n\n\
     - Store key facts, preferences, and decisions after learning them\n\
     - Don't store trivial or transient information\n";
 
-/// System-prompt section that teaches a model to answer with inline interactive UI: `a2ui`
-/// fences the chat renders as live interfaces whose buttons can send follow-up messages.
-pub fn interactive_ui_instructions() -> String {
+fn interactive_ui_section(reference: String) -> String {
     format!(
         "## Interactive UI in replies\n\n\
          The chat that shows your replies renders Markdown and turns `a2ui` fences into live interfaces.\n\n\
-         {}",
-        chat_ui_prompt_section()
+         {reference}"
     )
+}
+
+/// System-prompt section that teaches a model to answer with inline interactive UI: `a2ui`
+/// fences the chat renders as live interfaces whose buttons can send follow-up messages.
+/// Names no tools, for prompts built by hand.
+pub fn interactive_ui_instructions() -> String {
+    interactive_ui_section(chat_ui_prompt_section())
+}
+
+/// [`interactive_ui_instructions`] for an agent that offers the `ui_patterns` tool.
+pub fn interactive_ui_instructions_with_patterns() -> String {
+    interactive_ui_section(chat_ui_prompt_section_with_patterns())
 }
 
 impl Agent {
@@ -557,7 +569,7 @@ impl Agent {
 
         if self.generative_ui {
             base_prompt.push_str("\n\n");
-            base_prompt.push_str(&interactive_ui_instructions());
+            base_prompt.push_str(&interactive_ui_instructions_with_patterns());
         }
 
         if base_prompt.trim().is_empty() {
@@ -658,7 +670,7 @@ mod tests {
         let prompt = agent.get_system_prompt().unwrap();
 
         assert!(prompt.starts_with("You plan weekly meals.\n\n## Interactive UI in replies"));
-        assert!(prompt.ends_with(&chat_ui_prompt_section()));
+        assert!(prompt.ends_with(&chat_ui_prompt_section_with_patterns()));
         assert!(prompt.contains("```a2ui"));
         assert!(prompt.contains("send_message"));
     }
@@ -670,7 +682,11 @@ mod tests {
 
         let prompt = agent.get_system_prompt().unwrap();
 
-        assert_eq!(prompt.trim_start(), interactive_ui_instructions());
+        assert_eq!(
+            prompt.trim_start(),
+            interactive_ui_instructions_with_patterns()
+        );
+        assert!(!interactive_ui_instructions().contains("ui_patterns"));
     }
 
     #[test]

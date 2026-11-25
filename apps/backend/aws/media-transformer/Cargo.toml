@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 aws_lambda_events = { version = "0.16.1", default-features = false, features = ["s3", "sqs"] }
-image.workspace = true
+# Decode accepted inputs; WebP output is encoded by libwebp.
+image = { version = "0.25.6", default-features = false, features = ["jpeg", "png", "gif", "bmp", "tiff", "ico"] }
 
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true

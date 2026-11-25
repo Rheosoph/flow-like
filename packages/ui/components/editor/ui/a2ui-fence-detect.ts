@@ -19,6 +19,7 @@ export const CHAT_A2UI_COMPONENT_TYPES: ReadonlySet<string> = new Set([
 	"badge",
 	"avatar",
 	"progress",
+	"stat",
 	"divider",
 	"skeleton",
 	"card",

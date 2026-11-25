@@ -4,12 +4,17 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
+	readdirSync,
 	rmSync,
+	statSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { Worker } from "node:worker_threads";
 import {
 	rustLibraryEnvironment,
 	wasmCompilerEnvironment,
@@ -158,6 +163,10 @@ test(
 			platform: "darwin",
 			probe: (_command, args) => (args[1] === "sysroot" ? sysroot : targetLib),
 		});
+		assert.equal(
+			selected.CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER,
+			join(temporary, "generated tools", "rust-lld"),
+		);
 		const args = [
 			"-flavor",
 			"wasm",
@@ -176,6 +185,116 @@ test(
 			args,
 			fallback: `${join(sysroot, "lib")}:${fallback}`,
 		});
+	},
+);
+
+test("shared linker launchers keep their file and separate changes to paths and libraries", (t) => {
+	const directory = mkdtempSync(join(tmpdir(), "device-crypto-shared-linker-"));
+	t.after(() => rmSync(directory, { recursive: true, force: true }));
+	const select = (target = "host", fallback = "/custom/lib") =>
+		wasmLinkerEnvironment({
+			directory,
+			contentAddressed: true,
+			env: { DYLD_FALLBACK_LIBRARY_PATH: fallback },
+			platform: "darwin",
+			exists: () => true,
+			probe: (_command, args) =>
+				args[1] === "sysroot"
+					? "/toolchains/current"
+					: `/toolchains/current/lib/rustlib/${target}/lib`,
+		}).CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER;
+	const first = select();
+	const contents = readFileSync(first, "utf8");
+	utimesSync(first, 1, 1);
+	const original = statSync(first);
+	assert.equal(select(), first);
+	assert.equal(statSync(first).mtimeMs, original.mtimeMs);
+	assert.equal(statSync(first).ino, original.ino);
+	const otherLinker = select("other-host");
+	const otherLibraries = select("host", "/other/lib");
+	assert.equal(new Set([first, otherLinker, otherLibraries]).size, 3);
+	assert.equal(readFileSync(first, "utf8"), contents);
+	assert.notEqual(readFileSync(otherLinker, "utf8"), contents);
+	assert.notEqual(readFileSync(otherLibraries, "utf8"), contents);
+	assert.deepEqual(readdirSync(dirname(first)), ["rust-lld"]);
+	writeFileSync(first, "changed");
+	assert.throws(select, /shared WebAssembly linker launcher was modified/);
+	assert.equal(readFileSync(first, "utf8"), "changed");
+});
+
+test(
+	"parallel builders publish one complete shared linker launcher",
+	{ timeout: 10000 },
+	async (t) => {
+		const directory = mkdtempSync(
+			join(tmpdir(), "device-crypto-shared-linker-"),
+		);
+		t.after(() => rmSync(directory, { recursive: true, force: true }));
+		const gate = new SharedArrayBuffer(4);
+		const workers = [];
+		const ready = [];
+		const finished = [];
+		for (let index = 0; index < 6; index++) {
+			const worker = new Worker(
+				`
+			const { parentPort, workerData } = require("node:worker_threads");
+			const assert = require("node:assert/strict");
+			const { readFileSync } = require("node:fs");
+			const { dirname, join } = require("node:path");
+			import(workerData.module).then(({ wasmLinkerEnvironment }) => {
+				parentPort.postMessage("ready");
+				Atomics.wait(new Int32Array(workerData.gate), 0, 0);
+				const sysroot = join(workerData.directory, "toolchain");
+				const targetLib = join(sysroot, "lib/rustlib/host/lib");
+				const expected = "#!/bin/sh\\nexport DYLD_FALLBACK_LIBRARY_PATH='" + join(sysroot, "lib") + ":/custom/lib'\\nexec '" + join(dirname(targetLib), "bin/rust-lld") + "' \\"$@\\"\\n";
+				let path;
+				for (let attempt = 0; attempt < 20; attempt++) {
+					path = wasmLinkerEnvironment({
+						directory: workerData.directory,
+						contentAddressed: true,
+						env: { DYLD_FALLBACK_LIBRARY_PATH: "/custom/lib" },
+						platform: "darwin",
+						exists: () => true,
+						probe: (_command, args) => args[1] === "sysroot" ? sysroot : targetLib,
+					}).CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER;
+					assert.equal(readFileSync(path, "utf8"), expected);
+				}
+				parentPort.postMessage({ path });
+			});
+			`,
+				{
+					eval: true,
+					workerData: {
+						directory,
+						gate,
+						module: new URL("../build-web.mjs", import.meta.url).href,
+					},
+				},
+			);
+			workers.push(worker);
+			ready.push(
+				new Promise((resolve, reject) => {
+					worker.once("error", reject);
+					worker.on("message", (message) => message === "ready" && resolve());
+				}),
+			);
+			finished.push(
+				new Promise((resolve, reject) => {
+					worker.once("error", reject);
+					worker.on(
+						"message",
+						(message) => message.path && resolve(message.path),
+					);
+				}),
+			);
+		}
+		t.after(() => Promise.all(workers.map((worker) => worker.terminate())));
+		await Promise.all(ready);
+		Atomics.store(new Int32Array(gate), 0, 1);
+		Atomics.notify(new Int32Array(gate), 0);
+		const paths = await Promise.all(finished);
+		assert.equal(new Set(paths).size, 1);
+		assert.deepEqual(readdirSync(dirname(paths[0])), ["rust-lld"]);
 	},
 );
 

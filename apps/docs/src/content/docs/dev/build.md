@@ -180,21 +180,28 @@ CLI. This is a substantial build. Later runs reuse verified assets from
 `target/wordcraft` and `target/craft-viewers`. Generated files in each app's
 `public/wordcraft` and `public/craft` directories are excluded from Git.
 
-The suite builds up to four editors in parallel, allowing one build per four
-available CPU threads and 4 GiB of memory, with a minimum of one build. Each build
-uses up to four Cargo jobs by default. Set `CRAFT_BUILD_CONCURRENCY` to choose
-the number of simultaneous editors, or `CARGO_BUILD_JOBS` to override the jobs
-per editor. For example, `CRAFT_BUILD_CONCURRENCY=2 bun run build:craft-viewers`
-builds two at a time; use `1` for sequential builds. These settings also apply
-to web and desktop builds and background development builds. Automatic
-concurrency accounts for a positive `CARGO_BUILD_JOBS` override; a relative
-negative job count keeps automatic concurrency at one.
+All editors, including WordCraft, share `target/craft-viewers/cargo` by default.
+Cargo serializes compilation in this directory and reuses dependencies when
+their versions, features and compiler settings match. Preparation and packaging
+can overlap. Each editor produces its own WASM package. The suite also shares
+versioned `wasm-bindgen` installations.
 
-Concurrent editors share a versioned `wasm-bindgen` installation and use separate
-Cargo build directories so Cargo's build lock does not serialize them. The first
-parallel run recompiles dependencies and uses more disk space than the former
-shared directory. Sequential suites reuse that shared directory. A failed editor
-stops the remaining queue; active builds finish before the suite reports failure.
+The suite runs up to four editor workers, allowing one per four available CPU
+threads and 4 GiB of memory, with a minimum of one worker. Each Cargo invocation
+uses up to four jobs by default. Set `CRAFT_BUILD_CONCURRENCY` to choose the
+worker count, or `CARGO_BUILD_JOBS` to override Cargo jobs. Use
+`CRAFT_BUILD_CONCURRENCY=1` to run every stage sequentially. These settings also
+apply to web and desktop builds and background development builds. Automatic
+concurrency accounts for a positive `CARGO_BUILD_JOBS` override; a relative
+negative job count keeps automatic concurrency at one. A failed editor stops
+the remaining queue; active builds finish before the suite reports failure.
+
+Use `--report DIR` to record suite and editor timings. Add `--rebuild` to run
+the build steps even when packaged assets are cached, and `--no-stage` to leave
+the apps' public assets unchanged. Compile timing includes Cargo lock and queue
+waits. `--cache auto` restores the previous cache selection for comparison.
+Shared mode is the default. `CRAFT_BUILD_CACHE` sets an alternative default, and
+`--cache` overrides it.
 
 The browser loads only the selected viewer. PDFs and common media files use
 native previews and load their editing runtime after **Edit**. The
@@ -217,10 +224,15 @@ with the exact commit, workspace version and `wasm-bindgen` version from the
 upstream `Cargo.lock`. Review changes to its readers and writers before changing
 the format registry in `packages/ui/components/storage/craft-viewers.ts`.
 
+SolidCraft remains at 0.30.0. Its
+[0.48.0 interface licence](https://github.com/storytold/solidcraft/blob/f957c05f3363f134ace935db359d775ff8f9c3ec/LICENSE-BRAND)
+requires written permission to embed the UI kit, look and theme in another
+product. Resolve that requirement before upgrading its pin.
+
 ```bash
-# Build the complete suite, or just one runtime.
+# Build the complete suite, or selected runtimes.
 bun run build:craft-viewers
-node packages/craft-viewers/build-runtime.mjs gridcraft
+bun run build:craft-viewers wordcraft gridcraft
 
 # Validate storage controls, routing and the iframe protocol.
 bun run test:craft-viewers
@@ -270,22 +282,31 @@ The media adapters also check the selected WASM dependency graph with
 `packages/craft-viewers/codec-policy.mjs`. Keep the software codec exclusion when
 upgrading. If an adapter needs Cargo to reconcile removed dependency edges, its
 `reconcileLock` option permits only package versions and checksums already in the
-upstream pin's lockfile.
+upstream pin's lockfile. A narrow allowlist also permits the reviewed
+`craft-audio` and `craft-aaf` PCM adapters to replace their exact Git revisions
+with local copies. The build checks their versions, original revisions and paths.
+
+Word, PDF, Photo and Vector use a reviewed `inventory` 0.3.25 patch so beta Rust
+compilers retain their UI command registrations. This override checks the
+original registry checksum and pinned source revision. The browser initializes
+the registrations before starting the editor.
 
 Each runtime includes a license page at `/craft/<runtime>/licenses/index.html`
 or `/wordcraft/licenses/index.html`, available from its **About** button. Keep
 the complete `licenses` directory with the runtime in both web and desktop
 distributions. It contains dependency and asset notices, license texts, and
-exact MPL source archives as `.crate` files (gzip-compressed tar archives).
-Desktop source links use the native Save dialog to copy these bundled archives
-to a user-selected folder. They work without fetching source from an upstream site.
+exact MPL source archives as `.crate` or `.tar.gz` files. Archives larger than
+25 MiB are split into 8 MiB parts. The license page links every part and provides
+commands to reconstruct and verify the complete archive. Desktop source links
+use the native Save dialog to copy an archive or part to a user-selected folder.
+They work without fetching source from an upstream site.
 MPL-covered files retain those terms; other files keep their stated licenses.
 Flow-Like's license does not restrict rights granted by third-party licenses.
 
 Normal builds run `cargo tree --offline --locked --target wasm32-unknown-unknown`
 with normal dependency edges and the runtime's build feature flags. The generated
 `licenses/manifest.json` records the resolved dependencies, selected licenses,
-source locations and registry source checksums. Reviewed SPDX license choices
+source locations, and archive and part checksums. Reviewed SPDX license choices
 live in `packages/craft-viewers/licenses.mjs`. When a package omits notices,
 `packages/craft-viewers/license-data/overrides.json` supplies them for an exact
 `package@version`, with pinned upstream sources. It also records obligations

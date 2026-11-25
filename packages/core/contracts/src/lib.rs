@@ -10,3 +10,6 @@ pub use copilot::{
     AgentType, ChatImage, ChatMessage, ChatRole, FlowIrCommitToken, PlanStep, PlanStepStatus,
     RunContext, StreamEvent, TemplateInfo,
 };
+
+pub mod audit;
+pub mod execution;

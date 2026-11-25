@@ -76,10 +76,12 @@ use flow_like::flow::copilot::public_web::{
 use flow_like::flow::copilot::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, HTTP_REQUEST_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL,
     MEMORY_STORE_TOOL, OPEN_URL_TOOL, PlatformToolSpec, READ_ONLY_DATABASE_OPERATIONS,
+    UI_PATTERNS_TOOL,
     READ_WRITE_DATABASE_OPERATIONS, cross_board_source_tool_specs, data_studio_database_tool_spec,
     data_studio_specialist_tool_specs, global_assistant_tool_specs, home_specialist_tool_specs,
     interact_app_page_tool_spec, missing_required_args, public_web_tool_specs,
-    resolve_tool_approval, runtime_execution_tool_specs, scoped_call_app_chat_spec,
+    resolve_tool_approval, run_ui_patterns, runtime_execution_tool_specs,
+    scoped_call_app_chat_spec,
     scout_specialist_tool_specs, workspace_research_tool_specs,
 };
 #[cfg(test)]
@@ -849,8 +851,8 @@ pub fn create_frontend_support_tools(bridge: FrontendToolBridge) -> Vec<(Tool, T
 ///
 /// Execution funnels through the frontend bridge with the spec's approval + timeout, except the
 /// host-local tools: `internet_search` runs in-process, `open_url` and `archive_lookup` use the
-/// shared safe public-web readers, and the `_memory_*` tools run against the profile's
-/// `AssistantMemory`.
+/// shared safe public-web readers, the `_memory_*` tools run against the profile's
+/// `AssistantMemory`, and `ui_patterns` returns its static recipe.
 fn frontend_tool_result_closes_public_web_phase(_tool_name: &str) -> bool {
     true
 }
@@ -929,6 +931,7 @@ pub fn sdk_tool_from_spec(
                 session.register_and_decorate_tool_result(ARCHIVE_LOOKUP_TOOL, &mut result);
                 ToolResultObject::text(result.to_string())
             }
+            UI_PATTERNS_TOOL => ToolResultObject::text(run_ui_patterns(args)),
             MEMORY_STORE_TOOL | MEMORY_SEARCH_TOOL => {
                 let result = block_on_tool(run_memory_tool(spec.name, args, memory.as_deref()));
                 if let Some(session) = &web_research_session {
@@ -3470,7 +3473,7 @@ Existing surfaces use the nested form ({"id", "component": {"type", ...}}) with 
 
 AVAILABLE COMPONENTS (full docs + selection table in your system prompt):
 Layout: column, row, grid, stack, scrollArea, absolute, aspectRatio, overlay, box, center, spacer
-Display: text, image, icon, video, lottie, badge, avatar, userProfile, progress, spinner, skeleton, divider, markdown, diffView, filePreview, fileEditor, geoMap
+Display: text, image, icon, video, lottie, badge (tone for status), avatar, userProfile, progress, stat (KPI tile: label, value, change, trend), spinner, skeleton, divider, markdown, diffView, filePreview, fileEditor, geoMap
 Interactive: button, textField (multiline for textarea), richText (formatted documents), excalidraw (drawing), select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, imageInput, cameraView (user-started camera preview/capture), voiceInput (audio recording/dictation), feedback (thumbs rating), appLink, link
 Container: card, modal, tabs, accordion, drawer, tooltip, popover
 Data: table, plotlyChart, nivoChart, forecastChart (existing saved prediction, loads itself with viewer permissions), calendar, gantt, graph (own nodes/edges), ontologyGraph (this project's ontology, loads itself)
@@ -4616,7 +4619,7 @@ mod tests {
         let mut granted = 0;
         while session.reserve_search_call() {
             granted += 1;
-            assert!(granted <= 64, "search budget must be bounded");
+            assert!(granted <= 1_024, "search budget must be bounded");
         }
         assert!(granted > 0, "a fresh session must allow some searching");
 

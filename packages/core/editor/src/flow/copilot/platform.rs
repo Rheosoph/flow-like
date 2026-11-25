@@ -59,12 +59,12 @@ use super::stream::{
 use super::subtasks::{REQUEST_ID_ARGUMENT, SPAWN_SUBTASKS_TOOL};
 use super::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, HTTP_REQUEST_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL,
-    MEMORY_STORE_TOOL, OPEN_URL_TOOL, PlatformToolSpec, RESEARCH_AGENT_TOOL,
+    MEMORY_STORE_TOOL, OPEN_URL_TOOL, PlatformToolSpec, RESEARCH_AGENT_TOOL, UI_PATTERNS_TOOL,
     data_studio_specialist_tool_specs, find_data_studio_tool_spec, find_global_tool_spec,
     find_home_tool_spec, find_scout_tool_spec, flowpilot_file_tool_specs,
     global_assistant_tool_specs, home_specialist_tool_specs, home_specialist_tool_specs_for_access,
-    public_web_tool_specs, research_agent_prompt, resolve_tool_effect, scout_specialist_tool_specs,
-    spec_arg_str,
+    public_web_tool_specs, research_agent_prompt, resolve_tool_effect, run_ui_patterns,
+    scout_specialist_tool_specs, spec_arg_str,
 };
 use super::turn_label::{TurnLabel, brings_web_content};
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
@@ -3733,7 +3733,7 @@ fn platform_tool_enters_private_context(name: &str) -> bool {
     !is_public_web_tool(name)
         && !matches!(
             name,
-            "list_apps" | RESEARCH_AGENT_TOOL | UPDATE_WORK_PLAN_TOOL
+            "list_apps" | RESEARCH_AGENT_TOOL | UPDATE_WORK_PLAN_TOOL | UI_PATTERNS_TOOL
         )
 }
 
@@ -3829,6 +3829,7 @@ async fn execute_platform_tool(
             web_research_session.register_and_decorate_tool_result(name, &mut result);
             serde_json::to_string(&result).unwrap_or_else(|_| "{\"status\":\"error\"}".to_string())
         }
+        UI_PATTERNS_TOOL => run_ui_patterns(&arguments),
         _ => bridge.call(name, arguments).await,
     }
 }

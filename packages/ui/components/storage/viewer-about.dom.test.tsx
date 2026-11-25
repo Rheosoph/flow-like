@@ -26,6 +26,29 @@ const manifest = {
 		},
 	],
 };
+const gitPackage = {
+	selectedLicense: "MIT AND MPL-2.0",
+	sourceArchive: "sources/krilla-0.8.2-0123456789ab.tar.gz",
+	sourceArchiveByteLength: bytes.byteLength,
+	sourceArchiveSha256: createHash("sha256").update(bytes).digest("hex"),
+};
+const sourcePart = {
+	path: `${gitPackage.sourceArchive}.part001`,
+	byteLength: bytes.byteLength,
+	sha256: gitPackage.sourceArchiveSha256,
+};
+const splitPackage = {
+	...gitPackage,
+	sourceArchiveByteLength: bytes.byteLength * 2,
+	sourceArchiveSha256: createHash("sha256")
+		.update(bytes)
+		.update(bytes)
+		.digest("hex"),
+	sourceArchiveParts: [
+		sourcePart,
+		{ ...sourcePart, path: `${gitPackage.sourceArchive}.part002` },
+	],
+};
 let root: Root;
 let container: HTMLDivElement;
 let licenseDocument: Document;
@@ -103,6 +126,18 @@ async function settle(check: () => void) {
 	});
 }
 
+function servePackage(pkg: unknown, source = bytes) {
+	fetcher.mockImplementation(async (url: URL) =>
+		url.pathname.endsWith("manifest.json")
+			? Response.json({ packages: [pkg] })
+			: new Response(source),
+	);
+}
+
+function sourceUrl(path: string) {
+	return new URL(path, new URL(index, window.location.href)).href;
+}
+
 describe("editor source downloads", () => {
 	it("uses the native save service for verified same-origin source bytes", async () => {
 		await openAbout();
@@ -136,6 +171,119 @@ describe("editor source downloads", () => {
 				"integrity check",
 			),
 		);
+		expect(native.write).not.toHaveBeenCalled();
+	});
+
+	it("downloads a Git archive using its full source hash and byte length", async () => {
+		servePackage(gitPackage);
+		await openAbout();
+		await clickSource(sourceUrl(gitPackage.sourceArchive));
+		await settle(() => expect(native.write).toHaveBeenCalledOnce());
+		expect(native.write.mock.calls[0][0][0].prefix).toBe(
+			"krilla-0.8.2-0123456789ab.tar.gz",
+		);
+		if (!writtenBlob) throw new Error("No source file was written");
+		expect(new Uint8Array(await writtenBlob.arrayBuffer())).toEqual(bytes);
+	});
+
+	it("uses the new archive checksum ahead of a legacy package checksum", async () => {
+		servePackage({
+			...gitPackage,
+			sourceArchive: manifest.packages[0].sourceArchive,
+			checksum: "0".repeat(64),
+		});
+		await openAbout();
+		await clickSource();
+		await settle(() => expect(native.write).toHaveBeenCalledOnce());
+	});
+
+	it("downloads only the listed archive part using its own hash and size", async () => {
+		servePackage(splitPackage);
+		await openAbout();
+		await clickSource(sourceUrl(sourcePart.path));
+		await settle(() => expect(native.write).toHaveBeenCalledOnce());
+		expect(native.write.mock.calls[0][0][0].prefix).toBe(
+			"krilla-0.8.2-0123456789ab.tar.gz.part001",
+		);
+		expect(fetcher).toHaveBeenCalledTimes(2);
+		if (!writtenBlob) throw new Error("No source file was written");
+		expect(new Uint8Array(await writtenBlob.arrayBuffer())).toEqual(bytes);
+	});
+
+	it("rejects a corrupt archive part before invoking native save", async () => {
+		servePackage(splitPackage, new Uint8Array(bytes.byteLength));
+		await openAbout();
+		await clickSource(sourceUrl(sourcePart.path));
+		await settle(() =>
+			expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+				"integrity check",
+			),
+		);
+		expect(native.write).not.toHaveBeenCalled();
+	});
+
+	it.each(["archive", "part"])(
+		"rejects a %s byte-length mismatch",
+		async (kind) => {
+			servePackage(
+				kind === "archive"
+					? { ...gitPackage, sourceArchiveByteLength: bytes.byteLength + 1 }
+					: {
+							...splitPackage,
+							sourceArchiveParts: [
+								{ ...sourcePart, byteLength: bytes.byteLength + 1 },
+							],
+						},
+			);
+			await openAbout();
+			await clickSource(
+				sourceUrl(
+					kind === "archive" ? gitPackage.sourceArchive : sourcePart.path,
+				),
+			);
+			await settle(() =>
+				expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+					"size check",
+				),
+			);
+			expect(native.write).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([`${gitPackage.sourceArchive}.part003`, gitPackage.sourceArchive])(
+		"rejects an unlisted split source download %s",
+		async (path) => {
+			servePackage(splitPackage);
+			await openAbout();
+			await clickSource(sourceUrl(path));
+			await settle(() =>
+				expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+					"missing from the editor's inventory",
+				),
+			);
+			expect(fetcher).toHaveBeenCalledOnce();
+			expect(native.write).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{ ...splitPackage, selectedLicense: "MIT" },
+		{ ...splitPackage, sourceArchiveSha256: "invalid" },
+		{
+			...splitPackage,
+			sourceArchiveParts: [{ ...sourcePart, byteLength: -1 }],
+		},
+		{ ...splitPackage, sourceArchive: "sources/other.tar.gz" },
+	])("rejects invalid archive part inventory %#", async (pkg) => {
+		servePackage(pkg);
+		await openAbout();
+		await clickSource(sourceUrl(sourcePart.path));
+		await settle(() =>
+			expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+				"missing from the editor's inventory",
+			),
+		);
+		expect(fetcher).toHaveBeenCalledOnce();
 		expect(native.write).not.toHaveBeenCalled();
 	});
 

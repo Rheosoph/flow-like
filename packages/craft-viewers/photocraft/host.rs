@@ -3,7 +3,7 @@ mod live_mcp;
 use std::cell::RefCell;
 
 use photocraft_engine::Session;
-use photocraft_ui_egui::{PhotocraftApp, Services, theme::ThemeKind};
+use photocraft_ui_egui::{PhotocraftApp, Services, theme::AppTheme};
 use serde_json::json;
 use wasm_bindgen::prelude::*;
 
@@ -90,7 +90,7 @@ async fn start_app() -> Result<(), String> {
             options,
             Box::new(|cc| {
                 CONTEXT.with(|ctx| *ctx.borrow_mut() = Some(cc.egui_ctx.clone()));
-                PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+                PhotocraftApp::setup_context(&cc.egui_ctx, AppTheme::pro());
                 let services = Services {
                     host_command: Some(Box::new(host_command)),
                     automation_command: Some(Box::new(|id, params| {
@@ -102,9 +102,9 @@ async fn start_app() -> Result<(), String> {
                     }),
                     ..Default::default()
                 };
-                let mut app = PhotocraftApp::new(Session::new(), services);
+                let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), Session::new(), services);
                 app.background_jobs = false;
-                app.set_theme(&cc.egui_ctx, ThemeKind::Pro);
+                app.set_theme(&cc.egui_ctx, AppTheme::pro());
                 if let Some(state) = cc.wgpu_render_state.clone() {
                     app.set_wgpu(state);
                 }
@@ -127,7 +127,7 @@ async fn start_app() -> Result<(), String> {
 }
 
 struct Host {
-    app: PhotocraftApp,
+    app: Box<PhotocraftApp>,
     opened: bool,
     read_only: bool,
     name: String,
@@ -390,7 +390,7 @@ impl eframe::App for Host {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         raw.dropped_files.clear();
         if self.read_only {
-            self.app.cancel_synthetic("The editor is read-only.");
+            self.app.host_cancel_synthetic(ctx);
         }
         if !self.read_only {
             self.app.raw_input_hook(ctx, raw);

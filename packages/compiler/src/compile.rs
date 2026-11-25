@@ -6,11 +6,11 @@ use flow_like_types_contracts::dispatch::{
     compilation_job_payload_hash, CompilationJob, CompilationResult, CompilationStatus,
     CompilationStorageProvider, CompilationTarget,
 };
-use flow_like_wasm::aot_cache::{artifact_target, WASM_ARTIFACT_VERSION};
-use flow_like_wasm::{WasmConfig, WasmEngine};
+use flow_like_wasm::artifact::{artifact_target, WASM_ARTIFACT_VERSION};
+use flow_like_wasm::compilation::{CompilationConfig, CompilationEngine};
 
 #[cfg(test)]
-use flow_like_wasm::aot_cache::WASMTIME_MAJOR_VERSION;
+use flow_like_wasm::artifact::WASMTIME_MAJOR_VERSION;
 use reqwest::{Client, Url};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -900,11 +900,11 @@ async fn compile_inner(
                 let triple = artifact_target(&pk).ok_or_else(|| {
                     CompilerError::Compilation("Unsupported artifact platform".to_string())
                 })?;
-                let mut wasm_config = WasmConfig::default().without_cache().with_target(triple);
+                let mut wasm_config = CompilationConfig::default().with_target(triple);
                 if pk.starts_with("ios-") {
                     wasm_config = wasm_config.with_ios_memory_layout();
                 }
-                let engine = WasmEngine::new(wasm_config).map_err(|e| {
+                let engine = CompilationEngine::new(wasm_config).map_err(|e| {
                     CompilerError::Compilation(format!("Engine creation failed for {pk}: {e}"))
                 })?;
                 engine.precompile(&b).map_err(|e| {

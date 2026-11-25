@@ -1,12 +1,11 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[path = "../../shared/api_bootstrap.rs"]
 mod bootstrap;
 
 use std::sync::Arc;
 
-use flow_like_api::audit::worker::{self as audit_worker, AuditWorkerContext, TickReport};
+use flow_like_audit::worker::{self as audit_worker, AuditWorkerContext, TickReport};
 use flow_like_aws_data::dsql::{DsqlConfig, DsqlDatabase};
 use lambda_runtime::{Error, LambdaEvent, run, service_fn};
 use serde_json::Value;
@@ -16,15 +15,15 @@ const APPLICATION_NAME: &str = "flow-like-aws-audit-worker";
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     lambda_runtime::tracing::init_default_subscriber();
-    let api = bootstrap::initialize(APPLICATION_NAME, DsqlConfig::from_env()?).await?;
+    let worker = bootstrap::initialize(APPLICATION_NAME, DsqlConfig::from_env()?).await?;
     // Built once per container: the signing budget and the key-service client live here.
-    let context = Arc::new(AuditWorkerContext::from_state(&api.state)?);
+    let context = Arc::new(worker.context);
     tracing::info!(
         signing = context.signing_configured(),
         archiving = context.bucket.is_some(),
         "audit worker ready"
     );
-    let database = api.dsql;
+    let database = worker.dsql;
     run(service_fn(move |_event: LambdaEvent<Value>| {
         let context = context.clone();
         let database = database.clone();

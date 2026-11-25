@@ -91,6 +91,14 @@ async function verify(id: string) {
 		page.on("pageerror", (e) => errors.push(String(e)));
 		page.on("console", (m) => {
 			if (m.type() === "error") console.error(id, m.text());
+			if (
+				id === "photocraft" &&
+				/the command (?:toolSelect|align|screenMode)\.[^ ]+ is in no registered command set/.test(
+					m.text(),
+				)
+			) {
+				errors.push(`Missing editor command registration: ${m.text()}`);
+			}
 		});
 		await page.setRequestInterception(true);
 		page.on("request", (request) => {

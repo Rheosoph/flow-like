@@ -151,3 +151,22 @@ describe.each(["select", "radioGroup"] as const)("%s bindings", (type) => {
 		expectOptions(["Updated Option A", "Updated Option B"]);
 	});
 });
+
+describe("radioGroup label", () => {
+	it("names the group with its label", async () => {
+		await render({
+			id: "pace",
+			component: {
+				id: "pace",
+				type: "radioGroup",
+				value: { literalString: "a" },
+				options: { literalOptions: options },
+				label: { literalString: "Pace" },
+			},
+		} as SurfaceComponent);
+		const group = host.querySelector('[role="radiogroup"]');
+		const labelId = group?.getAttribute("aria-labelledby");
+		expect(labelId).toBeTruthy();
+		expect(host.querySelector(`[id="${labelId}"]`)?.textContent).toBe("Pace");
+	});
+});

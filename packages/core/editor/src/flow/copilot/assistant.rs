@@ -16,7 +16,7 @@ use serde::Deserialize;
 use super::memory::AssistantMemory;
 use super::platform::{PlatformCopilot, PlatformSurface, PlatformToolBridge};
 use super::types::{ChatImage, ChatMessage};
-use crate::a2ui::authoring::chat_ui_prompt_section;
+use crate::a2ui::authoring::chat_ui_prompt_section_with_patterns;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 
@@ -396,7 +396,7 @@ pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> 
     let routing = TASK_ROUTING_PLAYBOOK
         .replace("{routing_intro}", routing_intro)
         .replace("{public_web_route}", public_web_route);
-    let chat_ui = chat_ui_prompt_section();
+    let chat_ui = chat_ui_prompt_section_with_patterns();
     [
         FLOWPILOT_CORE,
         routing.as_str(),
@@ -1423,6 +1423,7 @@ mod tests {
             "create_app",
             "upsert_event",
             "ask_user",
+            "ui_patterns",
         ] {
             assert!(shared.contains(name), "missing shared tool {name}");
         }
@@ -1431,7 +1432,7 @@ mod tests {
 
     #[test]
     fn chat_formatting_teaches_inline_ui_and_its_scope() {
-        let section = chat_ui_prompt_section();
+        let section = chat_ui_prompt_section_with_patterns();
         for capability in [
             WebResearchCapability::Delegated,
             WebResearchCapability::Inline,

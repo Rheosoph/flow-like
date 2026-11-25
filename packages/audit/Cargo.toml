@@ -1,0 +1,55 @@
+[package]
+name = "flow-like-audit"
+version = "0.1.0"
+edition = "2024"
+description = "Audit records, signatures, archival and worker execution"
+license-file = "../../LICENSE"
+
+[features]
+default = []
+audit-kms-aws = ["dep:aws-config", "dep:aws-sdk-kms"]
+audit-kms-gcp = ["gcp-credentials"]
+audit-kms-azure = ["dep:azure_core", "dep:azure_identity"]
+gcp-credentials = ["dep:rsa", "dep:moka"]
+
+[dependencies]
+flow-like-api-entity.workspace = true
+flow-like-core-contracts.workspace = true
+flow-like-types-contracts.workspace = true
+flow-like-db.workspace = true
+flow-like-storage-files.workspace = true
+anyhow = "1.0.97"
+flow-like-secrets.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+futures.workspace = true
+getrandom.workspace = true
+hex = "0.4.3"
+hmac = "0.12"
+p256 = "0.13.2"
+reqwest.workspace = true
+sea-orm.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "net", "rt"] }
+tracing.workspace = true
+utoipa = { version = "5", features = ["chrono"] }
+uuid.workspace = true
+zstd.workspace = true
+aes-gcm.workspace = true
+cuid2.workspace = true
+aws-config = { workspace = true, optional = true }
+aws-sdk-kms = { workspace = true, optional = true }
+azure_core = { version = "0.32.0", optional = true }
+azure_identity = { version = "0.32.0", optional = true }
+rsa = { version = "0.9", features = ["sha2"], optional = true }
+moka = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

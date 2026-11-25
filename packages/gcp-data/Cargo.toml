@@ -4,13 +4,17 @@ version = "0.1.0"
 edition = "2024"
 description = "Keyless GCP data-plane clients shared by the GCP API and queue workers: Firestore REST client and Cloud SQL IAM PostgreSQL connectivity"
 
+[features]
+default = []
+postgres = ["dep:flow-like-db", "dep:sea-orm"]
+
 [dependencies]
 base64.workspace = true
 bytes.workspace = true
-flow-like-db.workspace = true
+flow-like-db = { workspace = true, optional = true }
 chrono.workspace = true
 reqwest.workspace = true
-sea-orm.workspace = true
+sea-orm = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true

@@ -2,7 +2,7 @@
 FROM rust:1.97.1-bookworm AS builder
 COPY rust-toolchain.toml /rust-toolchain.toml
 RUN rustup toolchain install
-RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
 # The worker compiles the audit section of this document and accepts no runtime

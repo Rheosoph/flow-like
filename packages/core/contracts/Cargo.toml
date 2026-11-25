@@ -7,3 +7,10 @@ license-file = "../../../LICENSE"
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
+anyhow = "1.0.97"
+tracing.workspace = true
+schemars = { workspace = true, optional = true }
+
+[features]
+default = []
+schema = ["dep:schemars"]

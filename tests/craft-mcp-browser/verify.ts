@@ -349,7 +349,12 @@ try {
 			const names = new Set(tools.map((tool) => tool.name));
 			if (runtime === "pdfcraft") {
 				for (const excluded of [
+					"doc_open",
 					"doc_open_revision",
+					"doc_create",
+					"doc_close",
+					"doc_save",
+					"doc_combine",
 					"printers",
 					"printer_options",
 				])
@@ -440,8 +445,20 @@ try {
 				const documents = resultJson(await call("doc_list")) as {
 					documents: { doc: number }[];
 				};
+				assert.equal(documents.documents.length, 1);
 				const doc = documents.documents[0].doc;
 				assert.ok(Number.isSafeInteger(doc));
+				for (const [name, args] of [
+					["doc_open", { path: "second.pdf" }],
+					["doc_create", {}],
+					["doc_close", { doc }],
+				] as const) {
+					assert.match(
+						JSON.stringify(await call(name, args, true)),
+						/Use the document controls above the editor for file operations/,
+					);
+				}
+				assert.deepEqual(resultJson(await call("doc_list")), documents);
 				await call("page_rotate", { doc, degrees: 90 });
 				assert.equal(
 					(await PDFDocument.load(await exportBytes())).getPage(0).getRotation()

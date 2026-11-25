@@ -39,7 +39,7 @@
 		"bench:board": "node tests/board-render-browser/run.mjs",
 		"build:craft-viewers": "node packages/craft-viewers/build-web.mjs",
 		"test:craft-browser": "bun tests/craft-browser/verify.ts && bun tests/craft-office-browser/verify.ts && bun tests/craft-media-browser/verify.ts && bun tests/craft-solid-browser/verify.ts && node --test packages/craft-viewers/deckcraft/browser-media.test.mjs && bun tests/craft-image-browser/verify.ts && bun tests/craft-mcp-browser/verify.ts && bun tests/craft-create-browser/verify.ts && CRAFT_NESTED_PREVIEW=1 bun tests/craft-create-browser/verify.ts solidcraft wordcraft && bun tests/a2ui-file-editor-browser/verify.ts",
-		"test:craft-viewers": "node --test packages/craft-viewers/mcp.test.mjs packages/craft-viewers/host.test.mjs packages/craft-viewers/deckcraft-thumbnail.test.mjs packages/craft-viewers/build-lock.test.mjs packages/craft-viewers/build-pool.test.mjs packages/craft-viewers/build-tools.test.mjs packages/craft-viewers/licenses.test.mjs packages/craft-viewers/codec-policy.test.mjs packages/craft-viewers/soundcraft/audio.test.mjs packages/craft-viewers/filmcraft/browser-codecs.test.mjs && vitest run packages/ui/components/storage/craft-mcp-session.test.ts packages/ui/components/storage/craft-document.dom.test.tsx packages/ui/components/storage/craft-viewers.test.ts packages/ui/components/storage/viewer-about.dom.test.tsx packages/ui/components/storage/storage-system.dom.test.tsx packages/ui/components/ui/file-previewer.dom.test.tsx --environment happy-dom --maxWorkers 1",
+		"test:craft-viewers": "node --test packages/craft-viewers/mcp.test.mjs packages/craft-viewers/host.test.mjs packages/craft-viewers/deckcraft-thumbnail.test.mjs packages/craft-viewers/build-lock.test.mjs packages/craft-viewers/build-pool.test.mjs packages/craft-viewers/build-tools.test.mjs packages/craft-viewers/build-cache.test.mjs packages/craft-viewers/build-options.test.mjs packages/craft-viewers/build-timings.test.mjs packages/craft-viewers/wasm-startup.test.mjs packages/craft-viewers/inventory-patch.test.mjs packages/device-crypto/tests/build-web.test.mjs packages/craft-viewers/licenses.test.mjs packages/craft-viewers/codec-policy.test.mjs packages/craft-viewers/soundcraft/audio.test.mjs packages/craft-viewers/filmcraft/browser-codecs.test.mjs && vitest run packages/ui/components/storage/craft-mcp-session.test.ts packages/ui/components/storage/craft-document.dom.test.tsx packages/ui/components/storage/craft-viewers.test.ts packages/ui/components/storage/viewer-about.dom.test.tsx packages/ui/components/storage/storage-system.dom.test.tsx packages/ui/components/ui/file-previewer.dom.test.tsx --environment happy-dom --maxWorkers 1",
 		"build:wordcraft": "node packages/wordcraft/build-web.mjs",
 		"test:wordcraft": "node --test packages/wordcraft/host.test.mjs && vitest run packages/ui/components/storage/storage-system.dom.test.tsx packages/ui/components/storage/storage-docx-history.dom.test.tsx packages/ui/components/storage/wordcraft-document.dom.test.tsx packages/ui/components/storage/wordcraft-protocol.test.ts --environment happy-dom --maxWorkers 1 && vitest run apps/desktop/components/tauri-provider/__tests__/storage-state.test.ts --maxWorkers 1 && bun tests/wordcraft-browser/verify.ts"
 	},
@@ -119,11 +119,7 @@
 		"ws": "8.21.3",
 		"yaml": "2.9.0"
 	},
-	"trustedDependencies": [
-		"esbuild",
-		"fsevents",
-		"sharp"
-	],
+	"trustedDependencies": ["esbuild", "fsevents", "sharp"],
 	"devDependencies": {
 		"@biomejs/biome": "1.9.4",
 		"dotenv-cli": "8.0.0",

@@ -16,7 +16,7 @@ bench = false
 [dependencies]
 flow-like-a2ui-schema.workspace = true
 flow-like-editor-contracts.workspace = true
-flow-like-core-contracts.workspace = true
+flow-like-core-contracts = { workspace = true, features = ["schema"] }
 flow-like-types.workspace = true
 flow-like-ast.workspace = true
 flow-like-model-provider.workspace = true

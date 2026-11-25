@@ -4,7 +4,7 @@ COPY rust-toolchain.toml /rust-toolchain.toml
 RUN rustup toolchain install
 
 RUN apt-get update && apt-get install -y \
-    pkg-config libssl-dev protobuf-compiler \
+    cmake \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -23,7 +23,7 @@ FROM debian:bookworm-slim
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
 
 RUN apt-get update && apt-get install -y \
-    ca-certificates libssl3 curl \
+    ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

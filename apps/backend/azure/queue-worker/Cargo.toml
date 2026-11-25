@@ -14,7 +14,7 @@ azure_identity_queue = { package = "azure_identity", version = "1.0.0", default-
 blake3.workspace = true
 chrono.workspace = true
 flow-like = { workspace = true, features = ["flow-runtime", "model"] }
-flow-like-azure-data.workspace = true
+flow-like-azure-data = { workspace = true, features = ["postgres"] }
 flow-like-db.workspace = true
 flow-like-file-accounting.workspace = true
 flow-like-storage.workspace = true

@@ -187,58 +187,18 @@ impl WasmConfig {
 
     /// Build wasmtime Config from our config
     fn to_wasmtime_config(&self) -> WasmResult<Config> {
-        let mut config = Config::new();
-        if cfg!(target_os = "macos") && self.macos_signal_traps {
-            config.macos_use_mach_ports(false);
+        crate::engine_config::EngineConfig {
+            parallel_compilation: self.parallel_compilation,
+            opt_level: self.opt_level,
+            fuel_metering: self.fuel_metering,
+            epoch_interruption: self.epoch_interruption,
+            compiler_enabled: self.compiler_enabled,
+            ios_memory_layout: self.uses_ios_memory_layout(),
+            macos_signal_traps: self.macos_signal_traps,
+            target: self.target.clone(),
+            limits: self.default_security.limits.clone(),
         }
-
-        if self.compiler_enabled {
-            config.parallel_compilation(self.parallel_compilation);
-            config.cranelift_opt_level(self.opt_level);
-        }
-
-        // Runtime settings
-        config.consume_fuel(self.fuel_metering);
-        config.epoch_interruption(self.epoch_interruption);
-
-        // Enable WASM GC and exception handling proposals (needed for Kotlin/Wasm, etc.)
-        config.wasm_gc(true);
-        config.wasm_exceptions(true);
-        config.wasm_function_references(true);
-
-        // Enable SIMD proposals and wide arithmetic
-        config.wasm_simd(true);
-        config.wasm_relaxed_simd(true);
-        config.wasm_wide_arithmetic(true);
-
-        // Memory settings
-        config.memory_init_cow(true);
-        if self.uses_ios_memory_layout() {
-            // iOS can reject Wasmtime's default 4GiB+ linear-memory reservation
-            // during component instantiation. Use moving dynamic memories there
-            // and keep only a modest growth reservation.
-            config.memory_init_cow(false);
-            config.memory_reservation(0);
-            config.memory_guard_size(0);
-            config.memory_reservation_for_growth(64 * 1024 * 1024);
-        }
-
-        // Apply resource limits
-        let limits = &self.default_security.limits;
-        config.max_wasm_stack(limits.max_stack_depth as usize * 1024);
-
-        // Explicitly select the host baseline too. Without this, Wasmtime
-        // infers CPU features from the compiler machine and its serialized
-        // output may be rejected by another machine of the same architecture.
-        if let Some(triple) = self.target.as_deref().or_else(|| {
-            crate::aot_cache::portable_target(std::env::consts::OS, std::env::consts::ARCH)
-        }) {
-            config.target(triple).map_err(|e| {
-                WasmError::compilation(format!("Unsupported compilation target '{triple}': {e}"))
-            })?;
-        }
-
-        Ok(config)
+        .to_wasmtime_config()
     }
 }
 
