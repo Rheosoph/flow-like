@@ -2,6 +2,7 @@
 
 pub use flow_like_wasm_schema::limits::{
     WasmCapabilities, WasmLimits, DEFAULT_FUEL_LIMIT, DEFAULT_MEMORY_LIMIT, DEFAULT_TIMEOUT,
+    FUEL_PER_SECOND, fuel_for_timeout,
 };
 use serde::{Deserialize, Serialize};
 
@@ -84,10 +85,15 @@ impl WasmSecurityConfig {
     }
 
     /// Derive the deterministic, closed configuration used to read a module's
-    /// node definitions. Resource limits carry over unchanged.
+    /// node definitions. Resource limits carry over, except that the fuel
+    /// budget never exceeds the platform default: reading definitions is not
+    /// a timeout-tier workload, so a package's larger tier fuel does not apply.
     pub fn for_metadata(&self) -> Self {
         Self {
-            limits: self.limits.clone(),
+            limits: WasmLimits {
+                fuel_limit: self.limits.fuel_limit.min(DEFAULT_FUEL_LIMIT),
+                ..self.limits.clone()
+            },
             capabilities: WasmCapabilities::NONE,
             allow_wasi: false,
             allow_wasi_network: false,
@@ -182,6 +188,15 @@ mod tests {
         assert_eq!(metadata.limits.memory_limit, permissive.limits.memory_limit);
         assert_eq!(metadata.limits.fuel_limit, permissive.limits.fuel_limit);
         assert_eq!(metadata.limits.timeout, permissive.limits.timeout);
+    }
+
+    #[test]
+    fn metadata_fuel_never_exceeds_the_default_even_for_a_long_tier() {
+        let mut long = WasmSecurityConfig::default();
+        long.limits.fuel_limit = 6_000_000_000_000;
+        assert_eq!(long.for_metadata().limits.fuel_limit, DEFAULT_FUEL_LIMIT);
+        let node = WasmSecurityConfig::from_node_permissions(&[]).with_package_settings(&long);
+        assert_eq!(node.limits.fuel_limit, 6_000_000_000_000);
     }
 
     #[test]

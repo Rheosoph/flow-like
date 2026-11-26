@@ -75,6 +75,12 @@ impl TimeoutTier {
         })
     }
 
+    /// Instruction (fuel) budget per call for this tier, derived from its
+    /// duration. `Quick` keeps the platform default.
+    pub fn fuel_limit(&self) -> u64 {
+        crate::limits::fuel_for_timeout(self.duration())
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Quick => "Quick (5s)",
@@ -238,6 +244,7 @@ impl PackagePermissions {
         WasmLimits {
             memory_limit: self.memory.bytes(),
             timeout: self.timeout.duration(),
+            fuel_limit: self.timeout.fuel_limit(),
             ..Default::default()
         }
     }
@@ -529,6 +536,45 @@ mod node_capability_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::limits::DEFAULT_FUEL_LIMIT;
+
+    const TIERS: [TimeoutTier; 6] = [
+        TimeoutTier::Quick,
+        TimeoutTier::Standard,
+        TimeoutTier::Extended,
+        TimeoutTier::LongRunning,
+        TimeoutTier::VeryLong,
+        TimeoutTier::Maximum,
+    ];
+
+    #[test]
+    fn tier_fuel_is_monotonic_and_quick_keeps_the_default() {
+        assert_eq!(TimeoutTier::Quick.fuel_limit(), DEFAULT_FUEL_LIMIT);
+        for pair in TIERS.windows(2) {
+            assert!(pair[0].fuel_limit() <= pair[1].fuel_limit());
+        }
+        assert!(TimeoutTier::LongRunning.fuel_limit() > DEFAULT_FUEL_LIMIT);
+        assert_eq!(TimeoutTier::Quick.fuel_limit(), 100_000_000_000);
+        assert_eq!(TimeoutTier::Standard.fuel_limit(), 600_000_000_000);
+        assert_eq!(TimeoutTier::LongRunning.fuel_limit(), 6_000_000_000_000);
+    }
+
+    #[test]
+    fn to_limits_carries_the_tier_fuel() {
+        let permissions = PackagePermissions {
+            timeout: TimeoutTier::LongRunning,
+            ..Default::default()
+        };
+        let limits = permissions.to_limits();
+        assert_eq!(limits.fuel_limit, 6_000_000_000_000);
+        assert_eq!(limits.timeout, TimeoutTier::LongRunning.duration());
+        assert_eq!(
+            PackagePermissions::default().to_limits().fuel_limit,
+            600_000_000_000
+        );
+    }
+
     #[test]
     fn database_permissions_are_explicit_and_independent() {
         let read: super::PackagePermissions =

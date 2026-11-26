@@ -8,11 +8,15 @@ use crate::error::ExecutorError;
 use crate::types::WasmPackageRef;
 use flow_like::flow::board::Board;
 use flow_like::flow::node::NodeLogic;
+use flow_like_wasm::limits::{fuel_for_timeout, WasmLimits};
+#[cfg(test)]
+use flow_like_wasm::limits::{DEFAULT_FUEL_LIMIT, FUEL_PER_SECOND};
 use flow_like_wasm::{
     LoadedWasm, PackagePermissions, WasmConfig, WasmEngine, WasmModule, WasmNodeLogic,
     WasmSecurityConfig,
 };
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::sync::OnceCell;
@@ -92,7 +96,85 @@ fn package_security(
     let mut security: WasmSecurityConfig = permissions.to_security_config();
     security.limits.memory_limit =
         capped_memory(package_id, security.limits.memory_limit, memory_ceiling());
+    cap_time_and_fuel(
+        package_id,
+        &mut security.limits,
+        timeout_ceiling(),
+        fuel_ceiling(),
+    );
     Ok(security)
+}
+
+/// Cap the timeout and recompute the fuel from the capped timeout, so fuel never exceeds what
+/// the capped timeout implies; an optional hard fuel cap applies on top.
+fn cap_time_and_fuel(
+    package_id: &str,
+    limits: &mut WasmLimits,
+    timeout_ceiling: Duration,
+    fuel_ceiling: Option<u64>,
+) {
+    let timeout = capped_timeout(package_id, limits.timeout, timeout_ceiling);
+    if timeout != limits.timeout {
+        limits.timeout = timeout;
+        limits.fuel_limit = fuel_for_timeout(timeout).min(limits.fuel_limit);
+    }
+    if let Some(max_fuel) = fuel_ceiling {
+        limits.fuel_limit = limits.fuel_limit.min(max_fuel);
+    }
+}
+
+/// The longest tier (`maximum`, 30 min) fits the ECS/Azure/GCP run deadline of about an hour. The
+/// run deadline bounds every run anyway. Lambda deployments (900 s hard stop) lower the ceiling
+/// to their invocation budget with `set_deployment_timeout_ceiling`, or the operator sets
+/// `EXECUTOR_WASM_MAX_TIMEOUT_SECS=870`.
+const DEFAULT_TIMEOUT_CEILING_SECS: u64 = 1800;
+
+/// Ceiling a deployment imposes on itself (0 = none), for example the Lambda invocation budget.
+static DEPLOYMENT_TIMEOUT_CEILING_SECS: AtomicU64 = AtomicU64::new(0);
+
+/// Lower the per-call timeout ceiling to what this deployment can actually run. The lowest of
+/// this, `EXECUTOR_WASM_MAX_TIMEOUT_SECS` and the default applies.
+pub fn set_deployment_timeout_ceiling(ceiling: Duration) {
+    DEPLOYMENT_TIMEOUT_CEILING_SECS.store(ceiling.as_secs(), Ordering::Relaxed);
+}
+
+/// Read a positive integer from the environment; a set but unusable value is logged and ignored
+/// instead of silently changing a limit.
+fn positive_env(name: &str) -> Option<u64> {
+    let value = std::env::var(name).ok()?;
+    match value.trim().parse::<u64>() {
+        Ok(parsed) if parsed > 0 => Some(parsed),
+        _ => {
+            tracing::warn!(variable = name, value = %value, "Ignoring invalid executor limit; expected a positive integer");
+            None
+        }
+    }
+}
+
+/// The longest per-call timeout, and so the most fuel, a package may get on this executor,
+/// `EXECUTOR_WASM_MAX_TIMEOUT_SECS`. An invalid value falls back to the default ceiling.
+fn timeout_ceiling() -> Duration {
+    let secs = positive_env("EXECUTOR_WASM_MAX_TIMEOUT_SECS").unwrap_or(DEFAULT_TIMEOUT_CEILING_SECS);
+    let deployment = DEPLOYMENT_TIMEOUT_CEILING_SECS.load(Ordering::Relaxed);
+    Duration::from_secs(if deployment > 0 { secs.min(deployment) } else { secs })
+}
+
+/// Optional hard cap on the fuel of one call, `EXECUTOR_WASM_MAX_FUEL`. An invalid value is
+/// logged and ignored; the timeout ceiling still bounds fuel.
+fn fuel_ceiling() -> Option<u64> {
+    positive_env("EXECUTOR_WASM_MAX_FUEL")
+}
+
+fn capped_timeout(package_id: &str, requested: Duration, ceiling: Duration) -> Duration {
+    if requested > ceiling {
+        tracing::warn!(
+            package_id = %package_id,
+            requested_secs = requested.as_secs(),
+            ceiling_secs = ceiling.as_secs(),
+            "Package asks for a longer timeout than this executor allows; capping it"
+        );
+    }
+    requested.min(ceiling)
 }
 
 const DEFAULT_MEMORY_CEILING_MB: usize = 1024;
@@ -524,6 +606,48 @@ mod tests {
             security.limits.memory_limit,
             DEFAULT_MEMORY_CEILING_MB << 20
         );
+    }
+
+    #[test]
+    fn a_timeout_above_the_executor_ceiling_is_capped_and_lowers_fuel() {
+        let ceiling = Duration::from_secs(60);
+        assert_eq!(
+            capped_timeout("p", Duration::from_secs(600), ceiling),
+            ceiling
+        );
+        assert_eq!(
+            capped_timeout("p", Duration::from_secs(30), ceiling),
+            Duration::from_secs(30)
+        );
+        let long = package_security(
+            "package",
+            &with_permissions(serde_json::json!({"timeout": "long_running"})),
+        )
+        .unwrap();
+        assert_eq!(long.limits.timeout, Duration::from_secs(300));
+        assert_eq!(long.limits.fuel_limit, 300 * FUEL_PER_SECOND);
+        let mut limits = long.limits.clone();
+        cap_time_and_fuel("p", &mut limits, ceiling, None);
+        assert_eq!(limits.timeout, ceiling);
+        assert_eq!(limits.fuel_limit, 60 * FUEL_PER_SECOND);
+        cap_time_and_fuel("p", &mut limits, ceiling, Some(5));
+        assert_eq!(limits.fuel_limit, 5);
+        // A ceiling below the quick tier never raises fuel above what the package had.
+        let mut quick = WasmSecurityConfig::default().limits;
+        cap_time_and_fuel("p", &mut quick, Duration::from_secs(1), None);
+        assert_eq!(quick.fuel_limit, DEFAULT_FUEL_LIMIT);
+    }
+
+    #[test]
+    fn a_package_without_permissions_keeps_the_default_fuel() {
+        let security = package_security("package", &package()).unwrap();
+        assert_eq!(security.limits.fuel_limit, DEFAULT_FUEL_LIMIT);
+        let quick = package_security(
+            "package",
+            &with_permissions(serde_json::json!({"timeout": "quick"})),
+        )
+        .unwrap();
+        assert_eq!(quick.limits.fuel_limit, DEFAULT_FUEL_LIMIT);
     }
 
     #[test]

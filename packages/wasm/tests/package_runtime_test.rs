@@ -370,3 +370,73 @@ async fn run_shutdown_interrupts_guest_code_and_prevents_reentry() {
         .await
         .is_err());
 }
+
+async fn busy_loop(engine: &WasmEngine, iterations: u32) -> LoadedWasm {
+    let bytes = wat::parse_str(format!(
+        r#"(module
+        (memory (export "memory") 1)
+        (func (export "get_node") (result i64) i64.const 0)
+        (func (export "run") (param i32 i32) (result i64)
+            (local $i i32)
+            (loop $again
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br_if $again (i32.lt_u (local.get $i) (i32.const {iterations}))))
+            i64.const 0)
+    )"#
+    ))
+    .unwrap();
+    LoadedWasm::Module(engine.load_module(&bytes).await.unwrap())
+}
+
+#[tokio::test]
+async fn the_fuel_limit_decides_whether_a_cpu_bound_call_finishes() {
+    let engine = WasmEngine::new(WasmConfig::development()).unwrap();
+    // About 5 fuel per iteration: ~5e6 in total.
+    let loaded = busy_loop(&engine, 1_000_000).await;
+    for (fuel, finishes) in [(500_000_u64, false), (50_000_000, true)] {
+        let mut security = WasmSecurityConfig::default();
+        security.limits.fuel_limit = fuel;
+        let run = RunResources::default();
+        let package = runtime(&run, "busy-finite", &loaded, &security);
+        let result = package
+            .call(
+                &loaded,
+                &engine,
+                &security,
+                HostState::with_security(&security),
+                &input("run"),
+            )
+            .await;
+        assert_eq!(result.is_ok(), finishes, "fuel {fuel}: {:?}", result.err());
+        run.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn the_wall_clock_timeout_stops_a_cpu_bound_call_with_a_huge_fuel_budget() {
+    let engine = WasmEngine::new(WasmConfig::development()).unwrap();
+    let loaded = busy_loop(&engine, u32::MAX).await;
+    let mut security = WasmSecurityConfig::default();
+    security.limits.fuel_limit = u64::MAX;
+    security.limits.timeout = Duration::from_millis(100);
+    let run = RunResources::default();
+    let package = runtime(&run, "busy-timeout", &loaded, &security);
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        package.call(
+            &loaded,
+            &engine,
+            &security,
+            HostState::with_security(&security),
+            &input("run"),
+        ),
+    )
+    .await
+    .expect("the timeout must fire")
+    .unwrap_err()
+    .to_string()
+    .to_lowercase();
+    assert!(error.contains("timeout") || error.contains("timed out"), "{error}");
+    assert!(!error.contains("fuel"), "{error}");
+    run.shutdown().await;
+}
