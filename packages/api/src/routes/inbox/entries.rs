@@ -38,7 +38,7 @@ use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     Value,
     bot_message::{InteractiveMark, MAX_NAME_CHARS, MessageBody},
-    bot_turn::is_interactive_host,
+    bot_turn::{MAX_LONG_DISCUSSION_ROUNDS, is_interactive_host},
     inbox::{
         ActivityBody, CallBody, ConversationEncryption, ConversationKind, EntryCursor,
         EnvelopeKind, InboxEntryKind, MAX_CONVERSATION_MEMBERS, ReactionEvent, TopicBody,
@@ -274,6 +274,9 @@ pub(crate) struct Links {
     pub mentions: Vec<String>,
     pub workspace_apps: BTreeSet<String>,
     pub conversation_files: Vec<super::files::ConversationFileUse>,
+    /// The bot turns `body.discussion` allows the discussion it starts to reach; only a person's
+    /// room message carries it on.
+    pub discussion_hops: Option<u32>,
 }
 
 /// A send request checked without the database.
@@ -356,7 +359,17 @@ pub(super) fn plain_links(kind: InboxEntryKind, envelope: &Value) -> Result<Link
                     ask.reply_by
                 )));
             }
+            let discussion_hops = match message.discussion {
+                Some(grant) => Some(grant.hops().ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "body.discussion.rounds must be 1 to {MAX_LONG_DISCUSSION_ROUNDS}, not {}",
+                        grant.rounds
+                    ))
+                })?),
+                None => None,
+            };
             Ok(Links {
+                discussion_hops,
                 workspace_apps: message
                     .handles()
                     .filter(|handle| !handle.is_conversation_file())
@@ -821,12 +834,32 @@ async fn deliver<'e, C: ConnectionTrait>(
             })
         });
     }
+    let bot_sender = bots.iter().any(|bot| bot.id == event.sender_id);
+    let hands_over = bot_sender
+        && conversation_kind == ConversationKind::Group
+        && event.kind == InboxEntryKind::Message
+        && !super::conversations::is_exchange(conversation)
+        && matches!(&outgoing.content, Content::Plain(envelope) if envelope["body"].get("ask").is_none_or(Value::is_null));
+    let chain = if bot_sender {
+        crate::bot_host::chain_of(txn, event.sender_id, outgoing.links.reply_to.as_deref()).await?
+    } else {
+        crate::bot_host::ledger::Chain {
+            origin: None,
+            discussion_hops: outgoing
+                .links
+                .discussion_hops
+                .filter(|_| conversation_kind == ConversationKind::Group),
+        }
+    };
     let mut delivery = BotDelivery {
         conversation_kind,
         sender_id: event.sender_id.to_string(),
         kind: event.kind,
         seq: event.seq,
         recipients: recipients_of(txn, event, bots, &reading_along, outgoing, hops).await?,
+        hands_over,
+        chain_origin: chain.origin,
+        discussion_hops: chain.discussion_hops,
     };
     if speaks_to_direct_bot(event.sender_id, conversation_kind, bots, outgoing) {
         for recipient in &mut delivery.recipients {

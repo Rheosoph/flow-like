@@ -399,6 +399,18 @@ fn bodies_follow_the_message_contract_and_keep_today_s_shapes() {
         linked.workspace_apps.into_iter().collect::<Vec<_>>(),
         ["app_ws"]
     );
+    assert_eq!(linked.discussion_hops, None);
+    let granted = validate_send(request(
+        "m_grant",
+        InboxEntryKind::Message,
+        json!({ "text": "@Tiro go ahead", "mentions": ["bot_tiro"], "discussion": { "rounds": 12 } }),
+    ))
+    .unwrap()
+    .links;
+    assert_eq!(
+        granted.discussion_hops,
+        Some(flow_like_types::bot_turn::discussion_hops(12))
+    );
 
     for (kind, body, expected) in [
         (
@@ -421,6 +433,16 @@ fn bodies_follow_the_message_contract_and_keep_today_s_shapes() {
             json!({ "ask": { "id": "a", "origin_conversation": "c", "hops": 0,
                              "reply_by": "tomorrow" } }),
             "RFC 3339",
+        ),
+        (
+            InboxEntryKind::Message,
+            json!({ "text": "go", "discussion": { "rounds": 21 } }),
+            "body.discussion.rounds must be 1 to 20, not 21",
+        ),
+        (
+            InboxEntryKind::Message,
+            json!({ "text": "go", "discussion": { "rounds": 0 } }),
+            "not 0",
         ),
     ] {
         let error = validate_send(request("m_bad", kind, body.clone())).unwrap_err();

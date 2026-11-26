@@ -2727,5 +2727,18 @@
 		"chooseSlotColor": "Choose {{label}} for {{slot}}",
 		"previewColor": "{{label}} · Preview only",
 		"moodsLabel": "Moods"
+	},
+	"discussion": {
+		"allow": "Allow {{rounds}} rounds",
+		"allowed": "{{name}} allowed {{rounds}} rounds",
+		"allowedByYou": "You allowed {{rounds}} rounds",
+		"cost": "About {{cost}} in model costs, at the price of the replies so far.",
+		"costUnknown": "No reply here has reported its model cost yet.",
+		"eyebrow": "{{bot}} suggests a longer discussion",
+		"grantText": "@{{bot}} go ahead: up to {{rounds}} rounds.",
+		"limit": "Turns of bots you don't own count toward your 20 a day with each.",
+		"payer": "Each bot's owner pays for their own bot.",
+		"title": "Up to {{rounds}} rounds, {{messages}} messages",
+		"waiting": "The bots wait until someone allows it."
 	}
 }

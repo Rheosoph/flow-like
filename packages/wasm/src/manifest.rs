@@ -37,9 +37,16 @@ mod tests {
                 allowed_hosts: vec!["api.example.com".into()],
                 ..Default::default()
             },
+            timeout: TimeoutTier::LongRunning,
             ..Default::default()
         };
         let security: crate::WasmSecurityConfig = permissions.to_security_config();
+
+        assert_eq!(security.limits.timeout, std::time::Duration::from_secs(300));
+        assert_eq!(
+            security.limits.fuel_limit,
+            TimeoutTier::LongRunning.fuel_limit()
+        );
 
         assert!(security
             .capabilities

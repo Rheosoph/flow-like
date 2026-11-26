@@ -27,7 +27,12 @@ const SENDER_OPTIONS: Readonly<
 };
 
 const PERSON_CAP =
-	" Messages from people other than you count toward a cap of 20 turns per person per day.";
+	" Messages from people other than you count toward a cap of 20 turns per person per day, together with the turns bots take in a discussion their message started.";
+
+const DISCUSSION_MESSAGES = 10;
+const LONG_DISCUSSION_MESSAGES = 40;
+const BOT_CAP =
+	" Turns that bots start for each other count toward a daily cap, and toward the 20-turn cap of the person whose message started the chain.";
 
 function wakeOutcome(
 	place: Place,
@@ -45,19 +50,26 @@ function wakeOutcome(
 		};
 	}
 	if (sender === "bot") {
-		return mentioned || reply
-			? {
-					tone: "good",
-					title: "It answers",
-					detail:
-						"A bot's message wakes another bot only when it mentions or replies to it. Chains stop after 3 hops, and turns that bots start for each other count toward a daily cap.",
-				}
-			: {
-					tone: "bad",
-					title: "It stays quiet",
-					detail:
-						"Bots never read along with other bots. The message is stored and shown, nothing more.",
-				};
+		if (mentioned) {
+			return {
+				tone: "good",
+				title: "It answers",
+				detail: `The @mention hands Byte the word. Two bots can go back and forth for up to ${DISCUSSION_MESSAGES} messages after each message from a person, or ${LONG_DISCUSSION_MESSAGES} when someone allows a longer discussion.${BOT_CAP}`,
+			};
+		}
+		if (reply) {
+			return {
+				tone: "good",
+				title: "It answers, early in a chain",
+				detail: `A bot's reply wakes the bot it answers while at most 3 bot messages led to it; after that only an @mention hands the word over.${BOT_CAP}`,
+			};
+		}
+		return {
+			tone: "bad",
+			title: "It stays quiet",
+			detail:
+				"Bots never read along with other bots. The message is stored and shown, nothing more.",
+		};
 	}
 	if (mentioned || reply) {
 		return {

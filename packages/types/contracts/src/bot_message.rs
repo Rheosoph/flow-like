@@ -92,6 +92,40 @@ pub struct MessageBody {
     /// Numeric model usage and bounded call/compaction detail, grouped by step name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub usage_stats: Vec<Value>,
+    /// On a person's message in a room: how long a discussion the bots it wakes may hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion: Option<DiscussionGrant>,
+    /// On a bot's message: a longer discussion it asks a person in the room to allow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_proposal: Option<DiscussionProposal>,
+    /// On a bot's message in a room: the bot turns its discussion may reach, carried forward by
+    /// hosts that keep no turn rows ([`crate::bot_turn::hop_limit`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_hops: Option<u32>,
+}
+
+/// A person's permission for a discussion between bots: `rounds` rounds, one message from each
+/// of two bots per round, instead of [`crate::bot_turn::MAX_DISCUSSION_ROUNDS`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiscussionGrant {
+    pub rounds: u32,
+}
+
+impl DiscussionGrant {
+    /// The bot turns the discussion may reach; `None` outside 1 to
+    /// [`crate::bot_turn::MAX_LONG_DISCUSSION_ROUNDS`] rounds.
+    pub fn hops(&self) -> Option<u32> {
+        (1..=crate::bot_turn::MAX_LONG_DISCUSSION_ROUNDS)
+            .contains(&self.rounds)
+            .then(|| crate::bot_turn::discussion_hops(self.rounds))
+    }
+}
+
+/// A longer discussion a bot asks the room to allow: `rounds` rounds and why the topic needs them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiscussionProposal {
+    pub rounds: u32,
+    pub reason: String,
 }
 
 /// Names the interactive chat run that answers a message.

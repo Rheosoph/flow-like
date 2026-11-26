@@ -33,6 +33,8 @@ pub async fn execute(payload: DispatchPayloadRef, context: &Context) -> Result<(
     let (execution_budget, cleanup_budget) =
         invocation_budget(context.deadline(), SystemTime::now(), configured_timeout)
             .map_err(std::io::Error::other)?;
+    // A single call can never usefully run longer than the invocation; keep its fuel in step.
+    flow_like_executor::wasm_loader::set_deployment_timeout_ceiling(execution_budget);
     let started = tokio::time::Instant::now();
     let execution_deadline = started + execution_budget;
     let cleanup_deadline = started + cleanup_budget;

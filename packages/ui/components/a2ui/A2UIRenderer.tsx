@@ -269,6 +269,8 @@ export interface A2UIRendererProps {
 	/** Page elements the Page Event's board reads, from its bootstrap. */
 	elementDemand?: RunElementDemand;
 	isPreviewMode?: boolean;
+	/** Hold actions until the Page's execution authority is confirmed. */
+	executionPending?: boolean;
 	openDialog?: (
 		route: string,
 		title?: string,
@@ -295,6 +297,7 @@ export function A2UIRenderer({
 	governedPage = false,
 	elementDemand,
 	isPreviewMode = false,
+	executionPending = false,
 	openDialog,
 	closeDialog,
 	onNavigationMessage,
@@ -381,6 +384,7 @@ export function A2UIRenderer({
 					elementDemand={elementDemand}
 					components={components}
 					isPreviewMode={isPreviewMode}
+					executionPending={executionPending}
 					openDialog={openDialog}
 					closeDialog={closeDialog}
 					onNavigationMessage={onNavigationMessage}

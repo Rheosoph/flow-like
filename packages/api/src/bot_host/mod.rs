@@ -61,7 +61,7 @@ mod tasks_tests;
 mod worker_tests;
 
 pub use ledger::Recovered;
-pub(crate) use ledger::enqueue_in;
+pub(crate) use ledger::{chain_of, enqueue_in};
 pub use worker::{WorkerConfig, spawn_worker};
 
 use crate::{

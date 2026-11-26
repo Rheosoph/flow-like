@@ -44,7 +44,9 @@ use chrono::{DateTime, Duration as ChronoDuration, FixedOffset};
 use flow_like::{
     flow::copilot::{
         BotToolHost, BotToolset, HeadlessMemory, NotesHandle, PlatformContextInput, ReplyFiles,
-        ToolTrail, bot_platform_context,
+        ToolTrail,
+        bot_discussion::DiscussionProposals,
+        bot_platform_context,
         bot_talk::{AnsweredRound, BotPresence, BotTalk},
         decision_event::{self, EventDecision},
         find_bot_tool_spec,
@@ -437,6 +439,9 @@ pub(super) async fn holds_lease_or_retry(
     false
 }
 
+/// Who woke the turn and who reads the answer. `discussion` says the turn may be part of a
+/// discussion between bots: neither an `ask_bot` question or answer nor in an exchange room.
+#[allow(clippy::too_many_arguments)]
 async fn turn_requester(
     db: &DatabaseConnection,
     turn: &bot_turn::Model,
@@ -445,6 +450,7 @@ async fn turn_requester(
     addressed: bool,
     reactions: Vec<flow_like::flow::copilot::ReactionNote>,
     talking_with: Option<&str>,
+    discussion: bool,
 ) -> Result<flow_like::flow::copilot::TurnRequester, ApiError> {
     let requester_id = turn
         .requester_id
@@ -455,7 +461,21 @@ async fn turn_requester(
         .chain(talking_with)
         .collect();
     let names = history::sender_names(db, &ids).await?;
+    let in_room = kind == ConversationKind::Group && discussion;
+    let room_bots = if in_room {
+        history::room_bot_names(db, &turn.conversation_id, &turn.bot_id).await?
+    } else {
+        Vec::new()
+    };
+    let hops = u32::try_from(turn.hops).unwrap_or(0);
     Ok(flow_like::flow::copilot::TurnRequester {
+        discussion_hops: (in_room && hops > 0).then_some(hops),
+        discussion_limit: flow_like_types::bot_turn::hop_limit(
+            true,
+            turn.discussion_hops
+                .and_then(|hops| u32::try_from(hops).ok()),
+        ),
+        room_bots,
         requester_name: names.get(&requester_id).cloned(),
         owner_name: names.get(&turn.owner_id).cloned(),
         requester_id,
@@ -595,6 +615,11 @@ pub(crate) fn answer_request(turn: &bot_turn::Model, answer: &Answer) -> Option<
         {
             envelope["body"]["note"] = json!(note);
         }
+        if let Some(proposal) = &answer.discussion_proposal
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            envelope["body"]["discussion_proposal"] = json!(proposal);
+        }
         if let Some(envelope) = request.envelope.as_mut() {
             flow_like_types::bot_reply_files::attach_reply_files(
                 &mut envelope["body"],
@@ -642,6 +667,8 @@ pub(crate) struct Answer {
     pub(crate) tool_calls: Vec<flow_like_types::bot_tool_trail::ToolCall>,
     /// The files the bot attached to its reply with `file_attach`.
     pub(crate) files: Vec<flow_like_types::bot_reply_files::ReplyFile>,
+    /// The longer discussion the bot proposed with `discussion_propose`.
+    pub(crate) discussion_proposal: Option<flow_like_types::bot_message::DiscussionProposal>,
     /// The taint the turn ended with; the reply records it for the turns that read it.
     pub(crate) taint: flow_like_types::data_classification::DataSensitivity,
 }
@@ -681,6 +708,7 @@ fn silent_answer(completed: bool) -> Answer {
         note: None,
         tool_calls: Vec::new(),
         files: Vec::new(),
+        discussion_proposal: None,
         usage_stats: Vec::new(),
         taint: Default::default(),
     }
@@ -969,6 +997,7 @@ async fn attempt_with(
             note: None,
             tool_calls: Vec::new(),
             files: Vec::new(),
+            discussion_proposal: None,
             usage_stats: Vec::new(),
             taint: Default::default(),
         });
@@ -1022,6 +1051,7 @@ async fn attempt_with(
             note: None,
             tool_calls: Vec::new(),
             files: Vec::new(),
+            discussion_proposal: None,
             usage_stats: Vec::new(),
             taint: Default::default(),
         });
@@ -1075,6 +1105,9 @@ async fn attempt_with(
     let addressed = transcript.addressed || asker.is_some();
     unaddressed.store(!addressed || !reactions.is_empty(), Ordering::SeqCst);
 
+    let in_discussion = answered_round.is_none()
+        && asker.is_none()
+        && !crate::routes::inbox::conversations::is_exchange(&conversation);
     let requester = turn_requester(
         &state.db,
         turn,
@@ -1083,6 +1116,7 @@ async fn attempt_with(
         addressed,
         reactions,
         transcript.talking_with.as_deref(),
+        in_discussion,
     )
     .await?;
     if let Some(saved) = &checkpoint {
@@ -1163,6 +1197,7 @@ async fn attempt_with(
                 note: None,
                 tool_calls: Vec::new(),
                 files: Vec::new(),
+                discussion_proposal: None,
                 usage_stats: usage.snapshot(),
                 taint: Default::default(),
             });
@@ -1245,6 +1280,7 @@ async fn attempt_with(
                     note: None,
                     tool_calls: Vec::new(),
                     files: Vec::new(),
+                    discussion_proposal: None,
                     usage_stats: Vec::new(),
                     taint: Default::default(),
                 });
@@ -1523,6 +1559,12 @@ async fn attempt_with(
     if let Some(files) = &reply_files {
         bot.context.host_tools =
             std::mem::take(&mut bot.context.host_tools).with_reply_files(files.clone());
+    }
+    let discussion = (kind == ConversationKind::Group && in_discussion && !ephemeral_user_context)
+        .then(DiscussionProposals::new);
+    if let Some(proposals) = &discussion {
+        bot.context.host_tools =
+            std::mem::take(&mut bot.context.host_tools).with_discussion(proposals.clone());
     }
     let room_memory = kind == ConversationKind::Group;
     let owner_memory_allowed =
@@ -1804,6 +1846,7 @@ async fn attempt_with(
                 note: None,
                 tool_calls: Vec::new(),
                 files: Vec::new(),
+                discussion_proposal: None,
                 usage_stats: Vec::new(),
                 taint: Default::default(),
             })
@@ -1891,6 +1934,7 @@ async fn attempt_with(
                     .as_ref()
                     .map(ReplyFiles::files)
                     .unwrap_or_default(),
+                discussion_proposal: discussion.as_ref().and_then(DiscussionProposals::proposal),
                 taint: run_taint.taint(),
             })
         }

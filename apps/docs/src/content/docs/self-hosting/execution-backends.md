@@ -272,6 +272,24 @@ Tenant isolation is defence in depth, not an authorization boundary: AWS
 publishes no IAM condition key for the tenant id, and all tenants share the
 function's execution role. Per-run authorization remains the executor JWT's job.
 
+## WASM package limits
+
+Packages declare a memory and a timeout tier in their manifest. A call's compute
+budget (fuel) follows the timeout tier. Executors cap what a package can ask for:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `EXECUTOR_WASM_MAX_MEMORY_MB` | `1024` | Largest memory one package instance gets. |
+| `EXECUTOR_WASM_MAX_TIMEOUT_SECS` | `1800` | Longest per-call timeout. Fuel is recomputed from the capped timeout. |
+| `EXECUTOR_WASM_MAX_FUEL` | unset | Optional hard cap on the fuel of one call. |
+
+The default timeout ceiling is the longest tier (`maximum`, 30 minutes), which
+fits the hour-long run deadline of container backends. A package timeout never
+extends the run deadline, which bounds the whole run. On AWS Lambda, where the
+function stops after 900 seconds, the Lambda executor lowers the ceiling to its invocation
+budget by itself; you can also set `EXECUTOR_WASM_MAX_TIMEOUT_SECS=870`. Invalid values of
+these variables are logged and ignored (the default applies).
+
 ## Queue backends
 
 Queue transports decouple API response time from worker execution:

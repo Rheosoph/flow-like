@@ -31,6 +31,16 @@ use std::time::Duration;
 
 const MAX_REDIRECTS: usize = 10;
 
+/// Default `User-Agent` of every client built here. Many APIs reject requests
+/// without one (GitHub answers 403). It is a client default header, so a
+/// `configure` closure calling `user_agent` replaces it and a per-request
+/// `User-Agent` header (e.g. the HTTP Set Header node) overrides it.
+const DEFAULT_USER_AGENT: &str = concat!("flow-like/", env!("CARGO_PKG_VERSION"));
+
+fn base_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder().user_agent(DEFAULT_USER_AGENT)
+}
+
 /// Pool limits of server-side shared clients. One executor process runs every
 /// tenant's jobs and each idle socket holds a file descriptor (Lambda allows
 /// 1024). The pool is keyed by scheme + authority, so the per-host cap does not
@@ -188,7 +198,7 @@ fn guarded_redirect_policy() -> redirect::Policy {
 /// plain builder otherwise. Prefer [`GuardedHttpClient`], which also checks
 /// the initial request URL — a resolver never sees IP-literal hosts.
 pub fn client_builder(environment: ExecutionEnvironment) -> reqwest::ClientBuilder {
-    install_guard(reqwest::Client::builder(), environment)
+    install_guard(base_builder(), environment)
 }
 
 fn install_guard(
@@ -235,7 +245,7 @@ impl GuardedHttpClient {
         environment: ExecutionEnvironment,
         configure: impl FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
     ) -> Result<Self> {
-        let client = install_guard(configure(reqwest::Client::builder()), environment)
+        let client = install_guard(configure(base_builder()), environment)
             .redirect(redirect::Policy::none())
             .build()
             .map_err(|e| anyhow!("Failed to build HTTP client: {e}"))?;
@@ -252,7 +262,7 @@ impl GuardedHttpClient {
         environment: ExecutionEnvironment,
         configure: impl FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
     ) -> Result<Self> {
-        let client = install_guard(configure(reqwest::Client::builder()), environment)
+        let client = install_guard(configure(base_builder()), environment)
             .build()
             .map_err(|e| anyhow!("Failed to build HTTP client: {e}"))?;
         Ok(Self {
@@ -586,6 +596,105 @@ mod tests {
         });
     }
 
+    /// Serves one request on a loopback socket and returns its raw head.
+    async fn capture_request_head(
+        listener: tokio::net::TcpListener,
+    ) -> tokio::task::JoinHandle<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 4096];
+            let read = socket.read(&mut buf).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&buf[..read]).into_owned()
+        })
+    }
+
+    fn user_agents(head: &str) -> Vec<String> {
+        head.lines()
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("user-agent")
+                    .then(|| value.trim().to_string())
+            })
+            .collect()
+    }
+
+    async fn sent_user_agents(client: &GuardedHttpClient, header: Option<&str>) -> Vec<String> {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = capture_request_head(listener).await;
+        // Bypass only the initial URL check for the loopback fixture.
+        let mut request = client.client.get(&url).timeout(Duration::from_secs(5));
+        if let Some(value) = header {
+            request = request.header(reqwest::header::USER_AGENT, value);
+        }
+        request.send().await.unwrap();
+        user_agents(&server.await.unwrap())
+    }
+
+    #[test]
+    fn clients_send_a_default_user_agent_that_callers_can_override() {
+        let default = vec![DEFAULT_USER_AGENT.to_string()];
+        assert!(DEFAULT_USER_AGENT.starts_with("flow-like/"));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            for environment in [ExecutionEnvironment::Desktop, ExecutionEnvironment::Server] {
+                let plain = GuardedHttpClient::new(environment).unwrap();
+                let no_redirects = GuardedHttpClient::without_redirects(environment).unwrap();
+                let configured =
+                    GuardedHttpClient::configured(environment, |b| b.no_proxy()).unwrap();
+                let configured_no_redirects =
+                    GuardedHttpClient::configured_without_redirects(environment, |b| b.no_proxy())
+                        .unwrap();
+                // (a) the default is on every constructor
+                for client in [&plain, &no_redirects, &configured, &configured_no_redirects] {
+                    assert_eq!(sent_user_agents(client, None).await, default);
+                }
+                // (b) a per-request header replaces it (no duplicate)
+                for client in [&plain] {
+                    assert_eq!(
+                        sent_user_agents(client, Some("per-request/1")).await,
+                        vec!["per-request/1".to_string()]
+                    );
+                }
+                // (c) a configure() user agent wins over the default
+                let custom = GuardedHttpClient::configured(environment, |b| {
+                    b.no_proxy().user_agent("custom/2")
+                })
+                .unwrap();
+                let custom_no_redirects =
+                    GuardedHttpClient::configured_without_redirects(environment, |b| {
+                        b.no_proxy().user_agent("custom/2")
+                    })
+                    .unwrap();
+                for client in [&custom, &custom_no_redirects] {
+                    assert_eq!(
+                        sent_user_agents(client, None).await,
+                        vec!["custom/2".to_string()]
+                    );
+                }
+            }
+            // the public builder carries the default too
+            let builder_client = client_builder(ExecutionEnvironment::Desktop)
+                .build()
+                .unwrap();
+            let wrapped = GuardedHttpClient {
+                client: builder_client,
+                environment: ExecutionEnvironment::Desktop,
+            };
+            assert_eq!(sent_user_agents(&wrapped, None).await, default);
+        });
+    }
+
     // The only test calling `shared`, so the build counter is not raced.
     #[test]
     fn shared_client_is_built_once_per_runtime_environment_and_server_owner() {
@@ -607,11 +716,20 @@ mod tests {
                 assert_eq!(server.environment(), ExecutionEnvironment::Server);
                 assert!(server.get("http://169.254.169.254/").is_err());
                 assert!(server.get("https://example.com/").is_ok());
+                // shared clients carry the default User-Agent too
+                assert_eq!(
+                    sent_user_agents(&server, None).await,
+                    vec![DEFAULT_USER_AGENT.to_string()]
+                );
             }
             for run in [&first_run, &second_run] {
                 let local = GuardedHttpClient::shared(ExecutionEnvironment::Desktop, run).unwrap();
                 assert_eq!(local.environment(), ExecutionEnvironment::Desktop);
                 assert!(local.get("http://127.0.0.1:11434/").is_ok());
+                assert_eq!(
+                    sent_user_agents(&local, None).await,
+                    vec![DEFAULT_USER_AGENT.to_string()]
+                );
             }
             tokio::runtime::Handle::current().id()
         });

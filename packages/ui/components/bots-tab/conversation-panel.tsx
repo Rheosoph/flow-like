@@ -37,6 +37,7 @@ import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
 import type {
 	IConversation,
 	IInboxDeleteBody,
+	IInboxDiscussionGrant,
 	IInboxEditBody,
 	IInboxEntry,
 	IInboxMessageBody,
@@ -251,15 +252,17 @@ function usePendingSends(
 			messageId = newInboxMessageId(),
 			replyTo?: string,
 			files?: readonly File[],
+			discussion?: IInboxDiscussionGrant,
 		) => {
 			const body: IInboxMessageBody = {
 				text,
 				...(mentions.length > 0 ? { mentions: [...mentions] } : {}),
 				...(replyTo ? { reply_to: replyTo } : {}),
+				...(discussion ? { discussion } : {}),
 			};
 			return sendPendingMessage(
 				conversationId,
-				{ messageId, text, mentions, replyTo, files },
+				{ messageId, text, mentions, replyTo, files, discussion },
 				() =>
 					files && files.length > 0
 						? sendWithFiles({ conversationId, body, files, messageId })
@@ -279,6 +282,7 @@ function usePendingSends(
 					item.messageId,
 					item.replyTo,
 					item.files,
+					item.discussion,
 				),
 			discard: (item) => discardPendingSend(conversationId, item.messageId),
 		}),
@@ -766,6 +770,20 @@ function ConversationView({
 					activity={activity}
 					onSend={(body, mentions, replyTo, files) =>
 						void pending.send(body, mentions, undefined, replyTo, files)
+					}
+					onAllowDiscussion={(proposal, rounds) =>
+						void pending.send(
+							t(
+								"discussion.grantText",
+								"@{{bot}} go ahead: up to {{rounds}} rounds.",
+								{ bot: directory(proposal.senderId).name, rounds },
+							),
+							[proposal.senderId],
+							undefined,
+							proposal.id,
+							undefined,
+							{ rounds },
+						)
 					}
 				/>
 				<DeleteMessageDialog

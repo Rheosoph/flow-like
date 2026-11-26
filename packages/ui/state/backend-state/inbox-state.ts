@@ -147,6 +147,21 @@ export interface IInboxMessageBody {
 	user_context_revoke?: IUserContextRevoke;
 	/** The note a bot reply wrote or changed; the text is only the owner's to read. */
 	note?: IBotNoteRef;
+	/** On a person's room message: how many rounds the bots it wakes may discuss. */
+	discussion?: IInboxDiscussionGrant;
+	/** On a bot's message: a longer discussion it asks a person in the room to allow. */
+	discussion_proposal?: IInboxDiscussionProposal;
+}
+
+/** Rounds of a discussion between bots, one message from each per round: 1 to 20. */
+export interface IInboxDiscussionGrant {
+	rounds: number;
+}
+
+export interface IInboxDiscussionProposal {
+	rounds: number;
+	/** Why the topic needs them, in the bot's words. */
+	reason: string;
 }
 
 /** One window, or the active tab of a browser window, on the computer whose bot host is `host_id`. */

@@ -32,6 +32,8 @@ import {
 	ThreadNote,
 } from "./conversation-messages";
 import { isSelfPrincipal } from "./crew-model";
+import { DiscussionProposalCard } from "./discussion-proposal";
+import { discussionEstimate, grantFor } from "./discussion-proposal-model";
 import type { ConversationBlock, ConversationMessage } from "./fold-entries";
 import { type Mentionable, inlineMentions, mentionedIn } from "./mentions";
 import { MessageMarkLine, MessageMenu } from "./message-marks";
@@ -115,6 +117,7 @@ export function ConversationChat({
 	mentionables,
 	activity,
 	onSend,
+	onAllowDiscussion,
 }: Readonly<{
 	blocks: readonly ConversationBlock[];
 	pending: readonly PendingSend[];
@@ -131,6 +134,8 @@ export function ConversationChat({
 		replyTo?: string,
 		files?: readonly File[],
 	) => void;
+	/** Allows the longer discussion a bot's message proposes, as the reader's next message. */
+	onAllowDiscussion?: (proposal: ConversationMessage, rounds: number) => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const chatRef = useRef<IChatRef>(null);
@@ -216,6 +221,14 @@ export function ConversationChat({
 					: [];
 			}),
 		[thread.conversation.members, directory],
+	);
+	const othersBots = useMemo(
+		() =>
+			thread.conversation.members.some(({ principal_id }) => {
+				const member = directory(principal_id);
+				return member.isBot && !isSelfPrincipal(member.ownerId, thread.me);
+			}),
+		[thread.conversation.members, directory, thread.me],
 	);
 
 	const { messages, byId, headers, trailing, runStarts, lastMine } =
@@ -430,6 +443,40 @@ export function ConversationChat({
 							/>
 						);
 					},
+			renderMessageFooter: (message) => {
+				const source = byId.get(message.id);
+				const proposal = source?.discussionProposal;
+				if (!source || !proposal || draftIds.has(source.id)) return null;
+				const granted = grantFor(allMessages, source.id);
+				return (
+					<div className="pr-4 pl-11.5">
+						<DiscussionProposalCard
+							botName={directory(source.senderId).name}
+							rounds={proposal.rounds}
+							reason={proposal.reason}
+							estimate={discussionEstimate(
+								allMessages,
+								source.id,
+								proposal.rounds,
+							)}
+							allowedBy={
+								granted && {
+									name: directory(granted.senderId).isMe
+										? null
+										: directory(granted.senderId).name,
+									rounds: granted.rounds,
+								}
+							}
+							limited={othersBots}
+							onAllow={
+								readOnly || disabledReason || !onAllowDiscussion
+									? undefined
+									: () => onAllowDiscussion(source, proposal.rounds)
+							}
+						/>
+					</div>
+				);
+			},
 			mentionables,
 			placeholder: disabledReason ?? placeholder,
 			composerDisabled: Boolean(disabledReason),
@@ -456,6 +503,9 @@ export function ConversationChat({
 			mentionables,
 			placeholder,
 			disabledReason,
+			allMessages,
+			othersBots,
+			onAllowDiscussion,
 		],
 	);
 

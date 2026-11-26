@@ -20,7 +20,8 @@ use sea_orm::{
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const WINDOW_HOURS: i64 = 24;
-/// Turns one person or bot who isn't the owner may start on one bot in a day.
+/// Turns one person who isn't the owner may start on one bot in a day, directly or through the
+/// bots their message set talking.
 pub(crate) const REQUESTER_DAILY_TURNS: u64 = 20;
 
 struct Allowance {
@@ -139,16 +140,26 @@ async fn notify<C: ConnectionTrait>(
     Ok(())
 }
 
+/// The turns of `bot_id` that `origin_id` started in the last day: their own messages and the
+/// bot chains those set off; a turn queued before origins were recorded counts for its requester.
 /// Prompted turns only: a direct message, mention or reply. Read-along and reaction turns don't count.
-async fn requester_turns<C: ConnectionTrait>(
+async fn origin_turns<C: ConnectionTrait>(
     db: &C,
     bot_id: &str,
-    requester_id: &str,
+    origin_id: &str,
     now: DateTime<FixedOffset>,
 ) -> Result<u64, ApiError> {
     Ok(bot_turn::Entity::find()
         .filter(bot_turn::Column::BotId.eq(bot_id))
-        .filter(bot_turn::Column::RequesterId.eq(requester_id))
+        .filter(
+            Condition::any()
+                .add(bot_turn::Column::OriginId.eq(origin_id))
+                .add(
+                    Condition::all()
+                        .add(bot_turn::Column::OriginId.is_null())
+                        .add(bot_turn::Column::RequesterId.eq(origin_id)),
+                ),
+        )
         .filter(
             Condition::any()
                 .add(bot_turn::Column::Unprompted.is_null())
@@ -159,9 +170,10 @@ async fn requester_turns<C: ConnectionTrait>(
         .await?)
 }
 
-/// The turns whose requester, when not the owner, has started fewer than
-/// [`REQUESTER_DAILY_TURNS`] on the bot in the last 24 hours. A refused turn isn't queued and
-/// the bot says so in the room, except for a message it only reads along with or a reaction. The owner's own messages never count.
+/// The turns whose origin, the person whose message started their chain, has started fewer than
+/// [`REQUESTER_DAILY_TURNS`] on the bot in the last 24 hours when not its owner. A refused turn
+/// isn't queued and the bot says so in the room, except for a message it only reads along with
+/// or a reaction. Chains the owner started never count, whichever bots carry them on.
 pub(crate) async fn admit_requesters<'a, C: ConnectionTrait>(
     db: &C,
     waking: Vec<Waking<'a>>,
@@ -170,8 +182,8 @@ pub(crate) async fn admit_requesters<'a, C: ConnectionTrait>(
     let mut admitted = Vec::with_capacity(waking.len());
     for item in waking {
         let recipient = item.recipient;
-        if item.requester_id == recipient.owner_id
-            || requester_turns(db, &recipient.bot_id, &item.requester_id, now).await?
+        if item.origin_id == recipient.owner_id
+            || origin_turns(db, &recipient.bot_id, &item.origin_id, now).await?
                 < REQUESTER_DAILY_TURNS
         {
             admitted.push(item);
@@ -179,6 +191,7 @@ pub(crate) async fn admit_requesters<'a, C: ConnectionTrait>(
         }
         tracing::info!(
             bot_id = recipient.bot_id,
+            origin_id = item.origin_id,
             requester_id = item.requester_id,
             "A requester hit the daily turn limit of a bot"
         );

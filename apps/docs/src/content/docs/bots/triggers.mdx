@@ -15,7 +15,7 @@ Every message in a 1:1 chat with a bot wakes it. In rooms the rules are subtler:
 
 - **An @mention or a reply** to one of its messages always wakes the bot.
 - **Reading along.** Otherwise the bot reads people's messages and decides for itself whether answering helps. It may well stay silent. A message that names nobody counts as meant for whoever you were just talking with, so the other bots stay out of it. The bot's owner can switch this off per room with **Answer only when mentioned**.
-- **People other than the owner** can wake a bot up to 20 times a day each. When someone hits the cap, the bot says so in the room. The owner is never capped.
+- **People other than the owner** can wake a bot up to 20 times a day each, counting the turns bots take in a discussion their message started. When someone hits the cap, the bot says so in the room. The owner is never capped.
 
 See [Rooms and people](/bots/rooms/) for invitations, limits and room memory.
 
@@ -26,7 +26,30 @@ Bots wake each other in two ways:
 - **In a room**, a bot's message wakes another bot only if it @mentions or replies to it. Bots never read along with other bots.
 - **Asking directly.** A bot can ask another of your bots a question and wait for the answer. The first time, you choose **Allow once**, **Always allow** or **Deny**; Always allow covers that direction only. Each exchange is kept in a room with you and both bots.
 
-To keep bots from spinning, a chain of bots waking each other stops after 3 hops, a bot asks the same bot at most 5 questions per trigger, and turns that bots start for each other count toward a daily cap set by your plan. Messages from people never count.
+### Discussions in a room
+
+Ask bots in a room to discuss something together, for example "@Scout @Byte work out which supplier fits us and agree on one". The bots can belong to you or to other people. The first bot you name opens and hands the word to the other with an @mention, while the other waits to be addressed. Then they take turns. Each answers the other's points, can check facts with its own apps and data, and hands the word back with an @mention. A bot ends the discussion by writing the outcome without mentioning the other.
+
+For each message from a person, two bots get up to 10 messages, 5 each. Every bot knows how many are left, and the last one sums up what they agreed on and what is still open. Write again to steer them or to give them another 10.
+
+#### Longer discussions
+
+When a topic clearly needs more, such as weighing several options against data the bots have to look up, a bot proposes a longer discussion instead of handing over: up to 20 rounds, with one sentence on why. The proposal shows under its message with:
+
+- the rounds and messages it asks for,
+- an estimate of the model cost, from what the bots' replies in the room have cost so far,
+- who pays: each bot's owner pays for their own bot, and for bots you don't own the turns count toward your 20 a day with each.
+
+The bots wait until someone in the room selects **Allow**. That sends a message that gives the discussion the new budget, and the bot that proposed it carries on. A proposal nobody allows costs nothing more.
+
+### Limits between bots
+
+To keep bots from spinning:
+
+- **Replies** between bots wake each other for 3 hops after a person's message. Past that, only an @mention hands the word over, for up to 10 messages, or up to 40 in a longer discussion someone allowed.
+- **Asking directly**, a bot asks the same bot at most 5 questions per trigger.
+- **Daily cap.** Turns that bots start for each other count toward a daily cap set by your plan. Messages from people never count.
+- **Per person.** Those turns also count toward the 20 a day of the person whose message started them, on every bot that person doesn't own.
 
 ## Schedules
 

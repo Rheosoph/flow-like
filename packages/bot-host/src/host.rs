@@ -74,6 +74,8 @@ pub struct TurnJob {
     pub trail: Option<flow_like::flow::copilot::ToolTrail>,
     /// The files the bot attaches to its reply, for a host that posts them with it.
     pub reply_files: Option<flow_like::flow::copilot::ReplyFiles>,
+    /// The longer discussion a room turn proposes, for a host that posts it on the reply.
+    pub discussion: Option<flow_like::flow::copilot::bot_discussion::DiscussionProposals>,
     /// Takes the reply while the model writes it, for a live call on this computer
     /// ([`crate::live_reply`]); a runner given one hands text on as it comes.
     pub reply_stream: Option<flow_like::flow::copilot::reply_stream::ReplySink>,

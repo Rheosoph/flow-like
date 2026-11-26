@@ -199,5 +199,8 @@ pub(super) fn delivery(kind: ConversationKind, recipients: Vec<BotRecipient>) ->
         kind: InboxEntryKind::Message,
         seq: 1,
         recipients,
+        hands_over: false,
+        chain_origin: None,
+        discussion_hops: None,
     }
 }

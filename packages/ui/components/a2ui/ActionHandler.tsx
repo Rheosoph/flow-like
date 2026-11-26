@@ -83,6 +83,10 @@ import {
 	createNavigateToMessage,
 	interceptA2UINavigationMessage,
 } from "./navigation-message";
+import {
+	UNAVAILABLE_OUTSIDE_RUNNING_PAGE,
+	usePendingExecutionQueue,
+} from "./pending-execution-queue";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
@@ -144,6 +148,13 @@ export interface ExecuteActionOptions {
 	 */
 	origin?: "micro_widget";
 }
+
+type ExecuteActionArgs = [
+	action: Action | undefined,
+	triggeringComponentId: string | undefined,
+	additionalContext: Record<string, unknown>,
+	options: ExecuteActionOptions,
+];
 
 const UNSAFE_STATE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -270,6 +281,8 @@ interface ActionContextValue {
 	setPageState: (key: string, value: unknown) => void;
 	clearPageState: () => void;
 	isPreviewMode: boolean;
+	/** Actions wait for the Page's execution authority instead of being dropped. */
+	executionPending: boolean;
 	openDialog?: (
 		route: string,
 		title?: string,
@@ -302,6 +315,8 @@ interface ActionProviderProps {
 	components?: Record<string, SurfaceComponent>;
 	children: ReactNode;
 	isPreviewMode?: boolean;
+	/** The Page shows a restored bootstrap whose execution authority is not confirmed yet. */
+	executionPending?: boolean;
 	openDialog?: (
 		route: string,
 		title?: string,
@@ -326,6 +341,7 @@ export function ActionProvider({
 	components,
 	children,
 	isPreviewMode = false,
+	executionPending = false,
 	openDialog: openDialogProp,
 	closeDialog: closeDialogProp,
 	onNavigationMessage,
@@ -629,6 +645,7 @@ export function ActionProvider({
 			setPageState,
 			clearPageState,
 			isPreviewMode,
+			executionPending,
 			openDialog,
 			closeDialog,
 			onNavigationMessage,
@@ -656,6 +673,7 @@ export function ActionProvider({
 			setPageState,
 			clearPageState,
 			isPreviewMode,
+			executionPending,
 			openDialog,
 			closeDialog,
 			onNavigationMessage,
@@ -977,12 +995,20 @@ export function useExecuteAction() {
 		globalState,
 		pageState,
 		isPreviewMode,
+		executionPending,
 		openDialog,
 		closeDialog,
 		onNavigationMessage,
 		getElementValues,
 		markComponentTriggering,
 	} = useContext(ActionContext) ?? {};
+	const latestExecuteActionRef = useRef<
+		((...args: ExecuteActionArgs) => Promise<void>) | null
+	>(null);
+	const heldActions = usePendingExecutionQueue<ExecuteActionArgs>(
+		executionPending ?? false,
+		latestExecuteActionRef,
+	);
 
 	const elementSourceRef = useRef<() => ElementSource | null>(() => null);
 	elementSourceRef.current = () =>
@@ -1248,12 +1274,18 @@ export function useExecuteAction() {
 			additionalContext: Record<string, unknown> = {},
 			options: ExecuteActionOptions = {},
 		): Promise<void> {
+			if (action && heldActions.isPending()) {
+				return heldActions.hold(
+					[action, triggeringComponentId, additionalContext, options],
+					options.requireSuccess === true,
+				);
+			}
 			// Only execute actions in preview mode
 			if (!isPreviewMode || !action) {
 				if (options.requireSuccess) {
 					throw new Error(
 						action
-							? "This workflow action is unavailable outside the running page."
+							? UNAVAILABLE_OUTSIDE_RUNNING_PAGE
 							: "No workflow action is configured.",
 					);
 				}
@@ -2236,11 +2268,13 @@ export function useExecuteAction() {
 			pageState,
 			handleA2UIEvents,
 			isPreviewMode,
+			heldActions,
 			widgetInstance,
 			getElementValues,
 			markComponentTriggering,
 			onNavigationMessage,
 		],
 	);
+	latestExecuteActionRef.current = executeAction;
 	return { executeAction, isPreviewMode: isPreviewMode ?? false };
 }

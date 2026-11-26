@@ -39,7 +39,12 @@ async function stat(extra: Record<string, string>) {
 	} as StatComponent;
 	await act(() =>
 		root.render(
-			<A2UIStat component={component} componentId="s" surfaceId="s" />,
+			<A2UIStat
+				component={component}
+				componentId="s"
+				surfaceId="s"
+				renderChild={() => null}
+			/>,
 		),
 	);
 	const element = host.querySelector<HTMLElement>("[data-slot='stat']");

@@ -3,7 +3,10 @@
 import { useTranslation } from "@flow-like/locales";
 import { ImageIcon, MailIcon, PencilIcon } from "lucide-react";
 import { useMemo } from "react";
-import type { IConversation } from "../../state/backend-state/inbox-state";
+import type {
+	IConversation,
+	IInboxDiscussionGrant,
+} from "../../state/backend-state/inbox-state";
 import { IdentityAvatar } from "../identity/identity-avatar";
 import { IdentityHoverCard } from "../identity/identity-hover-card";
 import { Button } from "../ui/button";
@@ -28,6 +31,8 @@ export interface PendingSend {
 	mentions?: readonly string[];
 	replyTo?: string;
 	files?: readonly File[];
+	/** The longer discussion between bots this message allows. */
+	discussion?: IInboxDiscussionGrant;
 	failed: boolean;
 }
 

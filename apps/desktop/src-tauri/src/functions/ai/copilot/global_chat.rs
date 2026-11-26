@@ -714,6 +714,7 @@ pub async fn global_chat_native(
     let notes = options.notes.take();
     let trail = options.trail.take();
     let reply_files = options.reply_files.take();
+    let discussion = options.discussion.take();
     let recovery = options
         .recovery
         .take()
@@ -875,6 +876,9 @@ pub async fn global_chat_native(
         }
         if let Some(files) = reply_files {
             context.host_tools = std::mem::take(&mut context.host_tools).with_reply_files(files);
+        }
+        if let Some(proposals) = discussion {
+            context.host_tools = std::mem::take(&mut context.host_tools).with_discussion(proposals);
         }
         if let Some(key) = conversation_key {
             context.host_tools = std::mem::take(&mut context.host_tools)

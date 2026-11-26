@@ -422,6 +422,7 @@ fn turn(id: &str) -> BotTurn {
         reply_message_id: None,
         error_code: None,
         hops: 0,
+        discussion_hops: None,
         owner_id: "owner".into(),
         requester_id: Some("owner".into()),
         requester_name: None,
@@ -533,6 +534,105 @@ fn an_answered_local_call_transcript_does_not_start_another_turn() {
             false,
         )
         .is_none()
+    );
+}
+
+#[test]
+fn a_bots_hand_over_wakes_a_local_room_bot_up_to_the_discussion_budget() {
+    use flow_like_types::{
+        bot_turn::{MAX_DISCUSSION_HOPS, MAX_HOPS},
+        inbox::ConversationKind,
+    };
+    let from_peer = |id: &str, hops: u32, mentions: &[&str]| {
+        let mut line = plain("What do you think?");
+        line.message_id = id.into();
+        line.sender_id = "peer".into();
+        line.envelope["body"]["hops"] = json!(hops);
+        line.envelope["body"]["mentions"] = json!(mentions);
+        line
+    };
+    let wakes = |entries: &[InboxEntry], kind| {
+        crate::rule::waiting(
+            kind,
+            "bot",
+            entries,
+            entries[entries.len() - 1].created_at,
+            false,
+            false,
+        )
+        .is_some()
+    };
+    let group = ConversationKind::Group;
+    assert!(wakes(
+        &[from_peer("m2", MAX_DISCUSSION_HOPS, &["bot"])],
+        group
+    ));
+    assert!(!wakes(
+        &[from_peer("m2", MAX_DISCUSSION_HOPS + 1, &["bot"])],
+        group
+    ));
+    let mut question = from_peer("m2", MAX_HOPS + 1, &["bot"]);
+    question.envelope["body"]["ask"] = json!({
+        "id": "m2", "origin_conversation": "origin", "hops": MAX_HOPS + 1,
+        "reply_by": "2099-01-01T00:00:00Z",
+    });
+    assert!(
+        !wakes(&[question.clone()], group),
+        "an ask keeps the hop limit"
+    );
+    question.envelope["body"]["hops"] = json!(MAX_HOPS);
+    assert!(wakes(&[question], group));
+
+    let mut own = plain("My view.");
+    own.message_id = "own".into();
+    own.sender_id = "bot".into();
+    let mut answer = from_peer("m3", MAX_HOPS + 1, &[]);
+    answer.envelope["body"]["reply_to"] = json!("own");
+    assert!(
+        !wakes(&[answer.clone(), own.clone()], group),
+        "a reply that doesn't name the bot keeps the hop limit"
+    );
+    answer.envelope["body"]["hops"] = json!(MAX_HOPS);
+    assert!(wakes(&[answer, own], group));
+}
+
+#[test]
+fn a_grant_and_the_budget_bots_carry_on_raise_the_local_hand_over_limit() {
+    use flow_like_types::{
+        bot_turn::{MAX_DISCUSSION_HOPS, discussion_hops},
+        inbox::ConversationKind,
+    };
+    let granted = discussion_hops(12);
+    let wakes = |line: &InboxEntry| {
+        crate::rule::waiting(
+            ConversationKind::Group,
+            "bot",
+            std::slice::from_ref(line),
+            line.created_at,
+            false,
+            false,
+        )
+    };
+    let mut line = plain("What do you think?");
+    line.message_id = "m2".into();
+    line.sender_id = "peer".into();
+    line.envelope["body"]["hops"] = json!(MAX_DISCUSSION_HOPS + 2);
+    line.envelope["body"]["mentions"] = json!(["bot"]);
+    assert!(wakes(&line).is_none(), "past the default budget");
+    line.envelope["body"]["discussion_hops"] = json!(granted);
+    let waiting = wakes(&line).expect("the chain's budget lets it through");
+    assert_eq!(waiting.discussion_hops, Some(granted));
+    line.envelope["body"]["hops"] = json!(granted + 1);
+    assert!(wakes(&line).is_none());
+
+    let mut ask = plain("@bot discuss it with peer");
+    ask.sender_id = flow_like_local_bots::LOCAL_OWNER_ID.into();
+    ask.envelope["body"]["mentions"] = json!(["bot"]);
+    ask.envelope["body"]["discussion"] = json!({ "rounds": 12 });
+    assert_eq!(
+        wakes(&ask).unwrap().discussion_hops,
+        Some(granted),
+        "a person's grant becomes the budget the reply carries on"
     );
 }
 

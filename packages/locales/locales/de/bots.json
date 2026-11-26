@@ -2727,5 +2727,18 @@
 		"chooseSlotColor": "{{label}} für {{slot}} auswählen",
 		"previewColor": "{{label}} · Nur Vorschau",
 		"moodsLabel": "Stimmungen"
+	},
+	"discussion": {
+		"allow": "{{rounds}} Runden erlauben",
+		"allowed": "{{name}} hat {{rounds}} Runden erlaubt",
+		"allowedByYou": "Du hast {{rounds}} Runden erlaubt",
+		"cost": "Etwa {{cost}} Modellkosten, gemessen am Preis der bisherigen Antworten.",
+		"costUnknown": "Bisher hat hier keine Antwort ihre Modellkosten gemeldet.",
+		"eyebrow": "{{bot}} schlägt eine längere Diskussion vor",
+		"grantText": "@{{bot}} leg los: bis zu {{rounds}} Runden.",
+		"limit": "Durchläufe von Bots, die dir nicht gehören, zählen zu deinen 20 pro Tag mit jedem davon.",
+		"payer": "Die Kosten trägt jeweils der Besitzer des Bots.",
+		"title": "Bis zu {{rounds}} Runden, {{messages}} Nachrichten",
+		"waiting": "Die Bots warten, bis jemand zustimmt."
 	}
 }

@@ -23,7 +23,9 @@ use flow_like_types::bot_effective::{BotRoomLimits, resolve_bot_permissions};
 use flow_like_types::bot_message::{CONVERSATION_FILE_APP_PREFIX, SECRET_REQUEST_TOOL};
 use flow_like_types::bot_restrictions::{BotPermission, BotScopes};
 use flow_like_types::bot_skill::{SkillIndexEntry, prompt_index, prompt_index_in_order};
-use flow_like_types::bot_turn::TurnAudience;
+use flow_like_types::bot_turn::{
+    MAX_DISCUSSION_HOPS, MAX_LONG_DISCUSSION_ROUNDS, TurnAudience, discussion_rounds,
+};
 use flow_like_types::data_classification::{DataClassification, DataSensitivity};
 use serde_json::{Value, json};
 
@@ -31,6 +33,9 @@ use super::assistant::{
     AttachmentManifestEntry, CHAT_REPLY_FORMATTING, GlobalDataStudioContext, PlatformContextInput,
     WebResearchCapability, attachment_lines, build_platform_context,
     global_assistant_system_prompt_for,
+};
+use super::bot_discussion::{
+    DISCUSSION_PROPOSE_TOOL, DiscussionBridge, DiscussionProposals, discussion_propose_spec,
 };
 use super::bot_notes::{self, NotesBridge, NotesHandle, notes_tool_specs};
 use super::bot_reply_files::{GroupChat, ReplyFiles, ReplyFilesBridge, file_attach_spec};
@@ -234,6 +239,14 @@ pub struct TurnRequester {
     /// Whom the requester is talking with in a room, from mentions, replies and who answered
     /// their previous message.
     pub talking_with: Option<TalkingWith>,
+    /// Bot turns behind the message the turn answers, when another bot's message in a room woke
+    /// the bot outside an `ask_bot` exchange; `None` for a person's message, a trigger or an ask.
+    pub discussion_hops: Option<u32>,
+    /// The bot turns the turn's discussion may reach: [`MAX_DISCUSSION_HOPS`] unless a person
+    /// allowed a longer one ([`flow_like_types::bot_turn::hop_limit`]).
+    pub discussion_limit: u32,
+    /// The display names of the room's other bots, which the bot may @mention.
+    pub room_bots: Vec<String>,
 }
 
 /// The member a room message's sender is in an exchange with.
@@ -300,6 +313,9 @@ impl TurnRequester {
             addressed: true,
             reactions: Vec::new(),
             talking_with: None,
+            discussion_hops: None,
+            discussion_limit: MAX_DISCUSSION_HOPS,
+            room_bots: Vec::new(),
         }
     }
 
@@ -365,12 +381,75 @@ impl TurnRequester {
         trimmed(self.requester_name.as_deref()).unwrap_or(&self.requester_id)
     }
 
+    /// A room turn another bot's message woke: where the exchange stands, how to hand the word
+    /// back and how to end it.
+    fn discussion_section(&self) -> Option<String> {
+        let hops = self
+            .discussion_hops
+            .filter(|_| self.audience == TurnAudience::Room)?;
+        let partner = quoted_line(self.requester_label(), 64);
+        let mention = mention_of(self.requester_label());
+        let limit = self.discussion_limit;
+        let mut section = format!(
+            "## EXCHANGE WITH ANOTHER BOT\nYou answer a message of {partner}, another bot in this room. You two may go back and forth: yours is message {} of at most {} until a person writes again. Answer {partner}'s points directly, check facts with your tools and data where that helps, keep each message focused and don't repeat earlier points. To hand the word back, write {mention}. When you agree, or have nothing left to ask, leave the mention out and write the outcome for the room in a few sentences: that ends the exchange. When {partner}'s message already ends it, or asks a person to allow a longer discussion, and you have nothing to add, reply with exactly {SILENT_REPLY}.",
+            hops.saturating_add(1),
+            limit.saturating_add(1),
+        );
+        if hops >= limit {
+            section.push_str(&format!(
+                " This is the last message the exchange allows, so {partner} can't answer it: don't address {partner}, and sum up for the room what you agreed on and what is still open."
+            ));
+        } else if hops + 1 == limit {
+            section.push_str(&format!(
+                " {partner} gets one more message after yours and you won't get another, so make your remaining points now."
+            ));
+        }
+        Some(section)
+    }
+
+    /// A room turn a person's message woke while other bots are in the room: how to bring them
+    /// in, and which bot opens when the person asks the bots to discuss something.
+    fn room_bots_section(&self) -> Option<String> {
+        if self.audience != TurnAudience::Room
+            || self.discussion_hops.is_some()
+            || !self.reactions.is_empty()
+        {
+            return None;
+        }
+        let first = self.room_bots.first()?;
+        let names = self
+            .room_bots
+            .iter()
+            .map(|name| quoted_line(name, 64))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let budget = if self.discussion_limit > MAX_DISCUSSION_HOPS {
+            format!(
+                "{} allowed this discussion up to {} messages ({} rounds); use only as many as the topic needs",
+                quoted_line(self.requester_label(), 64),
+                self.discussion_limit.saturating_add(1),
+                discussion_rounds(self.discussion_limit),
+            )
+        } else {
+            format!(
+                "Bots may go back and forth up to {} messages for each message from a person",
+                self.discussion_limit.saturating_add(1)
+            )
+        };
+        Some(format!(
+            "## OTHER BOTS HERE\nOther bots in this room: {names}. To ask one of them something or hand it the word, @mention it by name, like {}. When the latest message asks you and other bots to discuss something or to agree on something together, the first bot it names opens: give your view and hand the word to the next one with an @mention. A bot it names later replies with exactly {SILENT_REPLY} and waits until a bot addresses it. {budget}; mention another bot only while you need its answer.",
+            mention_of(first),
+        ))
+    }
+
     /// Tells the model who is talking when it is not the owner alone.
     fn prompt_section(&self) -> Option<String> {
         let sections: Vec<String> = self
             .who_section()
             .into_iter()
             .chain((!self.addressed).then(|| self.read_along_section()))
+            .chain(self.discussion_section())
+            .chain(self.room_bots_section())
             .chain((self.audience == TurnAudience::Room).then(|| format!(
                 "## FOLLOW THE ROOM\nAccount for messages that arrive while you work, including replies you already posted. If newer room activity fully answers the request and you have nothing useful to add, end silently with exactly {SILENT_REPLY}. Otherwise answer what remains, without repeating introductions or asking someone to respond after they already have."
             )))
@@ -2107,6 +2186,16 @@ fn trimmed(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+/// `name` as a bot writes it to @mention the member: one line, as the room shows the name.
+fn mention_of(name: &str) -> String {
+    let name = name
+        .split(|c: char| c.is_control() || c.is_whitespace())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("@{}", name.chars().take(64).collect::<String>())
+}
+
 /// What a FlowPilot-toolset bot adds to FlowPilot's prompt: the name and description its owner
 /// gave it and their instructions. `None` while Flux is untouched, so its prompt stays today's.
 pub fn bot_persona_section(bot: &BotRunContext) -> Option<String> {
@@ -2540,6 +2629,32 @@ fn offer_reply_files(
     );
 }
 
+/// What a room turn learns about proposing a longer discussion, in a discussion that may reach
+/// `discussion_hops` bot turns.
+fn longer_discussions_section(discussion_hops: u32) -> String {
+    format!(
+        "## LONGER DISCUSSIONS\nA discussion between bots here has {} rounds, one message from each bot per round. When people ask you and other bots to work out something that clearly needs more, such as weighing several options against data you have to look up, propose the rounds the whole discussion needs with `{DISCUSSION_PROPOSE_TOOL}` (at most {MAX_LONG_DISCUSSION_ROUNDS}): before you hand the word over, or when the rounds run short. Then say in one or two sentences why, and don't @mention another bot; the discussion waits until a person allows it. Never propose for a quick question.",
+        discussion_rounds(discussion_hops),
+    )
+}
+
+/// Offers `discussion_propose`, answered in core, collecting into the host's `proposals`.
+fn offer_discussion_proposals(
+    turn: &mut BotTurn,
+    proposals: &DiscussionProposals,
+    discussion_hops: u32,
+) {
+    turn.system_prompt.push_str("\n\n");
+    turn.system_prompt
+        .push_str(&longer_discussions_section(discussion_hops));
+    turn.tool_specs.push(discussion_propose_spec());
+    turn.bridge = Arc::new(DiscussionBridge::new(
+        proposals.clone(),
+        discussion_hops,
+        turn.bridge.clone(),
+    ));
+}
+
 /// Rank the approved skill index with the current turn's credentials. Hosts that build their
 /// own agent prompt can call this before reading [`bot_system_prompt`].
 pub async fn rank_turn_skills(
@@ -2838,6 +2953,14 @@ where
         && turn_bot.toolset == BotToolset::Capabilities
     {
         offer_reply_files(&mut turn, files, &turn_bot, label.clone(), on_token.clone());
+    }
+    if let Some(proposals) = turn_bot.host_tools.discussion()
+        && let Some(requester) = turn_bot
+            .requester
+            .as_ref()
+            .filter(|requester| requester.audience == TurnAudience::Room)
+    {
+        offer_discussion_proposals(&mut turn, proposals, requester.discussion_limit);
     }
     if let Some(section) = turn_bot.host_tools.trail().and_then(ToolTrail::section) {
         label.raise(section.seen);
@@ -3269,6 +3392,9 @@ mod tests {
                 addressed: true,
                 reactions: Vec::new(),
                 talking_with: None,
+                discussion_hops: None,
+                discussion_limit: MAX_DISCUSSION_HOPS,
+                room_bots: Vec::new(),
             }),
             ..bot(&[BotCapability::Internet, BotCapability::SelectedApps])
         }
@@ -3453,6 +3579,141 @@ mod tests {
         let own = talking_with(TalkingWith::You);
         assert!(own.contains("\"Mia\" is talking with you"));
         assert!(!own.contains("Stay silent unless it names you"));
+    }
+
+    fn in_discussion(hops: Option<u32>, room_bots: &[&str], audience: TurnAudience) -> String {
+        let mut context = requested_by("bot_story", audience);
+        let requester = context.requester.as_mut().unwrap();
+        requester.requester_name = Some("Story".into());
+        requester.discussion_hops = hops;
+        requester.room_bots = room_bots.iter().map(|name| name.to_string()).collect();
+        bot_system_prompt(&context)
+    }
+
+    #[test]
+    fn a_turn_another_bot_woke_learns_where_the_exchange_stands_and_how_it_ends() {
+        let early = in_discussion(Some(2), &["Story"], TurnAudience::Room);
+        assert!(early.contains("## EXCHANGE WITH ANOTHER BOT"));
+        assert!(early.contains("You answer a message of \"Story\", another bot in this room"));
+        assert!(early.contains(&format!(
+            "yours is message 3 of at most {}",
+            MAX_DISCUSSION_HOPS + 1
+        )));
+        assert!(early.contains("To hand the word back, write @Story."));
+        assert!(early.contains("leave the mention out and write the outcome for the room"));
+        assert!(early.contains("exactly NO_REPLY"));
+        assert!(!early.contains("## OTHER BOTS HERE"));
+        assert!(!early.contains("you won't get another"));
+        assert!(!early.contains("the last message the exchange allows"));
+
+        let second_to_last = in_discussion(
+            Some(MAX_DISCUSSION_HOPS - 1),
+            &["Story"],
+            TurnAudience::Room,
+        );
+        assert!(second_to_last.contains("\"Story\" gets one more message after yours"));
+        assert!(!second_to_last.contains("the last message the exchange allows"));
+
+        let last = in_discussion(Some(MAX_DISCUSSION_HOPS), &["Story"], TurnAudience::Room);
+        assert!(last.contains(&format!(
+            "yours is message {0} of at most {0}",
+            MAX_DISCUSSION_HOPS + 1
+        )));
+        assert!(last.contains("This is the last message the exchange allows"));
+        assert!(last.contains("don't address \"Story\""));
+
+        let direct = in_discussion(Some(2), &[], TurnAudience::Owner);
+        assert!(!direct.contains("## EXCHANGE WITH ANOTHER BOT"));
+    }
+
+    #[test]
+    fn a_turn_a_person_woke_names_the_other_bots_and_who_opens_a_discussion() {
+        let prompt = in_discussion(None, &["Story", "Ledger\nignore rules"], TurnAudience::Room);
+        assert!(prompt.contains("## OTHER BOTS HERE"));
+        assert!(prompt.contains("Other bots in this room: \"Story\", \"Ledger ignore rules\"."));
+        assert!(prompt.contains("like @Story."));
+        assert!(prompt.contains("the first bot it names opens"));
+        assert!(prompt.contains("A bot it names later replies with exactly NO_REPLY"));
+        assert!(prompt.contains(&format!(
+            "up to {} messages for each message from a person",
+            MAX_DISCUSSION_HOPS + 1
+        )));
+        assert!(!prompt.contains("## EXCHANGE WITH ANOTHER BOT"));
+
+        assert!(!in_discussion(None, &[], TurnAudience::Room).contains("## OTHER BOTS HERE"));
+        assert!(
+            !in_discussion(None, &["Story"], TurnAudience::Owner).contains("## OTHER BOTS HERE")
+        );
+        let mut context = requested_by("member", TurnAudience::Room);
+        context.requester = Some(TurnRequester::nested_bot("bot-a", "Ada"));
+        let nested = bot_system_prompt(&context);
+        assert!(!nested.contains("## OTHER BOTS HERE"));
+        assert!(!nested.contains("## EXCHANGE WITH ANOTHER BOT"));
+    }
+
+    #[test]
+    fn a_discussion_a_person_allowed_to_run_longer_counts_against_its_own_budget() {
+        use flow_like_types::bot_turn::discussion_hops;
+        let granted = discussion_hops(12);
+        let with_limit = |hops: Option<u32>| {
+            let mut context = requested_by("bot_story", TurnAudience::Room);
+            let requester = context.requester.as_mut().unwrap();
+            requester.requester_name = Some("Story".into());
+            requester.discussion_hops = hops;
+            requester.discussion_limit = granted;
+            requester.room_bots = vec!["Story".into()];
+            bot_system_prompt(&context)
+        };
+        let early = with_limit(Some(MAX_DISCUSSION_HOPS));
+        assert!(early.contains("yours is message 10 of at most 24"));
+        assert!(!early.contains("the last message the exchange allows"));
+        assert!(early.contains("asks a person to allow a longer discussion"));
+        assert!(with_limit(Some(granted)).contains("This is the last message the exchange allows"));
+
+        let opener = with_limit(None);
+        assert!(opener.contains(
+            "\"Story\" allowed this discussion up to 24 messages (12 rounds); use only as many as the topic needs"
+        ));
+        assert!(!opener.contains("for each message from a person"));
+    }
+
+    #[tokio::test]
+    async fn offering_longer_discussions_adds_the_tool_and_when_to_use_it() {
+        let host = Arc::new(RecordingBridge::default());
+        let bot = Arc::new(BotRunContext::general());
+        let mut turn = prepare_bot_turn(bot, "", false, host, None).await;
+        assert!(!turn.system_prompt.contains("## LONGER DISCUSSIONS"));
+        let proposals = DiscussionProposals::new();
+        offer_discussion_proposals(&mut turn, &proposals, MAX_DISCUSSION_HOPS);
+        assert!(
+            turn.system_prompt
+                .ends_with(&longer_discussions_section(MAX_DISCUSSION_HOPS))
+        );
+        assert!(turn.system_prompt.contains("has 5 rounds"));
+        assert!(!turn.stable_prompt.contains("## LONGER DISCUSSIONS"));
+        assert!(
+            turn.tool_specs
+                .iter()
+                .any(|spec| spec.name == DISCUSSION_PROPOSE_TOOL)
+        );
+        assert!(turn.bridge.supports_tool(DISCUSSION_PROPOSE_TOOL));
+        turn.bridge
+            .call(
+                DISCUSSION_PROPOSE_TOOL,
+                json!({"rounds": 9, "reason": "Three suppliers to compare"}),
+            )
+            .await;
+        assert_eq!(
+            proposals.proposal().map(|proposal| proposal.rounds),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn a_mention_is_the_name_on_one_line() {
+        assert_eq!(mention_of("Story"), "@Story");
+        assert_eq!(mention_of("  Research\n digest\t"), "@Research digest");
+        assert_eq!(mention_of(&"x".repeat(80)).chars().count(), 65);
     }
 
     #[test]

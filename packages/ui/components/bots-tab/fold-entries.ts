@@ -10,6 +10,8 @@ import type {
 	IInboxApprovalSecret,
 	IInboxAttachmentPart,
 	IInboxDesktopTarget,
+	IInboxDiscussionGrant,
+	IInboxDiscussionProposal,
 	IInboxEntry,
 	IInboxFileHandle,
 	IInboxUiPart,
@@ -23,6 +25,10 @@ import {
 } from "./approval-entry";
 import { noteRefOf } from "./bot-note-entry";
 import { isSelfPrincipal } from "./crew-model";
+import {
+	readDiscussionGrant,
+	readDiscussionProposal,
+} from "./discussion-proposal-model";
 import {
 	type UserContextCardData,
 	userContextRequestOf,
@@ -225,6 +231,10 @@ export interface ConversationMessage {
 	userContextDerived?: boolean;
 	userContextDerivedFrom?: string;
 	note?: IBotNoteRef;
+	/** A bot's request for a longer discussion between the bots here. */
+	discussionProposal?: IInboxDiscussionProposal;
+	/** A person's permission for that: the rounds the bots it wakes may discuss. */
+	discussion?: IInboxDiscussionGrant;
 	/** The window or browser tab the sender pointed the bot at. */
 	pointedAt?: IInboxDesktopTarget;
 	/** Recipients of the email this message was sent as. */
@@ -617,6 +627,10 @@ export function foldInboxEntries(
 			const contextRequest = userContextRequestOf(entry);
 			const mailedTo = mailedToOf(entry);
 			const note = noteRefOf(entry);
+			const discussionProposal = readDiscussionProposal(
+				plainBody(entry)?.discussion_proposal,
+			);
+			const discussion = readDiscussionGrant(plainBody(entry)?.discussion);
 			const pointedAt = pointedAtOf(entry);
 			const ui = uiPartsOf(entry);
 			const rawUsage = plainBody(entry)?.usage_stats;
@@ -650,6 +664,8 @@ export function foldInboxEntries(
 				...(ui.length > 0 ? { ui } : {}),
 				...(replyTo ? { replyTo } : {}),
 				...(note ? { note } : {}),
+				...(discussionProposal ? { discussionProposal } : {}),
+				...(discussion ? { discussion } : {}),
 				...(pointedAt ? { pointedAt } : {}),
 				...(mailedTo.length > 0 ? { mailedTo } : {}),
 				...(approval

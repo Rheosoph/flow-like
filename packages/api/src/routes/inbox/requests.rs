@@ -249,6 +249,9 @@ pub(crate) async fn deliver_held_in<C: ConnectionTrait>(
             kind: InboxEntryKind::Message,
             seq: latest.seq.unwrap_or_default(),
             recipients: recipients.clone(),
+            hands_over: false,
+            chain_origin: None,
+            discussion_hops: None,
         },
     )
     .await?;

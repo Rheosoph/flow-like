@@ -2771,5 +2771,18 @@
 		"chooseSlotColor": "",
 		"previewColor": "",
 		"moodsLabel": ""
+	},
+	"discussion": {
+		"allow": "",
+		"allowed": "",
+		"allowedByYou": "",
+		"cost": "",
+		"costUnknown": "",
+		"eyebrow": "",
+		"grantText": "",
+		"limit": "",
+		"payer": "",
+		"title": "",
+		"waiting": ""
 	}
 }

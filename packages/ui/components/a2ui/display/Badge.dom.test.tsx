@@ -38,7 +38,12 @@ async function badge(extra: Record<string, string>) {
 	} as BadgeComponent;
 	await act(() =>
 		root.render(
-			<A2UIBadge component={component} componentId="b" surfaceId="s" />,
+			<A2UIBadge
+				component={component}
+				componentId="b"
+				surfaceId="s"
+				renderChild={() => null}
+			/>,
 		),
 	);
 	const element = host.querySelector<HTMLElement>("[data-slot='badge']");
