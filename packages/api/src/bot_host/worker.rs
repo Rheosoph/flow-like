@@ -437,6 +437,9 @@ pub(super) async fn holds_lease_or_retry(
     false
 }
 
+/// Who woke the turn and who reads the answer. `discussion` says the turn may be part of a
+/// discussion between bots: neither an `ask_bot` question or answer nor in an exchange room.
+#[allow(clippy::too_many_arguments)]
 async fn turn_requester(
     db: &DatabaseConnection,
     turn: &bot_turn::Model,
@@ -445,6 +448,7 @@ async fn turn_requester(
     addressed: bool,
     reactions: Vec<flow_like::flow::copilot::ReactionNote>,
     talking_with: Option<&str>,
+    discussion: bool,
 ) -> Result<flow_like::flow::copilot::TurnRequester, ApiError> {
     let requester_id = turn
         .requester_id
@@ -455,7 +459,16 @@ async fn turn_requester(
         .chain(talking_with)
         .collect();
     let names = history::sender_names(db, &ids).await?;
+    let in_room = kind == ConversationKind::Group && discussion;
+    let room_bots = if in_room {
+        history::room_bot_names(db, &turn.conversation_id, &turn.bot_id).await?
+    } else {
+        Vec::new()
+    };
+    let hops = u32::try_from(turn.hops).unwrap_or(0);
     Ok(flow_like::flow::copilot::TurnRequester {
+        discussion_hops: (in_room && hops > 0).then_some(hops),
+        room_bots,
         requester_name: names.get(&requester_id).cloned(),
         owner_name: names.get(&turn.owner_id).cloned(),
         requester_id,
@@ -1083,6 +1096,9 @@ async fn attempt_with(
         addressed,
         reactions,
         transcript.talking_with.as_deref(),
+        answered_round.is_none()
+            && asker.is_none()
+            && !crate::routes::inbox::conversations::is_exchange(&conversation),
     )
     .await?;
     if let Some(saved) = &checkpoint {

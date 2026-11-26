@@ -23,9 +23,9 @@ use flow_like_types::{
     bot::BotLocation,
     bot_turn::{
         ERROR_BATCHED, ERROR_BOT_DELETED, ERROR_HOST_LOST, ERROR_QUEUE_EXPIRED, LEASE_SECS,
-        MAX_ATTEMPTS, MAX_HOPS, MAX_RUNNING_PER_OWNER, QUEUED_EXPIRY_SECS, STORED_CANCELLED,
-        STORED_DONE, STORED_FAILED, STORED_QUEUED, STORED_RUNNING, TurnHostKind, TurnStatus,
-        reply_message_id, turn_id,
+        MAX_ATTEMPTS, MAX_DISCUSSION_HOPS, MAX_HOPS, MAX_RUNNING_PER_OWNER, QUEUED_EXPIRY_SECS,
+        STORED_CANCELLED, STORED_DONE, STORED_FAILED, STORED_QUEUED, STORED_RUNNING, TurnHostKind,
+        TurnStatus, reply_message_id, turn_id,
     },
     inbox::{ConversationKind, InboxEntryKind},
 };
@@ -213,6 +213,46 @@ async fn a_persons_unaddressed_message_wakes_every_reading_bot_but_a_bots_messag
     assert!(queues_turn(&by_bot, &addressed));
     addressed.hops = MAX_HOPS + 1;
     assert!(!queues_turn(&by_bot, &addressed));
+
+    by_bot.hands_over = true;
+    assert!(
+        queues_turn(&by_bot, &addressed),
+        "a hand-over gets the discussion budget"
+    );
+    addressed.hops = MAX_DISCUSSION_HOPS;
+    assert!(queues_turn(&by_bot, &addressed));
+    addressed.hops = MAX_DISCUSSION_HOPS + 1;
+    assert!(!queues_turn(&by_bot, &addressed));
+    let mut answered = recipient("bot_4", "user-a", SERVER);
+    answered.replied_to = true;
+    answered.hops = MAX_HOPS;
+    assert!(queues_turn(&by_bot, &answered));
+    answered.hops = MAX_HOPS + 1;
+    assert!(
+        !queues_turn(&by_bot, &answered),
+        "a reply that doesn't name the bot keeps the hop limit"
+    );
+}
+
+#[tokio::test]
+async fn a_hand_over_in_a_room_queues_up_to_the_discussion_budget() {
+    let db = database().await;
+    let mut within = recipient("bot_1", "user-a", SERVER);
+    within.mentioned = true;
+    within.hops = MAX_DISCUSSION_HOPS;
+    let mut past = recipient("bot_2", "user-a", SERVER);
+    past.mentioned = true;
+    past.hops = MAX_DISCUSSION_HOPS + 1;
+    let mut found = delivery(ConversationKind::Group, vec![within, past]);
+    found.sender_id = "bot_9".into();
+    found.hands_over = true;
+    assert_eq!(enqueue_in(&db, &found, at(1)).await.unwrap(), 1);
+    let rows = turns(&db).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].bot_id.as_str(), rows[0].hops),
+        ("bot_1", MAX_DISCUSSION_HOPS as i32)
+    );
 }
 
 #[test]

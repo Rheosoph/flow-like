@@ -302,9 +302,19 @@ pub(crate) async fn start_exchange<C: ConnectionTrait>(
     Ok(id)
 }
 
+const EXCHANGE_KEY_PREFIX: &str = "exchange:";
+
 /// The key under which a pair of bots has its exchange.
 pub(crate) fn exchange_key(low: &str, high: &str) -> String {
-    format!("exchange:{low}:{high}")
+    format!("{EXCHANGE_KEY_PREFIX}{low}:{high}")
+}
+
+/// Whether the conversation is the exchange two bots of one owner ask each other in.
+pub(crate) fn is_exchange(conversation: &conversation::Model) -> bool {
+    conversation
+        .direct_key
+        .as_deref()
+        .is_some_and(|key| key.starts_with(EXCHANGE_KEY_PREFIX))
 }
 
 /// How a person's direct conversation with their own bot is encrypted: end to end while the bot

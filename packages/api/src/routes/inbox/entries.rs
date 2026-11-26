@@ -821,12 +821,26 @@ async fn deliver<'e, C: ConnectionTrait>(
             })
         });
     }
+    let bot_sender = bots.iter().any(|bot| bot.id == event.sender_id);
+    let hands_over = bot_sender
+        && conversation_kind == ConversationKind::Group
+        && event.kind == InboxEntryKind::Message
+        && !super::conversations::is_exchange(conversation)
+        && matches!(&outgoing.content, Content::Plain(envelope) if envelope["body"].get("ask").is_none_or(Value::is_null));
+    let chain_origin = if bot_sender {
+        crate::bot_host::chain_origin(txn, event.sender_id, outgoing.links.reply_to.as_deref())
+            .await?
+    } else {
+        None
+    };
     let mut delivery = BotDelivery {
         conversation_kind,
         sender_id: event.sender_id.to_string(),
         kind: event.kind,
         seq: event.seq,
         recipients: recipients_of(txn, event, bots, &reading_along, outgoing, hops).await?,
+        hands_over,
+        chain_origin,
     };
     if speaks_to_direct_bot(event.sender_id, conversation_kind, bots, outgoing) {
         for recipient in &mut delivery.recipients {

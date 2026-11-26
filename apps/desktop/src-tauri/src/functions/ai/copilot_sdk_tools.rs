@@ -76,13 +76,11 @@ use flow_like::flow::copilot::public_web::{
 use flow_like::flow::copilot::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, HTTP_REQUEST_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL,
     MEMORY_STORE_TOOL, OPEN_URL_TOOL, PlatformToolSpec, READ_ONLY_DATABASE_OPERATIONS,
-    UI_PATTERNS_TOOL,
-    READ_WRITE_DATABASE_OPERATIONS, cross_board_source_tool_specs, data_studio_database_tool_spec,
-    data_studio_specialist_tool_specs, global_assistant_tool_specs, home_specialist_tool_specs,
-    interact_app_page_tool_spec, missing_required_args, public_web_tool_specs,
-    resolve_tool_approval, run_ui_patterns, runtime_execution_tool_specs,
-    scoped_call_app_chat_spec,
-    scout_specialist_tool_specs, workspace_research_tool_specs,
+    READ_WRITE_DATABASE_OPERATIONS, UI_PATTERNS_TOOL, cross_board_source_tool_specs,
+    data_studio_database_tool_spec, data_studio_specialist_tool_specs, global_assistant_tool_specs,
+    home_specialist_tool_specs, interact_app_page_tool_spec, missing_required_args,
+    public_web_tool_specs, resolve_tool_approval, run_ui_patterns, runtime_execution_tool_specs,
+    scoped_call_app_chat_spec, scout_specialist_tool_specs, workspace_research_tool_specs,
 };
 #[cfg(test)]
 use flow_like::flow::copilot::typed_ir_schema_hint;
@@ -4506,6 +4504,8 @@ mod tests {
             addressed: true,
             reactions: Vec::new(),
             talking_with: None,
+            discussion_hops: None,
+            room_bots: Vec::new(),
         });
         assert!(names(Some(&bot)).is_empty());
     }

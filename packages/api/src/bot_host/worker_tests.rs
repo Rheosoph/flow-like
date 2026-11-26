@@ -20,8 +20,8 @@ use flow_like_types::{
     bot::BotLocation,
     bot_message::MessageBody,
     bot_turn::{
-        MAX_HOPS, STORED_DONE, STORED_FAILED, STORED_QUEUED, TurnHostKind, failure_message_id,
-        reply_message_id, turn_id,
+        MAX_DISCUSSION_HOPS, MAX_HOPS, STORED_DONE, STORED_FAILED, STORED_QUEUED, TurnHostKind,
+        failure_message_id, reply_message_id, turn_id,
     },
     inbox::{ConversationKind, tombstone_envelope},
 };
@@ -350,6 +350,7 @@ fn a_reply_answers_the_trigger_one_hop_further_and_a_failure_names_its_code() {
         error_code: None,
         hops: 2,
         requester_id: Some("user-a".into()),
+        origin_id: Some("user-a".into()),
         audience: "OWNER".into(),
         status_text: None,
         unprompted: None,
@@ -618,6 +619,84 @@ async fn bots_answering_each_other_stop_at_the_hop_cap() {
     assert!(queued.is_empty(), "{queued:?}");
 }
 
+#[tokio::test]
+async fn bots_handing_each_other_the_word_in_a_room_get_the_discussion_budget() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    insert_bot(&db, "bot_2", "user-b", "SERVER").await;
+    let members = ["user-a", "user-b", "bot_1", "bot_2"];
+    conversation(&db, "c1", "GROUP", "PLAIN", &members).await;
+    message(
+        &db,
+        "c1",
+        "m1",
+        "user-a",
+        1,
+        json!({ "text": "@bot_1 @bot_2 agree on a plan", "mentions": ["bot_1", "bot_2"] }),
+        &members,
+    )
+    .await;
+    db.execute_unprepared(r#"UPDATE public."Conversation" SET "lastSeq" = 1"#)
+        .await
+        .unwrap();
+    let opener = BotRecipient {
+        bot_id: "bot_1".into(),
+        owner_id: "user-a".into(),
+        location: BotLocation::Server,
+        device_id: None,
+        hands_off: false,
+        mentioned: true,
+        replied_to: false,
+        read_along: false,
+        reacted: false,
+        conversation_id: "c1".into(),
+        trigger_message_id: "m1".into(),
+        hops: 0,
+        interactive: false,
+    };
+    enqueue_in(
+        &db,
+        &super::fixture::delivery(ConversationKind::Group, vec![opener]),
+        now_millis(),
+    )
+    .await
+    .unwrap();
+
+    let (mut bot, mut trigger) = ("bot_1", "m1".to_string());
+    let mut ran = Vec::new();
+    loop {
+        let turn = claim_now(&db, bot, &trigger, "h1").await;
+        ran.push((bot, turn.hops));
+        assert_eq!(turn.origin_id.as_deref(), Some("user-a"), "{bot}");
+        let partner = if bot == "bot_1" { "bot_2" } else { "bot_1" };
+        let reply_id = reply_message_id(bot, &trigger);
+        let text = format!("@{partner} what do you make of this?");
+        let outgoing = validate_send(reply_request(&turn, reply_id.clone(), &text, None)).unwrap();
+        let claim = TurnClaim {
+            id: turn.id.clone(),
+            host_id: "h1".into(),
+        };
+        reply_in(&db, "c1", bot, &claim, &outgoing, now_millis())
+            .await
+            .unwrap();
+        let queued_next = bot_turn::Entity::find_by_id(turn_id(partner, &reply_id))
+            .one(&db)
+            .await
+            .unwrap();
+        if queued_next.is_none() {
+            break;
+        }
+        (bot, trigger) = (partner, reply_id);
+    }
+    let expected: Vec<(&str, i32)> = (0..=MAX_DISCUSSION_HOPS as i32)
+        .map(|hops| (if hops % 2 == 0 { "bot_1" } else { "bot_2" }, hops))
+        .collect();
+    assert_eq!(
+        ran, expected,
+        "each bot gets five turns; the last reply hands over to no one"
+    );
+}
+
 #[test]
 fn memory_writes_end_the_retries_but_reads_do_not() {
     let transient = Failure {
@@ -813,6 +892,7 @@ fn reply_turn() -> bot_turn::Model {
         error_code: None,
         hops: 0,
         requester_id: None,
+        origin_id: None,
         audience: "ROOM".into(),
         status_text: None,
         unprompted: None,

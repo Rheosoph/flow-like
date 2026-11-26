@@ -63,11 +63,15 @@ pub async fn delete_board(
         may_delete_events,
     )
     .await?;
-    // A re-created board id must not inherit the deleted board's prerun manifests.
+    // A re-created board id must not inherit the deleted board's prerun manifests or facts.
     let manifest_prefix = format!("{app_id}:{board_id}:");
+    let facts_prefix = manifest_prefix.clone();
     let _ = state
         .prerun_manifest_cache
         .invalidate_entries_if(move |key, _| key.starts_with(&manifest_prefix));
+    let _ = state
+        .page_contract_facts
+        .invalidate_entries_if(move |key, _| key.starts_with(&facts_prefix));
     mutation_guard.ensure_held()?;
     app.save().await?;
 

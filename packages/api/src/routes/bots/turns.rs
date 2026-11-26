@@ -51,7 +51,8 @@ pub struct BotTurn {
     /// Why the turn failed or was dropped, e.g. `BOT_TURN_TIMEOUT`; `BATCHED` marks a turn a
     /// later one answered together with it (`reply_message_id` names the answer).
     pub error_code: Option<String>,
-    /// Bot turns that led to the trigger message; at most 3 queue another.
+    /// Bot turns that led to the trigger message. A message with more than 3 queues no turn,
+    /// except a bot's room message that @mentions another bot, which wakes it up to 9.
     pub hops: u32,
     pub owner_id: String,
     /// The person or bot whose message woke the turn.

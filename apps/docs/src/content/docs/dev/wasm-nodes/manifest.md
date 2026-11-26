@@ -109,6 +109,11 @@ The server may cap both values. Executors limit the timeout with
 declares no permissions, and the step that reads node definitions, always get
 1e11.
 
+Hosts released before fuel followed the tier grant 1e11 per call whatever the
+tier declares, so a CPU-heavy package fails there with "Out of fuel". Record the
+requirement in `min_flow_like_version`; the registry stores and shows it, but
+hosts do not enforce it yet.
+
 Choose the smallest tier that supports normal operation. A higher tier increases
 the maximum available resource; it does not reserve that resource in advance.
 

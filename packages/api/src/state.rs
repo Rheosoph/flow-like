@@ -236,6 +236,11 @@ impl CachedBoard {
         self.with_prerun_derivation(|cached| cached.source.manifest())
     }
 
+    /// `Board::content_hash` of this entry, computed once and shared with its Page revisions.
+    pub(crate) fn content_hash(&self) -> flow_like_types::Result<u64> {
+        self.with_prerun_derivation(|cached| cached.source.content_hash(&self.board))
+    }
+
     /// Memoize only derived data. Callers still revalidate storage, Event
     /// permissions and the separately saved draft Page before reaching here.
     pub(crate) fn page_execution_revision(
@@ -299,6 +304,52 @@ impl TrustedUntil {
     pub fn extend(&self, until: std::time::SystemTime) {
         let mut current = self.0.lock();
         *current = Some(current.map_or(until, |current| current.max(until)));
+    }
+
+    /// Carry over what `other` knows about the same object.
+    pub fn extend_from(&self, other: &TrustedUntil) {
+        if let Some(until) = *other.0.lock() {
+            self.extend(until);
+        }
+    }
+}
+
+/// [`PageContractFacts`](flow_like::flow::compiled::prerun::PageContractFacts) of one exact
+/// board revision, plus what this instance knows about the artifacts a Page run needs beside
+/// them. Lets Page contracts resolve without loading the board.
+pub struct CachedPageContractFacts {
+    pub facts: flow_like::flow::compiled::prerun::PageContractFacts,
+    /// Exact-ETag `.board` snapshot of a draft.
+    pub draft_snapshot: TrustedUntil,
+    /// Board-only prerun authority of a draft.
+    pub draft_authority: TrustedUntil,
+    /// Pages of a pinned version, as immutable as the version that owns them.
+    version_pages: parking_lot::Mutex<HashMap<String, Arc<flow_like::a2ui::Page>>>,
+}
+
+impl CachedPageContractFacts {
+    pub fn new(facts: flow_like::flow::compiled::prerun::PageContractFacts) -> Self {
+        Self {
+            facts,
+            draft_snapshot: TrustedUntil::default(),
+            draft_authority: TrustedUntil::default(),
+            version_pages: parking_lot::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// A page of this pinned version read earlier. Never use it for a draft: draft pages are
+    /// saved independently of the board's ETag.
+    pub fn version_page(&self, page_id: &str) -> Option<flow_like::a2ui::Page> {
+        self.version_pages
+            .lock()
+            .get(page_id)
+            .map(|page| (**page).clone())
+    }
+
+    pub fn remember_version_page(&self, page: &flow_like::a2ui::Page) {
+        self.version_pages
+            .lock()
+            .insert(page.id.clone(), Arc::new(page.clone()));
     }
 }
 
@@ -758,6 +809,9 @@ pub struct State {
     /// `{app_id}:{board_id}:` so deleting a board can drop its entries by prefix.
     pub prerun_manifest_cache:
         moka::sync::Cache<String, Arc<flow_like::flow::compiled::PrerunManifest>>,
+    /// Page contract facts keyed like `prerun_manifest_cache` (same `{app_id}:{board_id}:`
+    /// prefix), content-addressed by draft ETag or immutable version.
+    pub page_contract_facts: moka::sync::Cache<String, Arc<CachedPageContractFacts>>,
     pub response_cache: moka::sync::Cache<String, Value>,
     pub(crate) execution_usage_cache: crate::routes::usage::cache::UsageCache,
     /// WASM package permission cache: "wasm:{user_id}:{package_id}" -> the
@@ -1628,6 +1682,11 @@ impl State {
                 .time_to_idle(Duration::from_secs(60 * 60))
                 .build(),
             prerun_manifest_cache: moka::sync::Cache::builder()
+                .max_capacity(4_096)
+                .time_to_idle(Duration::from_secs(24 * 60 * 60))
+                .support_invalidation_closures()
+                .build(),
+            page_contract_facts: moka::sync::Cache::builder()
                 .max_capacity(4_096)
                 .time_to_idle(Duration::from_secs(24 * 60 * 60))
                 .support_invalidation_closures()

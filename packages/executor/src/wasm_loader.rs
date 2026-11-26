@@ -154,9 +154,14 @@ fn positive_env(name: &str) -> Option<u64> {
 /// The longest per-call timeout, and so the most fuel, a package may get on this executor,
 /// `EXECUTOR_WASM_MAX_TIMEOUT_SECS`. An invalid value falls back to the default ceiling.
 fn timeout_ceiling() -> Duration {
-    let secs = positive_env("EXECUTOR_WASM_MAX_TIMEOUT_SECS").unwrap_or(DEFAULT_TIMEOUT_CEILING_SECS);
+    let secs =
+        positive_env("EXECUTOR_WASM_MAX_TIMEOUT_SECS").unwrap_or(DEFAULT_TIMEOUT_CEILING_SECS);
     let deployment = DEPLOYMENT_TIMEOUT_CEILING_SECS.load(Ordering::Relaxed);
-    Duration::from_secs(if deployment > 0 { secs.min(deployment) } else { secs })
+    Duration::from_secs(if deployment > 0 {
+        secs.min(deployment)
+    } else {
+        secs
+    })
 }
 
 /// Optional hard cap on the fuel of one call, `EXECUTOR_WASM_MAX_FUEL`. An invalid value is
@@ -636,6 +641,14 @@ mod tests {
         let mut quick = WasmSecurityConfig::default().limits;
         cap_time_and_fuel("p", &mut quick, Duration::from_secs(1), None);
         assert_eq!(quick.fuel_limit, DEFAULT_FUEL_LIMIT);
+    }
+
+    #[test]
+    fn the_deployment_ceiling_lowers_the_timeout_ceiling() {
+        set_deployment_timeout_ceiling(Duration::from_secs(865));
+        assert!(timeout_ceiling() <= Duration::from_secs(865));
+        set_deployment_timeout_ceiling(Duration::ZERO);
+        assert!(timeout_ceiling() >= Duration::from_secs(1));
     }
 
     #[test]

@@ -204,8 +204,62 @@ async fn a_turn_records_who_woke_it_and_whether_the_conversation_is_shared() {
         );
         let stored = turn_of(&db, trigger).await;
         assert_eq!(stored.requester_id.as_deref(), Some(requester), "{trigger}");
+        assert_eq!(stored.origin_id.as_deref(), Some(requester), "{trigger}");
         assert_eq!(stored.audience, audience, "{trigger}");
     }
+}
+
+/// `bot_2`'s room message that hands `bot_1` the word in a chain `origin` started.
+fn hand_over(trigger: &str, origin: Option<&str>) -> crate::routes::inbox::delivery::BotDelivery {
+    let mut request = room_request("bot_2", trigger, ConversationKind::Group);
+    request.recipients[0].hops = 1;
+    request.hands_over = true;
+    request.chain_origin = origin.map(str::to_string);
+    request
+}
+
+#[tokio::test]
+async fn a_bot_chain_counts_against_the_person_who_started_it_never_the_owner() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    insert_bot(&db, "bot_2", "user-b", "SERVER").await;
+    super::fixture::conversation(
+        &db,
+        "c1",
+        "GROUP",
+        "PLAIN",
+        &["user-a", "user-b", "user-c", "bot_1", "bot_2"],
+    )
+    .await;
+    let now = at(100_000);
+    for index in 0..super::cap::REQUESTER_DAILY_TURNS {
+        let chained = hand_over(&format!("chain-{index}"), Some("user-c"));
+        assert_eq!(enqueue_in(&db, &chained, now).await.unwrap(), 1);
+    }
+    let first = turn_of(&db, "chain-0").await;
+    assert_eq!(first.requester_id.as_deref(), Some("bot_2"));
+    assert_eq!(first.origin_id.as_deref(), Some("user-c"));
+
+    let over = hand_over("chain-over", Some("user-c"));
+    assert_eq!(enqueue_in(&db, &over, now).await.unwrap(), 0);
+    let own = room_request("user-c", "c-asks", ConversationKind::Group);
+    assert_eq!(
+        enqueue_in(&db, &own, now).await.unwrap(),
+        0,
+        "the chain used up the person's own turns"
+    );
+
+    let owners = hand_over("owner-chain", Some("user-a"));
+    assert_eq!(enqueue_in(&db, &owners, now).await.unwrap(), 1);
+    let others = hand_over("d-chain", Some("user-d"));
+    assert_eq!(enqueue_in(&db, &others, now).await.unwrap(), 1);
+    let unknown = hand_over("unknown-chain", None);
+    assert_eq!(enqueue_in(&db, &unknown, now).await.unwrap(), 1);
+    assert_eq!(
+        turn_of(&db, "unknown-chain").await.origin_id.as_deref(),
+        Some("bot_2"),
+        "a chain without a known origin counts for the bot that woke the turn"
+    );
 }
 
 #[tokio::test]

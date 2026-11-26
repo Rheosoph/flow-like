@@ -9,13 +9,15 @@ use std::{collections::HashSet, future::Future, sync::Arc};
 use flow_like::{
     a2ui::{ElementDemand, Page},
     flow::{
-        board::Board,
+        board::{Board, format},
         compiled::prerun::{
-            PAGE_ACTION_ID_PREFIX, PrerunManifest, PrerunPageExecution, page_execution_revision,
+            PAGE_ACTION_ID_PREFIX, PageContractFacts, PrerunManifest, PrerunPageExecution,
+            page_execution_revision,
         },
         event::Event,
     },
 };
+use flow_like_storage::object_store::ObjectStoreExt;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use utoipa::ToSchema;
@@ -29,10 +31,13 @@ use crate::{
     middleware::jwt::AppPermissionResponse,
     permission::role_permission::RolePermissions,
     routes::app::prerun_shared::{
-        PrerunPayload, ensure_draft_board_snapshot, ensure_draft_prerun_manifest,
+        BoardRevision, PageManifestSource, PrerunPayload, draft_page_prerun_manifest,
+        ensure_draft_board_snapshot, ensure_draft_board_snapshot_for, ensure_draft_prerun_manifest,
         ensure_versioned_page_prerun_manifest, load_exact_prerun_manifest, load_prerun_manifest,
+        page_contract_facts, remember_page_contract_facts, stored_version_prerun_manifest,
+        trusted_draft_prerun_manifest,
     },
-    state::{AppState, CachedBoard},
+    state::{AppState, CachedBoard, CachedPageContractFacts},
 };
 
 /// A Page lifecycle hook. These names live outside the user-authored action
@@ -292,6 +297,12 @@ async fn resolve_page_contract_inner(
         }
     };
 
+    if let Some(contract) =
+        resolve_page_contract_from_facts(state, app_id, event, configured_page_id, &invalid).await?
+    {
+        return Ok(contract);
+    }
+
     let (cached, page) =
         load_board_and_page(state, app_id, event, configured_page_id, invalid).await?;
     let board = cached.board.clone();
@@ -317,22 +328,12 @@ async fn resolve_page_contract_inner(
         )));
     }
 
-    let page = page?;
-    if page.id != configured_page_id
-        || page
-            .board_id
-            .as_deref()
-            .is_some_and(|board_id| board_id != board.id)
-    {
-        return Err(ApiError::bad_request(
-            "The Page Event configuration is invalid",
-        ));
-    }
+    let page = checked_page(page?, configured_page_id, &board.id)?;
 
     // Published manifests carry the Page map produced at publication. Latest
     // uses the same prerun artifact shape, cached by the exact Board ETag and
     // canonical Page revision, so unchanged drafts do not rebuild their map.
-    let (manifest, entry_node_ids, entry_authority_revision) = match event.board_version {
+    let (manifest, authority, entry_authority_revision) = match event.board_version {
         Some(version) => {
             let authority =
                 load_prerun_manifest(state, app_id, &event.board_id, Some(version)).await?;
@@ -341,19 +342,14 @@ async fn resolve_page_contract_inner(
                 app_id,
                 &event.board_id,
                 version,
-                &board,
+                PageManifestSource::Board(&board),
                 &page,
                 authority.clone(),
             )
             .await?;
-            let entry_node_ids = authority
-                .entry_node_ids
-                .iter()
-                .cloned()
-                .collect::<HashSet<_>>();
             let entry_authority_revision =
-                (!entry_node_ids.is_empty()).then(|| authority.signature.clone());
-            (manifest, entry_node_ids, entry_authority_revision)
+                (!authority.entry_node_ids.is_empty()).then(|| authority.signature.clone());
+            (manifest, authority, entry_authority_revision)
         }
         None => {
             // Storage stays the authority for both artifacts; their checks
@@ -373,11 +369,6 @@ async fn resolve_page_contract_inner(
             .await;
             snapshot?;
             let authority = authority?;
-            let entry_node_ids = authority
-                .entry_node_ids
-                .iter()
-                .cloned()
-                .collect::<HashSet<_>>();
             let entry_authority_revision = Some(authority.signature.clone());
             let manifest =
                 crate::routes::app::prerun_shared::draft_page_prerun_manifest_for_cached_board(
@@ -389,48 +380,335 @@ async fn resolve_page_contract_inner(
                     &page,
                 )
                 .await?;
-            (manifest, entry_node_ids, entry_authority_revision)
+            (manifest, authority, entry_authority_revision)
         }
     };
-    let page_execution = manifest
-        .page_events
-        .iter()
-        .find(|candidate| candidate.page_id == configured_page_id)
-        .cloned()
-        .map(Ok)
+    let page_execution = page_execution_of(&manifest, configured_page_id)
         .unwrap_or_else(|| PrerunPageExecution::from_page(&board, &page))
-        .map_err(|error| {
-            tracing::warn!(
-                board_id = %board.id,
-                page_id = %page.id,
-                error = %error,
-                "Page execution contract is invalid"
-            );
-            ApiError::bad_request("The Page execution contract is invalid")
-        })?;
+        .map_err(|error| invalid_page_execution(&board.id, &page.id, &error))?;
     let manifest_revision = cached
         .page_execution_revision(&page_execution)
-        .map_err(|error| {
-            ApiError::internal_error(flow_like_types::anyhow!(
-                "failed to derive Page execution revision: {error}"
-            ))
-        })?;
-    let mut prerun = PrerunPayload::from(&*manifest);
+        .map_err(revision_failed)?;
+
+    let revision = match event.board_version {
+        Some(version) => BoardRevision::Version(version),
+        None => BoardRevision::Draft {
+            e_tag: cached.e_tag.trim(),
+        },
+    };
+    if entry_authority_revision.is_some() {
+        remember_page_contract_facts(
+            state,
+            app_id,
+            &event.board_id,
+            revision,
+            &cached,
+            &authority,
+        )
+        .await;
+    }
+    Ok(finish_contract(
+        board_etag,
+        page,
+        page_execution,
+        manifest_revision,
+        &manifest,
+        &authority,
+        entry_authority_revision,
+    ))
+}
+
+fn checked_page(page: Page, page_id: &str, board_id: &str) -> Result<Page, ApiError> {
+    if page.id != page_id
+        || page
+            .board_id
+            .as_deref()
+            .is_some_and(|owner| owner != board_id)
+    {
+        return Err(ApiError::bad_request(
+            "The Page Event configuration is invalid",
+        ));
+    }
+    Ok(page)
+}
+
+fn page_execution_of(
+    manifest: &PrerunManifest,
+    page_id: &str,
+) -> Option<flow_like_types::Result<PrerunPageExecution>> {
+    manifest
+        .page_events
+        .iter()
+        .find(|candidate| candidate.page_id == page_id)
+        .cloned()
+        .map(Ok)
+}
+
+fn invalid_page_execution(
+    board_id: &str,
+    page_id: &str,
+    error: &flow_like_types::Error,
+) -> ApiError {
+    tracing::warn!(
+        board_id,
+        page_id,
+        error = %error,
+        "Page execution contract is invalid"
+    );
+    ApiError::bad_request("The Page execution contract is invalid")
+}
+
+fn revision_failed(error: flow_like_types::Error) -> ApiError {
+    ApiError::internal_error(flow_like_types::anyhow!(
+        "failed to derive Page execution revision: {error}"
+    ))
+}
+
+fn finish_contract(
+    board_etag: Option<String>,
+    page: Page,
+    page_execution: PrerunPageExecution,
+    manifest_revision: String,
+    manifest: &PrerunManifest,
+    authority: &PrerunManifest,
+    entry_authority_revision: Option<String>,
+) -> ResolvedPageContract {
+    let mut prerun = PrerunPayload::from(manifest);
     prerun.signature = manifest_revision.clone();
     let element_demand = ElementDemand {
         selectors: manifest.element_selectors.clone(),
         dynamic: manifest.element_reads_dynamic,
     };
-    Ok(ResolvedPageContract {
+    ResolvedPageContract {
         board_etag,
         page,
         page_execution,
         manifest_revision,
         prerun,
-        entry_node_ids,
+        entry_node_ids: authority.entry_node_ids.iter().cloned().collect(),
         entry_authority_revision,
         element_demand,
-    })
+    }
+}
+
+/// Resolve the contract from what an earlier board load persisted for the
+/// exact board revision, without loading the board. `None` when an artifact is
+/// missing or disagrees: the caller then loads the board, which also persists
+/// what was missing.
+#[tracing::instrument(
+    target = "flow_like::observability",
+    name = "page.contract.facts",
+    skip_all
+)]
+async fn resolve_page_contract_from_facts(
+    state: &AppState,
+    app_id: &str,
+    event: &Event,
+    page_id: &str,
+    invalid: &impl Fn() -> ApiError,
+) -> Result<Option<ResolvedPageContract>, ApiError> {
+    match event.board_version {
+        Some(version) => {
+            pinned_contract_from_facts(state, app_id, event, version, page_id, invalid).await
+        }
+        None => draft_contract_from_facts(state, app_id, event, page_id, invalid).await,
+    }
+}
+
+async fn draft_contract_from_facts(
+    state: &AppState,
+    app_id: &str,
+    event: &Event,
+    page_id: &str,
+    invalid: &impl Fn() -> ApiError,
+) -> Result<Option<ResolvedPageContract>, ApiError> {
+    let board_id = event.board_id.as_str();
+    let Some(e_tag) = board_source_etag(state, app_id, board_id, None).await else {
+        return Ok(None);
+    };
+    let (stored, page) = flow_like_types::tokio::join!(
+        async {
+            let revision = BoardRevision::Draft { e_tag: &e_tag };
+            let Some(facts) = page_contract_facts(state, app_id, board_id, revision).await else {
+                return Ok(None);
+            };
+            let authority = trusted_draft_prerun_manifest(
+                state,
+                app_id,
+                board_id,
+                &e_tag,
+                &facts.draft_authority,
+            )
+            .await?;
+            Ok::<_, ApiError>(authority.map(|authority| (facts, authority)))
+        },
+        draft_page(state, app_id, board_id, page_id)
+    );
+    let Some((facts, authority)) = stored? else {
+        return Ok(None);
+    };
+    if !facts_describe(&facts, board_id, None, &authority) {
+        return Ok(None);
+    }
+    let page = checked_page(page.map_err(|_| invalid())?, page_id, board_id)?;
+    ensure_draft_board_snapshot_for(state, app_id, board_id, &e_tag, &facts.draft_snapshot).await?;
+    let manifest = draft_page_prerun_manifest(
+        state,
+        app_id,
+        board_id,
+        &e_tag,
+        PageManifestSource::Facts(&facts.facts),
+        &authority,
+        &page,
+    )
+    .await?;
+    contract_from_facts(&facts.facts, &authority, &manifest, page, Some(e_tag)).map(Some)
+}
+
+async fn pinned_contract_from_facts(
+    state: &AppState,
+    app_id: &str,
+    event: &Event,
+    version: (u32, u32, u32),
+    page_id: &str,
+    invalid: &impl Fn() -> ApiError,
+) -> Result<Option<ResolvedPageContract>, ApiError> {
+    let board_id = event.board_id.as_str();
+    // Facts outlive a deleted board in memory; the version itself must still exist.
+    if board_source_etag(state, app_id, board_id, Some(version))
+        .await
+        .is_none()
+    {
+        return Ok(None);
+    }
+    // Legacy authorities carry no entry nodes; only the board can answer for them.
+    let Some(authority) = stored_version_prerun_manifest(state, app_id, board_id, version)
+        .await?
+        .filter(|authority| !authority.entry_node_ids.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(facts) =
+        page_contract_facts(state, app_id, board_id, BoardRevision::Version(version)).await
+    else {
+        return Ok(None);
+    };
+    if !facts_describe(&facts, board_id, Some(version), &authority) {
+        return Ok(None);
+    }
+    let page = pinned_page_from_facts(state, app_id, board_id, version, page_id, &facts)
+        .await
+        .map_err(|_| invalid())?;
+    let page = checked_page(page, page_id, board_id)?;
+    let manifest = ensure_versioned_page_prerun_manifest(
+        state,
+        app_id,
+        board_id,
+        version,
+        PageManifestSource::Facts(&facts.facts),
+        &page,
+        authority.clone(),
+    )
+    .await?;
+    contract_from_facts(&facts.facts, &authority, &manifest, page, None).map(Some)
+}
+
+/// The facts and authority were derived from one board value of this revision,
+/// and this runtime can serve that board's format.
+fn facts_describe(
+    facts: &CachedPageContractFacts,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+    authority: &PrerunManifest,
+) -> bool {
+    let facts = &facts.facts;
+    facts.board_id == board_id
+        && version.is_none_or(|version| facts.version == version)
+        && facts.authority_signature == authority.signature
+        && authority.page_events.is_empty()
+        && format::ensure_supported(facts.required_format_version).is_ok()
+}
+
+fn contract_from_facts(
+    facts: &PageContractFacts,
+    authority: &PrerunManifest,
+    manifest: &PrerunManifest,
+    page: Page,
+    board_etag: Option<String>,
+) -> Result<ResolvedPageContract, ApiError> {
+    let page_execution = page_execution_of(manifest, &page.id)
+        .unwrap_or_else(|| facts.page_execution(authority, &page))
+        .map_err(|error| invalid_page_execution(&facts.board_id, &page.id, &error))?;
+    let manifest_revision = facts
+        .page_execution_revision(authority, &page_execution)
+        .map_err(revision_failed)?;
+    Ok(finish_contract(
+        board_etag,
+        page,
+        page_execution,
+        manifest_revision,
+        manifest,
+        authority,
+        Some(authority.signature.clone()),
+    ))
+}
+
+/// The ETag storage holds for the board source right now, or `None` when it
+/// cannot be read, so the caller's board load reports the failure.
+async fn board_source_etag(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+) -> Option<String> {
+    let storage_root = flow_like_storage::Path::from("apps").join(app_id.to_string());
+    let path = Board::proto_path(&storage_root, board_id, version);
+    let head = state
+        .meta_bucket
+        .as_generic()
+        .head(&path)
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "page.source.head"
+        ))
+        .await;
+    match head {
+        Ok(meta) => meta
+            .e_tag
+            .map(|e_tag| e_tag.trim().to_string())
+            .filter(|e_tag| !e_tag.is_empty()),
+        Err(error) => {
+            tracing::debug!(board_id, error = %error, "Page board HEAD failed, loading the board");
+            None
+        }
+    }
+}
+
+/// A pinned version's Page is as immutable as the version, so it stays with
+/// the facts of that version.
+async fn pinned_page_from_facts(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    version: (u32, u32, u32),
+    page_id: &str,
+    facts: &CachedPageContractFacts,
+) -> flow_like_types::Result<Page> {
+    if let Some(page) = facts.version_page(page_id) {
+        return Ok(page);
+    }
+    let page = async {
+        let master = state.master_state(state).await?;
+        let store = Board::meta_store(&master).await?;
+        let storage_root = flow_like_storage::Path::from("apps").join(app_id.to_string());
+        Board::new_detached(Some(board_id.to_string()), storage_root)
+            .load_versioned_page(page_id, version, Some(store))
+            .await
+    }
+    .instrument(page_load_span())
+    .await?;
+    facts.remember_version_page(&page);
+    Ok(page)
 }
 
 /// Resolve a Page trigger after the route has evaluated normal Event runtime
@@ -909,6 +1187,101 @@ mod tests {
     use crate::{backend_jwt::TokenType, execution::PAGE_ACTION_CAPABILITY_VERSION};
     use axum::http::StatusCode;
     use flow_like::flow::event::{EventVariant, EventVariantMode};
+
+    fn facts_for(board: &Board) -> (CachedPageContractFacts, PrerunManifest) {
+        let authority = PrerunManifest::from_board(board);
+        let facts = PageContractFacts::from_board(board, &authority, board.content_hash());
+        (CachedPageContractFacts::new(facts), authority)
+    }
+
+    #[test]
+    fn facts_serve_a_contract_only_for_the_board_value_they_describe() {
+        let mut board = Board::new_detached(
+            Some("board-1".into()),
+            flow_like_storage::Path::from("apps").join("app-1"),
+        );
+        board.version = (1, 2, 3);
+        let (facts, authority) = facts_for(&board);
+        assert!(facts_describe(&facts, "board-1", None, &authority));
+        assert!(facts_describe(
+            &facts,
+            "board-1",
+            Some((1, 2, 3)),
+            &authority
+        ));
+
+        assert!(!facts_describe(&facts, "board-2", None, &authority));
+        assert!(!facts_describe(
+            &facts,
+            "board-1",
+            Some((1, 2, 4)),
+            &authority
+        ));
+
+        let mut other_authority = authority.clone();
+        other_authority.signature = "another-board-value".into();
+        assert!(!facts_describe(&facts, "board-1", None, &other_authority));
+
+        let page = Page::new("page-1", "Page", "/");
+        let page_bound = PrerunManifest::from_board_and_page(&board, &page).unwrap();
+        let (mut bound_facts, _) = facts_for(&board);
+        bound_facts.facts.authority_signature = page_bound.signature.clone();
+        assert!(
+            !facts_describe(&bound_facts, "board-1", None, &page_bound),
+            "a Page-bound manifest is never board-only authority"
+        );
+
+        let (mut newer_format, _) = facts_for(&board);
+        newer_format.facts.required_format_version = u32::MAX;
+        assert!(!facts_describe(&newer_format, "board-1", None, &authority));
+    }
+
+    #[test]
+    fn facts_contracts_match_the_board_contract() {
+        let mut board = Board::new_detached(
+            Some("board-1".into()),
+            flow_like_storage::Path::from("apps").join("app-1"),
+        );
+        let mut entry = flow_like::flow::node::Node::new("events_simple", "load", "", "Events");
+        entry.id = "load".into();
+        entry.set_start(true);
+        board.nodes.insert(entry.id.clone(), entry);
+        board.page_ids.push("page-1".into());
+        let mut page = Page::new("page-1", "Page", "/");
+        page.board_id = Some("board-1".into());
+        page.on_load_event_id = Some("load".into());
+        let (facts, authority) = facts_for(&board);
+
+        let manifest = PrerunManifest::from_board_and_page(&board, &page).unwrap();
+        let contract = contract_from_facts(
+            &facts.facts,
+            &authority,
+            &manifest,
+            page.clone(),
+            Some("\"etag-1\"".into()),
+        )
+        .unwrap();
+        let execution = PrerunPageExecution::from_page(&board, &page).unwrap();
+        assert_eq!(contract.page_execution, execution);
+        assert_eq!(
+            contract.manifest_revision,
+            page_execution_revision(&board, &execution).unwrap()
+        );
+        assert_eq!(contract.prerun.signature, contract.manifest_revision);
+        assert_eq!(contract.entry_node_ids, HashSet::from(["load".to_string()]));
+        assert_eq!(
+            contract.entry_authority_revision.as_deref(),
+            Some(authority.signature.as_str())
+        );
+        assert_eq!(contract.board_etag.as_deref(), Some("\"etag-1\""));
+
+        let board_only =
+            contract_from_facts(&facts.facts, &authority, &authority, page, None).unwrap();
+        assert_eq!(
+            board_only.manifest_revision, contract.manifest_revision,
+            "a manifest without the Page falls back to extracting it from the facts"
+        );
+    }
 
     fn matching_dynamic_claims() -> PageActionClaims {
         PageActionClaims {

@@ -3,7 +3,7 @@
 //! edits replace their message's text; deleted and sealed messages are left out.
 
 use crate::{
-    entity::{bot, inbox_entry, user},
+    entity::{bot, conversation_member, inbox_entry, user},
     error::ApiError,
 };
 use flow_like::flow::copilot::{ChatMessage, ChatRole, ReactionNote};
@@ -381,6 +381,29 @@ pub(crate) async fn sender_names<C: ConnectionTrait>(
         }
     }
     Ok(names)
+}
+
+/// The display names of the room's active bot members other than `bot_id`, the way a bot
+/// @mentions them; a bot without a name is left out, since nothing could name it.
+pub(crate) async fn room_bot_names<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    bot_id: &str,
+) -> Result<Vec<String>, DbErr> {
+    let ids: Vec<String> = conversation_member::Entity::find()
+        .select_only()
+        .column(conversation_member::Column::PrincipalId)
+        .filter(conversation_member::Column::ConversationId.eq(conversation_id))
+        .filter(conversation_member::Column::PrincipalKind.eq("BOT"))
+        .filter(conversation_member::Column::PrincipalId.ne(bot_id))
+        .filter(crate::routes::inbox::active_member())
+        .order_by_asc(conversation_member::Column::PrincipalId)
+        .into_tuple()
+        .all(db)
+        .await?;
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let names = sender_names(db, &refs).await?;
+    Ok(ids.iter().filter_map(|id| names.get(id).cloned()).collect())
 }
 
 /// A bot's name as rooms show it: its own, else its built-in kind's.

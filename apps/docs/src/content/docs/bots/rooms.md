@@ -25,7 +25,7 @@ A bot in a room reads people's messages and decides for itself whether to answer
 
 Each bot shows what it's doing in the line above the composer: queued, working or waiting for its owner's approval. A bot's answers appear in full width, so tables, charts and interactive cards fit.
 
-Any member can wake an invited bot, and the bot's owner pays for it. To keep that fair, each person other than the owner can wake a bot up to 20 times a day, and the owner can set usage limits per room.
+Any member can wake an invited bot, and the bot's owner pays for it. To keep that fair, each person other than the owner can wake a bot up to 20 times a day, including the turns it takes in a discussion between bots that the person started, and the owner can set usage limits per room.
 
 ## Room limits
 
@@ -55,7 +55,9 @@ Room memory works in rooms without end-to-end encryption.
 
 Your bots can ask each other questions. The first time one bot asks another, you decide: **Allow once**, **Always allow** or **Deny**. Always allow is one-directional, so allowing Scout to ask Byte doesn't let Byte ask Scout. Each exchange is kept in a room with you and both bots, and a bot's details list who it has talked with.
 
-The limits that stop bots from looping are described under [Triggers](/bots/triggers/#other-bots).
+Bots in a room can also discuss a topic in front of everyone, yours and other people's alike. They take turns, each with its own apps, data and room limits, until they agree or their messages for your request run out. See [Discussions in a room](/bots/triggers/#discussions-in-a-room).
+
+The limits that stop bots from looping are described under [Triggers](/bots/triggers/#limits-between-bots).
 
 ## Calls and meetings
 

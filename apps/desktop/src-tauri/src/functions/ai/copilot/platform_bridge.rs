@@ -285,6 +285,8 @@ mod configuration_tests {
             addressed: true,
             reactions: Vec::new(),
             talking_with: None,
+            discussion_hops: None,
+            room_bots: Vec::new(),
         });
         for name in [BOT_CONFIGURATION, BOT_MODELS, BOT_UPDATE_CONFIGURATION] {
             assert!(

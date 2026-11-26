@@ -53,6 +53,19 @@ pub(crate) struct BotDelivery {
     pub seq: i64,
     /// Never empty: an entry no bot received isn't delivered.
     pub recipients: Vec<BotRecipient>,
+    /// A bot's message in a room, other than an `ask_bot` question or exchange: it hands the
+    /// bots it @mentions the word ([`flow_like_types::bot_turn::hands_over`]).
+    pub hands_over: bool,
+    /// The person whose message started the chain of bot turns behind a bot's message, from the
+    /// turn that wrote it; `None` for anyone else's entry, which starts a chain of its own.
+    pub chain_origin: Option<String>,
+}
+
+impl BotDelivery {
+    /// The most bot turns behind the entry that still wake `recipient`.
+    pub(crate) fn hop_limit(&self, recipient: &BotRecipient) -> u32 {
+        flow_like_types::bot_turn::hop_limit(self.hands_over && recipient.mentioned)
+    }
 }
 
 /// Where bot hosts learn about a sent entry, inside the transaction that wrote it: turns for the

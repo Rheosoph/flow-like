@@ -6,8 +6,37 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Bot turns that may lead to one message: a person's message carries 0, a bot's reply the
-/// answered turn's hops + 1, and a message with more than this many queues no turn.
+/// answered turn's hops + 1, and a message with more than this many queues no turn, unless it
+/// hands the word to a bot ([`hop_limit`]).
 pub const MAX_HOPS: u32 = 3;
+/// Rounds two bots may go back and forth in a room for one message from a person; a round is one
+/// message from each.
+pub const MAX_DISCUSSION_ROUNDS: u32 = 5;
+/// Bot turns behind a message that still wake a bot it hands the word to ([`hands_over`]):
+/// [`MAX_DISCUSSION_ROUNDS`] messages from each of two bots.
+pub const MAX_DISCUSSION_HOPS: u32 = 2 * MAX_DISCUSSION_ROUNDS - 1;
+
+/// The most bot turns behind a message that still wake a recipient: [`MAX_DISCUSSION_HOPS`] when
+/// the message hands the recipient the word, [`MAX_HOPS`] for anything else.
+pub const fn hop_limit(handed_over: bool) -> u32 {
+    if handed_over {
+        MAX_DISCUSSION_HOPS
+    } else {
+        MAX_HOPS
+    }
+}
+
+/// Whether a bot's message hands `bot_id` the word: in a group it @mentions the bot and is not an
+/// `ask_bot` question, which keeps [`MAX_HOPS`].
+pub fn hands_over(
+    kind: crate::inbox::ConversationKind,
+    body: &crate::bot_message::MessageBody,
+    bot_id: &str,
+) -> bool {
+    kind == crate::inbox::ConversationKind::Group
+        && body.ask.is_none()
+        && body.mentions.iter().any(|mention| mention == bot_id)
+}
 /// Turns one owner may have running at once.
 pub const MAX_RUNNING_PER_OWNER: usize = 3;
 /// Seconds a claim or heartbeat holds a turn before another host may take it.
@@ -441,6 +470,38 @@ pub fn rate_limit_message_id(bot_id: &str, trigger_message_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hand_over_in_a_room_gets_the_discussion_budget() {
+        use crate::{
+            bot_message::{BotAsk, MessageBody},
+            inbox::ConversationKind,
+        };
+        assert_eq!(MAX_DISCUSSION_HOPS + 1, 2 * MAX_DISCUSSION_ROUNDS);
+        assert_eq!(hop_limit(true), MAX_DISCUSSION_HOPS);
+        assert_eq!(hop_limit(false), MAX_HOPS);
+        let naming = MessageBody {
+            text: "@Story what do you think?".into(),
+            mentions: vec!["bot_story".into()],
+            ..MessageBody::default()
+        };
+        assert!(hands_over(ConversationKind::Group, &naming, "bot_story"));
+        assert!(!hands_over(ConversationKind::Group, &naming, "bot_tiro"));
+        assert!(!hands_over(ConversationKind::Direct, &naming, "bot_story"));
+        let question = MessageBody {
+            ask: Some(BotAsk {
+                id: "ask_1".into(),
+                origin_conversation: "c_origin".into(),
+                hops: 1,
+                reply_by: "2026-11-30T00:00:00Z".into(),
+                chain: vec!["bot_tiro".into()],
+                wait_secs: 0,
+                round: 1,
+            }),
+            ..naming
+        };
+        assert!(!hands_over(ConversationKind::Group, &question, "bot_story"));
+    }
 
     #[test]
     fn a_cut_message_keeps_its_notes_whole() {

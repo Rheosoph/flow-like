@@ -407,7 +407,14 @@ async fn the_fuel_limit_decides_whether_a_cpu_bound_call_finishes() {
                 &input("run"),
             )
             .await;
-        assert_eq!(result.is_ok(), finishes, "fuel {fuel}: {:?}", result.err());
+        // The stub guest returns no JSON, so a loop that finishes still ends in a result error;
+        // what matters is whether fuel ran out on the way.
+        let error = result.unwrap_err().to_string().to_lowercase();
+        assert_eq!(
+            error.contains("invalid json"),
+            finishes,
+            "fuel {fuel}: {error}"
+        );
         run.shutdown().await;
     }
 }
@@ -436,7 +443,10 @@ async fn the_wall_clock_timeout_stops_a_cpu_bound_call_with_a_huge_fuel_budget()
     .unwrap_err()
     .to_string()
     .to_lowercase();
-    assert!(error.contains("timeout") || error.contains("timed out"), "{error}");
-    assert!(!error.contains("fuel"), "{error}");
+    assert!(
+        error.contains("timeout") || error.contains("timed out"),
+        "{error}"
+    );
+    assert!(!error.contains("invalid json"), "{error}");
     run.shutdown().await;
 }

@@ -6,7 +6,7 @@ use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
     bot_message::MessageBody,
     bot_notify::reply_is_proactive,
-    bot_turn::{MAX_HOPS, TurnAudience},
+    bot_turn::{TurnAudience, hands_over, hop_limit},
     inbox::{
         ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, ReactionEvent, TranscriptBody,
         TriggerBody, is_tombstone, net_reactions,
@@ -169,6 +169,18 @@ fn hops_of(message: &Message, bot_sender: bool) -> u32 {
     }
 }
 
+/// Whether `message` still wakes `bot_id` after the bot turns behind it: a bot's room message
+/// that hands it the word ([`hands_over`]) gets the discussion budget, anything else the hop
+/// limit ([`hop_limit`]).
+fn within_hops(kind: ConversationKind, bot_id: &str, message: &Message, bot_sender: bool) -> bool {
+    let handed_over = bot_sender
+        && message
+            .body
+            .as_ref()
+            .is_some_and(|body| hands_over(kind, body, bot_id));
+    hops_of(message, bot_sender) <= hop_limit(handed_over)
+}
+
 fn is_host_reply(message_id: &str) -> bool {
     HOST_REPLY_PREFIXES
         .iter()
@@ -226,10 +238,11 @@ fn addressed(
 /// The newest message of someone else that `bot_id` has yet to answer, from `entries` (newest
 /// first). Direct conversations always wake the bot; in a group it wakes when the bot is
 /// mentioned or replied to, and for a person's message also when the bot reads along (unless
-/// `mentioned_only`). A message of a bot counts at least one hop and none beyond [`MAX_HOPS`]
-/// wakes anyone. Edits, topics, reactions, member events, tombstones and messages sent before
-/// `not_before` are no trigger. A bot with a decision model (`has_decision_model`) also reads
-/// along with spoken call transcripts; without one it would answer every utterance.
+/// `mentioned_only`). A message of a bot counts at least one hop, and none past the hop limit
+/// wakes anyone ([`within_hops`]). Edits, topics, reactions, member events, tombstones and
+/// messages sent before `not_before` are no trigger. A bot with a decision model
+/// (`has_decision_model`) also reads along with spoken call transcripts; without one it would
+/// answer every utterance.
 pub fn waiting(
     kind: ConversationKind,
     bot_id: &str,
@@ -290,7 +303,7 @@ pub fn waiting_held(
                 && message.body.is_some()
                 && message.entry.created_at >= not_before
                 && !hold.is_some_and(|hold| hold.keeps(message))
-                && hops_of(message, bot_sender) <= MAX_HOPS
+                && within_hops(kind, bot_id, message, bot_sender)
                 && (addressed(kind, bot_id, message, &messages)
                     || reads_along(kind, message, mentioned_only, has_decision_model))
         })
@@ -352,10 +365,12 @@ pub fn waiting_participant(
             && message.body.is_some()
             && message.entry.created_at >= not_before
             && !hold.is_some_and(|hold| hold.keeps(message))
-            && hops_of(
+            && within_hops(
+                kind,
+                bot_id,
                 message,
                 participant_id != flow_like_local_bots::LOCAL_OWNER_ID,
-            ) <= MAX_HOPS
+            )
     })?;
     if parked.contains(&flow_like_types::bot_turn::turn_id(
         bot_id,

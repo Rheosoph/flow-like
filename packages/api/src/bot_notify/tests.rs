@@ -97,6 +97,7 @@ async fn turn(db: &DatabaseConnection, id: &str, trigger_kind: &str, hops: i32) 
         error_code: Set(None),
         hops: Set(hops),
         requester_id: Set(None),
+        origin_id: Set(None),
         audience: Set("OWNER".into()),
         status_text: Set(None),
         unprompted: Set(None),

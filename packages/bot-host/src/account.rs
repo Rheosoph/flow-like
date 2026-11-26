@@ -776,6 +776,13 @@ impl Inner {
         let no_prompt = transcript.prompt.is_empty();
         let note = resume_note(grants.as_ref()).await;
         let resumed = note.is_some();
+        // The hub can't read a sealed room's bodies, so a hand-over there keeps the hop limit.
+        let in_room =
+            kind == ConversationKind::Group && !continued && answered_round.is_none() && !sealed;
+        let asks = entries.iter().any(|entry| {
+            entry.message_id == lead.trigger_message_id
+                && crate::rule::parse_body(entry).is_some_and(|body| body.ask.is_some())
+        });
         let requester = TurnRequester {
             requester_id: lead
                 .requester_id
@@ -792,6 +799,12 @@ impl Inner {
                 .talking_with
                 .as_deref()
                 .map(|partner| TalkingWith::of(partner, bot_id, &names)),
+            discussion_hops: (in_room && !asks && lead.hops > 0).then_some(lead.hops),
+            room_bots: if in_room {
+                room_bots(room.as_ref(), bot_id)
+            } else {
+                Vec::new()
+            },
         };
         if reacting && no_prompt {
             return self.stay_silent(lead).await;
@@ -1816,6 +1829,26 @@ impl Inner {
         };
         self.events.turn(&info);
     }
+}
+
+/// The display names of a room's other bots, from the members the hub lists for it.
+fn room_bots(room: Option<&serde_json::Value>, bot_id: &str) -> Vec<String> {
+    room.and_then(|room| room.get("members"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|member| {
+            member
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("bot"))
+                && member
+                    .get("principal_id")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(bot_id)
+        })
+        .filter_map(|member| Some(member.get("name")?.as_str()?.to_owned()))
+        .collect()
 }
 
 fn info_of(turn: &BotTurn, status: TurnStatus) -> TurnInfo {

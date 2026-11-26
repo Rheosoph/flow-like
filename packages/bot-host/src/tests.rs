@@ -536,6 +536,65 @@ fn an_answered_local_call_transcript_does_not_start_another_turn() {
     );
 }
 
+#[test]
+fn a_bots_hand_over_wakes_a_local_room_bot_up_to_the_discussion_budget() {
+    use flow_like_types::{
+        bot_turn::{MAX_DISCUSSION_HOPS, MAX_HOPS},
+        inbox::ConversationKind,
+    };
+    let from_peer = |id: &str, hops: u32, mentions: &[&str]| {
+        let mut line = plain("What do you think?");
+        line.message_id = id.into();
+        line.sender_id = "peer".into();
+        line.envelope["body"]["hops"] = json!(hops);
+        line.envelope["body"]["mentions"] = json!(mentions);
+        line
+    };
+    let wakes = |entries: &[InboxEntry], kind| {
+        crate::rule::waiting(
+            kind,
+            "bot",
+            entries,
+            entries[entries.len() - 1].created_at,
+            false,
+            false,
+        )
+        .is_some()
+    };
+    let group = ConversationKind::Group;
+    assert!(wakes(
+        &[from_peer("m2", MAX_DISCUSSION_HOPS, &["bot"])],
+        group
+    ));
+    assert!(!wakes(
+        &[from_peer("m2", MAX_DISCUSSION_HOPS + 1, &["bot"])],
+        group
+    ));
+    let mut question = from_peer("m2", MAX_HOPS + 1, &["bot"]);
+    question.envelope["body"]["ask"] = json!({
+        "id": "m2", "origin_conversation": "origin", "hops": MAX_HOPS + 1,
+        "reply_by": "2099-01-01T00:00:00Z",
+    });
+    assert!(
+        !wakes(&[question.clone()], group),
+        "an ask keeps the hop limit"
+    );
+    question.envelope["body"]["hops"] = json!(MAX_HOPS);
+    assert!(wakes(&[question], group));
+
+    let mut own = plain("My view.");
+    own.message_id = "own".into();
+    own.sender_id = "bot".into();
+    let mut answer = from_peer("m3", MAX_HOPS + 1, &[]);
+    answer.envelope["body"]["reply_to"] = json!("own");
+    assert!(
+        !wakes(&[answer.clone(), own.clone()], group),
+        "a reply that doesn't name the bot keeps the hop limit"
+    );
+    answer.envelope["body"]["hops"] = json!(MAX_HOPS);
+    assert!(wakes(&[answer, own], group));
+}
+
 #[derive(Clone)]
 enum Mode {
     Reply(&'static str),

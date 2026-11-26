@@ -1842,6 +1842,8 @@ model BotTurn {
   hops             Int          @default(0)
   /// The person or bot whose message woke the turn; null on turns from before the column existed.
   requesterId      String?
+  /// The person whose message started the chain of bot turns this one belongs to; null on turns from before the column existed. The requester daily cap counts by it.
+  originId         String?
   /// OWNER | ROOM: an owner-only conversation, or a room shared with other people.
   audience         String       @default("OWNER")
   /// The running turn's live status line, at most 120 characters; cleared when it stops running.
@@ -1857,6 +1859,7 @@ model BotTurn {
   // The realtime poll's newest turn per owner.
   @@index([ownerId, updatedAt])
   @@index([botId, requesterId, createdAt])
+  @@index([botId, originId, createdAt])
   checkpoint       BotTurnCheckpoint?
 }
 

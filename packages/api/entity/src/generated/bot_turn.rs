@@ -43,6 +43,8 @@ pub struct Model {
     pub hops: i32,
     #[sea_orm(column_name = "requesterId", column_type = "Text", nullable)]
     pub requester_id: Option<String>,
+    #[sea_orm(column_name = "originId", column_type = "Text", nullable)]
+    pub origin_id: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub audience: String,
     #[sea_orm(column_name = "statusText", column_type = "Text", nullable)]

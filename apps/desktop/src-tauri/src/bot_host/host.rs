@@ -810,28 +810,45 @@ impl Inner {
         if reacting && transcript.prompt.is_empty() {
             return End::silent();
         }
-        let requester =
-            (conversation.kind == ConversationKind::Group || reacting || !transcript.addressed)
-                .then(|| {
-                    let requester_id = oldest_first
+        let requester = (conversation.kind == ConversationKind::Group
+            || reacting
+            || !transcript.addressed)
+            .then(|| {
+                let trigger = oldest_first
+                    .iter()
+                    .find(|entry| entry.message_id == waiting.message_id);
+                let requester_id = trigger
+                    .map_or(LOCAL_OWNER_ID, |entry| entry.sender_id.as_str())
+                    .to_owned();
+                let in_room = conversation.kind == ConversationKind::Group;
+                let asks = trigger
+                    .and_then(rule::parse_body)
+                    .is_some_and(|body| body.ask.is_some());
+                flow_like::flow::copilot::TurnRequester {
+                    requester_name: names.get(&requester_id).cloned(),
+                    requester_id,
+                    owner_id: LOCAL_OWNER_ID.to_owned(),
+                    owner_name: names.get(LOCAL_OWNER_ID).cloned(),
+                    audience: waiting.audience,
+                    room: conversation.title.clone(),
+                    addressed: transcript.addressed,
+                    reactions,
+                    talking_with: transcript.talking_with.as_deref().map(|partner| {
+                        flow_like::flow::copilot::TalkingWith::of(partner, bot_id, &names)
+                    }),
+                    discussion_hops: (in_room && !asks && waiting.hops > 0).then_some(waiting.hops),
+                    room_bots: conversation
+                        .members
                         .iter()
-                        .find(|entry| entry.message_id == waiting.message_id)
-                        .map_or(LOCAL_OWNER_ID, |entry| entry.sender_id.as_str())
-                        .to_owned();
-                    flow_like::flow::copilot::TurnRequester {
-                        requester_name: names.get(&requester_id).cloned(),
-                        requester_id,
-                        owner_id: LOCAL_OWNER_ID.to_owned(),
-                        owner_name: names.get(LOCAL_OWNER_ID).cloned(),
-                        audience: waiting.audience,
-                        room: conversation.title.clone(),
-                        addressed: transcript.addressed,
-                        reactions,
-                        talking_with: transcript.talking_with.as_deref().map(|partner| {
-                            flow_like::flow::copilot::TalkingWith::of(partner, bot_id, &names)
-                        }),
-                    }
-                });
+                        .filter(|member| {
+                            in_room
+                                && member.kind == PrincipalKind::Bot
+                                && member.principal_id != *bot_id
+                        })
+                        .filter_map(|member| names.get(&member.principal_id).cloned())
+                        .collect(),
+                }
+            });
         let grants: Arc<dyn GrantStore> = Arc::new(StoreGrants {
             store: self.store.clone(),
             bot_id: bot_id.clone(),

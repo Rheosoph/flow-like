@@ -14,13 +14,17 @@ use crate::{
     cache::{CacheBackendHandle, best_effort},
     error::ApiError,
     execution::compiled_artifacts::draft_object_trusted_until,
-    state::AppState,
+    state::{AppState, CachedPageContractFacts, TrustedUntil},
 };
 use flow_like::flow::{
     board::{Board, ExecutionMode, format},
     compiled::{
         PrerunManifest, decode_manifest, draft_manifest_path, draft_page_manifest_path,
         draft_source_path, encode_manifest, legacy_manifest_path, manifest_path,
+        prerun::{
+            PageContractFacts, decode_page_contract_facts, draft_page_contract_facts_path,
+            encode_page_contract_facts, version_page_contract_facts_path,
+        },
         version_page_manifest_path,
     },
     node::NodePermission,
@@ -441,7 +445,7 @@ pub async fn ensure_versioned_page_prerun_manifest(
     app_id: &str,
     board_id: &str,
     version: (u32, u32, u32),
-    board: &Board,
+    source: PageManifestSource<'_>,
     requested_page: &flow_like::a2ui::Page,
     board_authority: Arc<PrerunManifest>,
 ) -> Result<Arc<PrerunManifest>, ApiError> {
@@ -466,21 +470,49 @@ pub async fn ensure_versioned_page_prerun_manifest(
         state.meta_bucket.as_generic().as_ref(),
         cache_key,
         &path,
-        board,
+        source,
         requested_page,
         &board_authority,
     )
     .await
 }
 
-/// Process cache, then the persisted copy, then a rebuild from the Board and
-/// Page in hand. Every source must agree with the board-only authority.
+/// What a missing Page manifest is rebuilt from: the hydrated board, or the
+/// facts persisted for it beside the board-only authority.
+#[derive(Clone, Copy)]
+pub enum PageManifestSource<'a> {
+    Board(&'a Board),
+    Facts(&'a PageContractFacts),
+}
+
+impl PageManifestSource<'_> {
+    fn board_id(&self) -> &str {
+        match self {
+            Self::Board(board) => &board.id,
+            Self::Facts(facts) => &facts.board_id,
+        }
+    }
+
+    fn build(
+        &self,
+        board_authority: &PrerunManifest,
+        page: &flow_like::a2ui::Page,
+    ) -> flow_like_types::Result<PrerunManifest> {
+        match self {
+            Self::Board(board) => PrerunManifest::from_board_and_page(board, page),
+            Self::Facts(facts) => facts.page_manifest(board_authority, page),
+        }
+    }
+}
+
+/// Process cache, then the persisted copy, then a rebuild from `source` and
+/// the Page in hand. Every source must agree with the board-only authority.
 async fn load_or_build_page_manifest(
     cache: &moka::sync::Cache<String, Arc<PrerunManifest>>,
     meta_store: &dyn ObjectStore,
     cache_key: String,
     path: &Path,
-    board: &Board,
+    source: PageManifestSource<'_>,
     page: &flow_like::a2ui::Page,
     board_authority: &PrerunManifest,
 ) -> Result<Arc<PrerunManifest>, ApiError> {
@@ -502,18 +534,16 @@ async fn load_or_build_page_manifest(
         return Ok(stored);
     }
 
-    let manifest = Arc::new(
-        PrerunManifest::from_board_and_page(board, page).map_err(|error| {
-            tracing::warn!(
-                board_id = %board.id,
-                page_id = %page.id,
-                path = %path,
-                error = %error,
-                "Page execution contract is invalid"
-            );
-            ApiError::bad_request("The Page execution contract is invalid")
-        })?,
-    );
+    let manifest = Arc::new(source.build(board_authority, page).map_err(|error| {
+        tracing::warn!(
+            board_id = %source.board_id(),
+            page_id = %page.id,
+            path = %path,
+            error = %error,
+            "Page execution contract is invalid"
+        );
+        ApiError::bad_request("The Page execution contract is invalid")
+    })?);
     persist_prerun_manifest_required(meta_store, path, &manifest).await?;
     cache.insert(cache_key, manifest.clone());
     Ok(manifest)
@@ -544,13 +574,32 @@ pub async fn ensure_draft_board_snapshot(
     board_id: &str,
     cached: &crate::state::CachedBoard,
 ) -> Result<(), ApiError> {
-    let e_tag = cached.e_tag.trim();
+    ensure_draft_board_snapshot_for(
+        state,
+        app_id,
+        board_id,
+        &cached.e_tag,
+        &cached.draft_snapshot,
+    )
+    .await
+}
+
+/// [`ensure_draft_board_snapshot`] for an ETag read without loading its board.
+/// `trust` records how long the snapshot is known to exist.
+pub(crate) async fn ensure_draft_board_snapshot_for(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    e_tag: &str,
+    trust: &TrustedUntil,
+) -> Result<(), ApiError> {
+    let e_tag = e_tag.trim();
     if e_tag.is_empty() {
         return Err(ApiError::internal_error(flow_like_types::anyhow!(
             "Latest board '{board_id}' has no storage ETag"
         )));
     }
-    if cached.draft_snapshot.holds() {
+    if trust.holds() {
         return Ok(());
     }
     let path = draft_source_path(app_id, board_id, e_tag);
@@ -561,9 +610,7 @@ pub async fn ensure_draft_board_snapshot(
             copy_exact_board_source(meta_store.as_ref(), app_id, board_id, e_tag, &path).await?
         }
     };
-    cached
-        .draft_snapshot
-        .extend(draft_object_trusted_until(written));
+    trust.extend(draft_object_trusted_until(written));
     Ok(())
 }
 
@@ -772,7 +819,30 @@ pub async fn draft_page_prerun_manifest_for_cached_board(
     board_authority: &PrerunManifest,
     page: &flow_like::a2ui::Page,
 ) -> Result<Arc<PrerunManifest>, ApiError> {
-    let e_tag = cached.e_tag.trim();
+    draft_page_prerun_manifest(
+        state,
+        app_id,
+        board_id,
+        &cached.e_tag,
+        PageManifestSource::Board(&cached.board),
+        board_authority,
+        page,
+    )
+    .await
+}
+
+/// [`draft_page_prerun_manifest_for_cached_board`] for any source of the board
+/// that `e_tag` names.
+pub async fn draft_page_prerun_manifest(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    e_tag: &str,
+    source: PageManifestSource<'_>,
+    board_authority: &PrerunManifest,
+    page: &flow_like::a2ui::Page,
+) -> Result<Arc<PrerunManifest>, ApiError> {
+    let e_tag = e_tag.trim();
     if e_tag.is_empty() {
         return Err(ApiError::internal_error(flow_like_types::anyhow!(
             "Latest board '{board_id}' has no storage ETag"
@@ -787,22 +857,198 @@ pub async fn draft_page_prerun_manifest_for_cached_board(
         state.meta_bucket.as_generic().as_ref(),
         cache_key,
         &path,
-        &cached.board,
+        source,
         page,
         board_authority,
     )
     .await
 }
 
+/// The board-only authority of a draft ETag from the process cache or storage,
+/// never from the board. `trust` records how long the shared copy is known to
+/// exist, so warm calls touch no storage.
+pub(crate) async fn trusted_draft_prerun_manifest(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    e_tag: &str,
+    trust: &TrustedUntil,
+) -> Result<Option<Arc<PrerunManifest>>, ApiError> {
+    if trust.holds()
+        && let Some(hit) = state
+            .prerun_manifest_cache
+            .get(&draft_manifest_cache_key(app_id, board_id, e_tag))
+            .filter(|hit| hit.page_events.is_empty())
+    {
+        return Ok(Some(hit));
+    }
+    let Some((manifest, written)) = load_etag_prerun_manifest(
+        &state.prerun_manifest_cache,
+        state.meta_bucket.as_generic().as_ref(),
+        app_id,
+        board_id,
+        e_tag,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    trust.extend(draft_object_trusted_until(written));
+    Ok(Some(manifest))
+}
+
+/// The current-format authority of an immutable version from the process cache
+/// or storage, never from the board.
+pub(crate) async fn stored_version_prerun_manifest(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    version: (u32, u32, u32),
+) -> Result<Option<Arc<PrerunManifest>>, ApiError> {
+    load_cached_version_manifest(
+        &state.prerun_manifest_cache,
+        state.meta_bucket.as_generic().as_ref(),
+        app_id,
+        board_id,
+        version,
+    )
+    .await
+}
+
+/// The exact board revision a set of [`PageContractFacts`] describes.
+#[derive(Clone, Copy)]
+pub(crate) enum BoardRevision<'a> {
+    Draft { e_tag: &'a str },
+    Version((u32, u32, u32)),
+}
+
+impl BoardRevision<'_> {
+    fn facts_cache_key(&self, app_id: &str, board_id: &str) -> String {
+        match self {
+            Self::Draft { e_tag } => manifest_cache_key("draft-facts", app_id, board_id, &[*e_tag]),
+            Self::Version(version) => {
+                let version = format!("{}_{}_{}", version.0, version.1, version.2);
+                manifest_cache_key("version-facts", app_id, board_id, &[&version])
+            }
+        }
+    }
+
+    fn facts_path(&self, app_id: &str, board_id: &str) -> Path {
+        match self {
+            Self::Draft { e_tag } => draft_page_contract_facts_path(app_id, board_id, e_tag),
+            Self::Version(version) => version_page_contract_facts_path(
+                &Path::from("apps").join(app_id.to_string()),
+                board_id,
+                *version,
+            ),
+        }
+    }
+}
+
+/// The facts an earlier board load persisted for `revision`, or `None` when
+/// none can be used and the caller has to load the board.
+pub(crate) async fn page_contract_facts(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    revision: BoardRevision<'_>,
+) -> Option<Arc<CachedPageContractFacts>> {
+    let cache_key = revision.facts_cache_key(app_id, board_id);
+    if let Some(hit) = state.page_contract_facts.get(&cache_key) {
+        return Some(hit);
+    }
+    let path = revision.facts_path(app_id, board_id);
+    let facts = read_page_contract_facts(state.meta_bucket.as_generic().as_ref(), &path)
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "page.facts.read"
+        ))
+        .await?;
+    let entry = Arc::new(CachedPageContractFacts::new(facts));
+    state.page_contract_facts.insert(cache_key, entry.clone());
+    Some(entry)
+}
+
+async fn read_page_contract_facts(
+    meta_store: &dyn ObjectStore,
+    path: &Path,
+) -> Option<PageContractFacts> {
+    let bytes = match meta_store.get(path).await {
+        Ok(result) => result.bytes().await,
+        Err(StoreError::NotFound { .. }) => return None,
+        Err(error) => Err(error),
+    };
+    let decoded = bytes
+        .map_err(flow_like_types::Error::from)
+        .and_then(|bytes| decode_page_contract_facts(&bytes));
+    match decoded {
+        Ok(facts) => Some(facts),
+        Err(error) => {
+            tracing::debug!(path = %path, error = %error, "Page contract facts unusable, loading the board");
+            None
+        }
+    }
+}
+
+/// Persist the facts of a hydrated board so other instances resolve its Page
+/// contracts without loading it. Best effort: a failure only costs the next
+/// cold instance a board load. Facts are written only when this instance
+/// derives the same authority that storage holds, so both paths sign alike.
+pub(crate) async fn remember_page_contract_facts(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    revision: BoardRevision<'_>,
+    cached: &crate::state::CachedBoard,
+    board_authority: &PrerunManifest,
+) {
+    let cache_key = revision.facts_cache_key(app_id, board_id);
+    if state.page_contract_facts.contains_key(&cache_key)
+        || cached.prerun_manifest().signature != board_authority.signature
+    {
+        return;
+    }
+    let content_hash = match cached.content_hash() {
+        Ok(content_hash) => content_hash,
+        Err(error) => {
+            tracing::debug!(board_id, error = %error, "Page contract facts not derived");
+            return;
+        }
+    };
+    let facts = PageContractFacts::from_board(&cached.board, board_authority, content_hash);
+    let path = revision.facts_path(app_id, board_id);
+    let bytes = match encode_page_contract_facts(&facts) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(path = %path, error = %error, "Page contract facts encode failed");
+            return;
+        }
+    };
+    if let Err(error) = state
+        .meta_bucket
+        .as_generic()
+        .put(&path, PutPayload::from(bytes))
+        .await
+    {
+        tracing::warn!(path = %path, error = %error, "Page contract facts persist failed");
+        return;
+    }
+    let entry = CachedPageContractFacts::new(facts);
+    entry.draft_snapshot.extend_from(&cached.draft_snapshot);
+    entry.draft_authority.extend_from(&cached.draft_authority);
+    state.page_contract_facts.insert(cache_key, Arc::new(entry));
+}
+
 #[cfg(test)]
 mod draft_manifest_cache_tests {
     use super::{
-        PersistedVersionManifest, draft_manifest_cache_key, draft_manifest_path,
-        draft_page_manifest_cache_key, draft_source_path, ensure_cached_board_draft_manifest,
-        ensure_cached_manifest_shared, exact_board_source_read_error, hash_canonical_json,
-        legacy_manifest_path, load_cached_version_manifest, load_etag_prerun_manifest,
-        load_or_build_page_manifest, manifest_path, page_manifest_matches_board_authority,
-        page_payload_revision, persist_prerun_manifest, read_persisted_manifest,
+        BoardRevision, PageManifestSource, PersistedVersionManifest, draft_manifest_cache_key,
+        draft_manifest_path, draft_page_manifest_cache_key, draft_page_manifest_path,
+        draft_source_path, ensure_cached_board_draft_manifest, ensure_cached_manifest_shared,
+        exact_board_source_read_error, hash_canonical_json, legacy_manifest_path,
+        load_cached_version_manifest, load_etag_prerun_manifest, load_or_build_page_manifest,
+        manifest_path, page_manifest_matches_board_authority, page_payload_revision,
+        persist_prerun_manifest, read_page_contract_facts, read_persisted_manifest,
         read_version_manifest, rebuild_etag_manifest_from_snapshot, version_manifest_cache_key,
         version_page_manifest_cache_key, version_page_manifest_path,
     };
@@ -1521,7 +1767,7 @@ mod draft_manifest_cache_tests {
             &store,
             key.clone(),
             &path,
-            &board,
+            PageManifestSource::Board(&board),
             &page,
             &authority,
         )
@@ -1534,7 +1780,7 @@ mod draft_manifest_cache_tests {
             &store,
             key.clone(),
             &path,
-            &board,
+            PageManifestSource::Board(&board),
             &page,
             &authority,
         )
@@ -1547,12 +1793,133 @@ mod draft_manifest_cache_tests {
             "a warm hit must not probe or repair storage"
         );
 
-        let rebuilt =
-            load_or_build_page_manifest(&cold, &store, key, &path, &board, &page, &authority)
-                .await
-                .unwrap();
+        let rebuilt = load_or_build_page_manifest(
+            &cold,
+            &store,
+            key,
+            &path,
+            PageManifestSource::Board(&board),
+            &page,
+            &authority,
+        )
+        .await
+        .unwrap();
         assert_eq!(rebuilt, built);
         assert!(store.head(&path).await.is_ok());
+    }
+
+    fn board_with_page_entry() -> (Board, Page) {
+        let mut board =
+            Board::new_detached(Some("board-1".into()), Path::from("apps").join("app-1"));
+        let mut entry = flow_like::flow::node::Node::new("events_simple", "load", "", "Events");
+        entry.id = "load".into();
+        entry.set_start(true);
+        board.nodes.insert(entry.id.clone(), entry);
+        board.page_ids.push("page-1".into());
+        let mut page = Page::new("page-1", "Page", "/");
+        page.board_id = Some("board-1".into());
+        page.on_load_event_id = Some("load".into());
+        (board, page)
+    }
+
+    #[tokio::test]
+    async fn page_manifests_rebuilt_from_facts_match_board_rebuilds() {
+        use crate::routes::app::artifact_cache::test_support::TestStore;
+
+        let (board, page) = board_with_page_entry();
+        let authority = PrerunManifest::from_board(&board);
+        let facts = flow_like::flow::compiled::prerun::PageContractFacts::from_board(
+            &board,
+            &authority,
+            board.content_hash(),
+        );
+        let revision = page_payload_revision(&page).unwrap();
+        let store = TestStore::default();
+        let board_path = draft_page_manifest_path("app-1", "board-1", "\"a\"", &page.id, &revision);
+        let facts_path = draft_page_manifest_path("app-1", "board-1", "\"b\"", &page.id, &revision);
+        let cache = moka::sync::Cache::builder().max_capacity(4).build();
+
+        let from_board = load_or_build_page_manifest(
+            &cache,
+            &store,
+            "board".into(),
+            &board_path,
+            PageManifestSource::Board(&board),
+            &page,
+            &authority,
+        )
+        .await
+        .unwrap();
+        let from_facts = load_or_build_page_manifest(
+            &cache,
+            &store,
+            "facts".into(),
+            &facts_path,
+            PageManifestSource::Facts(&facts),
+            &page,
+            &authority,
+        )
+        .await
+        .unwrap();
+        assert_eq!(from_facts, from_board);
+        assert_eq!(
+            read_persisted_manifest(&store, &facts_path)
+                .await
+                .map(|(manifest, _)| manifest)
+                .as_ref(),
+            Some(from_board.as_ref())
+        );
+    }
+
+    #[tokio::test]
+    async fn page_contract_facts_round_trip_through_storage() {
+        use flow_like::flow::compiled::prerun::{PageContractFacts, encode_page_contract_facts};
+
+        let (board, _) = board_with_page_entry();
+        let authority = PrerunManifest::from_board(&board);
+        let facts = PageContractFacts::from_board(&board, &authority, board.content_hash());
+        let store = InMemory::new();
+        let draft = BoardRevision::Draft { e_tag: "\"etag\"" };
+        let version = BoardRevision::Version((1, 2, 3));
+        let draft_path = draft.facts_path("app-1", "board-1");
+        let version_path = version.facts_path("app-1", "board-1");
+        assert_ne!(draft_path, version_path);
+        assert_ne!(
+            draft.facts_cache_key("app-1", "board-1"),
+            version.facts_cache_key("app-1", "board-1")
+        );
+        assert!(
+            draft
+                .facts_cache_key("app-1", "board-1")
+                .starts_with("app-1:board-1:"),
+            "board deletion drops facts by this prefix"
+        );
+
+        assert!(
+            read_page_contract_facts(&store, &draft_path)
+                .await
+                .is_none()
+        );
+        store
+            .put(
+                &draft_path,
+                encode_page_contract_facts(&facts).unwrap().into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            read_page_contract_facts(&store, &draft_path).await,
+            Some(facts)
+        );
+        store
+            .put(&version_path, b"{\"format\":1}".to_vec().into())
+            .await
+            .unwrap();
+        assert!(
+            read_page_contract_facts(&store, &version_path)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
