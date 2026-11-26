@@ -32,6 +32,7 @@ import type {
 	IScopedFlowScriptResponse,
 } from "./backend-state/board-state";
 import type { IBotState } from "./backend-state/bot-state";
+import type { IBotTeamState } from "./backend-state/bot-team-state";
 import type { IDataSourceState } from "./backend-state/data-source-state";
 import type { IDatabaseState } from "./backend-state/db-state";
 import {
@@ -98,6 +99,7 @@ export * from "./backend-state/api-key-state";
 export * from "./backend-state/api-state";
 export * from "./backend-state/audio-state";
 export * from "./backend-state/bot-state";
+export * from "./backend-state/bot-team-state";
 export * from "./backend-state/empty-states/index";
 export * from "./backend-state/inbox-state";
 export * from "./backend-state/registry-state";
@@ -301,6 +303,8 @@ export interface IBackendState {
 	offlineWritesState?: IOfflineWritesState;
 	/** The signed-in account's bots; absent without a hub account */
 	botState?: IBotState;
+	/** Teams of bots and people on the account's hub; absent without a hub account */
+	botTeamState?: IBotTeamState;
 	/** Conversations between people and bots; absent without a hub account */
 	inboxState?: IInboxState;
 	/** Scheduled meetings with temporary participant access, separate from room membership. */

@@ -27,6 +27,10 @@ pub struct Model {
     pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTimeWithTimeZone,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub email: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub reason: Option<String>,
     #[sea_orm(
         belongs_to,
         from = "conversation_id",

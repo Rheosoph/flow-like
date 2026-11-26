@@ -191,6 +191,7 @@ pub async fn user_info(
         name: sea_orm::ActiveValue::Set(display_name),
         created_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
         updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
+        last_seen_at: sea_orm::ActiveValue::Set(Some(chrono::Utc::now().fixed_offset())),
         ..Default::default()
     };
 

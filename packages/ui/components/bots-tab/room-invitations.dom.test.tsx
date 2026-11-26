@@ -142,6 +142,18 @@ describe("invitations in Needs you", () => {
 		await hide();
 	});
 
+	test("a bot's invitation shows the reason its owner approved", async () => {
+		await show(invitation({ reason: "You run the venue for the launch." }));
+		expect(container.textContent).toContain(
+			"You run the venue for the launch.",
+		);
+		expect(container.textContent).not.toContain("Join to read and write in it");
+		await hide();
+		await show(invitation({}));
+		expect(container.textContent).toContain("Join to read and write in it");
+		await hide();
+	});
+
 	test("declining sends no limits", async () => {
 		const item = invitation({});
 		await show(item);

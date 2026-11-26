@@ -235,6 +235,16 @@ function buttonContaining(...texts: string[]) {
 	return Array.from(container.querySelectorAll("button")).find(matches);
 }
 
+function chatRow(name: string) {
+	return Array.from(
+		container.querySelectorAll<HTMLButtonElement>("nav button"),
+	).find(
+		(button) =>
+			button.querySelector(".font-semibold span.truncate")?.textContent ===
+				name || button.querySelector(".font-semibold")?.textContent === name,
+	);
+}
+
 function showsGlobalChat() {
 	return container.querySelector("aside [data-testid='global-chat']") !== null;
 }
@@ -338,36 +348,46 @@ describe("BotsView", () => {
 		await click(panelButton("Back to the chat"));
 	});
 
-	test("greets the user and summarizes what needs them", () => {
+	test("heads the tab and shows nothing that needs the user", () => {
 		const text = container.textContent ?? "";
-		expect(text).toContain(", Felix");
-		expect(text).toContain("Nothing needs you · 3 bots");
+		expect(text).toContain("Bots");
+		expect(text).not.toContain("Needs you");
 		expect(buttonContaining("Open chat")).toBeUndefined();
 	});
 
-	test("lists the crew with built-in, location and encryption badges", () => {
+	test("lists the bots with their descriptions and settings only on custom ones", () => {
 		const text = container.textContent ?? "";
-		expect(text).toContain("Your crew");
-		expect(text.split("Built in").length - 1).toBe(2);
-		expect(text).toContain("Research digest, weekdays at 7:00");
-		expect(text).toContain("Cloud");
+		expect(text).toContain("Your bots");
+		expect(chatRow("Assistant")?.textContent).toContain("Your everyday helper");
+		expect(chatRow("Flux")).toBeDefined();
+		expect(chatRow("Scout")?.textContent).toContain(
+			"Research digest, weekdays at 7:00",
+		);
 		expect(
-			container.querySelector("[aria-label='End-to-end encrypted']"),
+			container.querySelector("button[aria-label='Settings for Scout']"),
 		).not.toBeNull();
+		expect(
+			container.querySelector("button[aria-label='Settings for Assistant']"),
+		).toBeNull();
+		expect(
+			container.querySelector("button[aria-label='Settings for Flux']"),
+		).toBeNull();
 		expect(text).not.toContain("Shared with you");
 	});
 
 	test("shows rooms and people", () => {
 		const text = container.textContent ?? "";
-		expect(text).toContain("Q4 launch");
-		expect(text).toContain("2 people · 1 bot");
-		expect(text).toContain("Scout: Digest is ready.");
-		expect(text).toContain("Anna Weber");
-		expect(text).toContain("No messages yet");
+		expect(text).toContain("Rooms");
+		expect(text).toContain("People");
+		expect(chatRow("Q4 launch")?.textContent).toContain(
+			"Scout: Digest is ready.",
+		);
+		expect(chatRow("Q4 launch")?.textContent).toContain("2");
+		expect(chatRow("Anna Weber")?.textContent).toContain("No messages yet");
 	});
 
-	test("opens a custom bot's chat with where it runs and what it may do, and mirrors it in the URL", async () => {
-		await click(buttonContaining("Scout", "Runs in the cloud"));
+	test("opens a custom bot's chat, with where it runs and what it may do in its details, and mirrors it in the URL", async () => {
+		await click(chatRow("Scout"));
 		expect(navigation.replace).toHaveBeenLastCalledWith("/bots?bot=bot_scout", {
 			scroll: false,
 		});
@@ -392,9 +412,9 @@ describe("BotsView", () => {
 	});
 
 	test("each bot keeps its one conversation, and Flux keeps today's chat", async () => {
-		await click(buttonContaining("Assistant", "Built in"));
+		await click(chatRow("Assistant"));
 		expect(activeConversation()).toBe("bot:bot_general");
-		await click(buttonContaining("Flux", "Built in"));
+		await click(chatRow("Flux"));
 		expect(navigation.replace).toHaveBeenLastCalledWith("/bots?bot=flux", {
 			scroll: false,
 		});
@@ -422,10 +442,10 @@ describe("BotsView", () => {
 					),
 				);
 		});
-		await click(buttonContaining("Scout", "Runs in the cloud"));
+		await click(chatRow("Scout"));
 		expect(activeConversation()).toBe("bot:bot_scout");
 		expect(dockTitle()).toBe("Scout");
-		await click(buttonContaining("Flux", "Built in"));
+		await click(chatRow("Flux"));
 		expect(activeConversation()).toBe(fluxConversation);
 		expect(dockTitle()).toBe("Flux");
 	});
@@ -461,7 +481,7 @@ describe("BotsView", () => {
 			);
 		});
 		await settle();
-		expect(container.textContent).toContain("1 thing needs you · 3 bots");
+		expect(container.textContent).toContain("Needs you");
 		await click(buttonContaining("Open chat"));
 		expect(navigation.replace).toHaveBeenLastCalledWith(
 			"/bots?conversation=c1",
@@ -537,7 +557,7 @@ describe("BotsView", () => {
 				"aside button[aria-label='Close chat']",
 			),
 		);
-		expect(container.querySelector("aside")).toBeNull();
+		expect(showsGlobalChat()).toBe(false);
 		await openActivity("chat-activity", "Another report is ready");
 		expect(activeConversation()).toBe("chat-activity");
 		expect(showsGlobalChat()).toBe(true);
@@ -547,13 +567,13 @@ describe("BotsView", () => {
 	});
 
 	test("a draft is FlowPilot's: queued while a bot's chat is closed, it opens Flux's chat", async () => {
-		await click(buttonContaining("Scout", "Runs in the cloud"));
+		await click(chatRow("Scout"));
 		await click(
 			container.querySelector<HTMLElement>(
 				"aside button[aria-label='Close chat']",
 			),
 		);
-		expect(container.querySelector("aside")).toBeNull();
+		expect(showsGlobalChat()).toBe(false);
 		await act(async () => {
 			useGlobalChatStore.getState().setDraft({ prompt: "Plan my week" });
 		});
@@ -620,8 +640,7 @@ describe("BotsView", () => {
 	});
 
 	test("the profile hides a bot from the crew and shows it again, a built-in one by its system key", async () => {
-		const assistantCard = () => buttonContaining("Assistant", "Built in");
-		const hiddenHint = () => buttonContaining("hidden in this profile");
+		const assistantCard = () => chatRow("Assistant");
 		const dialog = () =>
 			window.document.body.querySelector(
 				"[role='dialog']",
@@ -631,7 +650,6 @@ describe("BotsView", () => {
 				.find((row) => row.textContent?.startsWith("Assistant"))
 				?.querySelector<HTMLButtonElement>("[role='switch']");
 		expect(assistantCard()).toBeDefined();
-		expect(hiddenHint()).toBeUndefined();
 
 		await click(
 			container.querySelector<HTMLButtonElement>(
@@ -645,12 +663,10 @@ describe("BotsView", () => {
 		expect(updateProfileHiddenBots.mock.calls.at(-1)?.[1]).toEqual(["general"]);
 		expect(assistantSwitch()?.getAttribute("aria-checked")).toBe("false");
 		expect(assistantCard()).toBeUndefined();
-		expect(hiddenHint()?.textContent).toContain("1 hidden in this profile");
-		expect(buttonContaining("Flux", "Built in")).toBeDefined();
+		expect(chatRow("Flux")).toBeDefined();
 
 		await click(assistantSwitch());
 		expect(updateProfileHiddenBots.mock.calls.at(-1)?.[1]).toEqual([]);
 		expect(assistantCard()).toBeDefined();
-		expect(hiddenHint()).toBeUndefined();
 	});
 });

@@ -6505,7 +6505,7 @@ mod tests {
         assert!(offered.contains(&"ask_bot") && offered.contains(&"list_apps"));
         assert!(
             turn.system_prompt
-                .contains("## THIS TURN\nScout, another of your owner's bots")
+                .contains("## THIS TURN\nScout, another bot")
         );
         assert!(turn.system_prompt.contains("No one is watching this turn"));
 

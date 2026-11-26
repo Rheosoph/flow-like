@@ -5,8 +5,12 @@
 use super::owned_bot;
 use crate::{
     bot_caller,
-    bot_host::talk::{
-        AnsweredAsk, ServerTalkHost, answered_ask, bot_name, crew_member, remote_context, roster_in,
+    bot_host::{
+        talk::{
+            AnsweredAsk, ServerTalkHost, answered_ask, askable_bot, bot_name, crew_member,
+            remote_context, roster_in,
+        },
+        teams,
     },
     entity::bot_turn,
     error::ApiError,
@@ -32,6 +36,10 @@ pub struct TalkRoster {
     /// The caller's other bots with where they run and whether they are online.
     #[schema(value_type = Vec<Object>)]
     pub members: Vec<CrewMember>,
+    /// What the bot knows about its team and org; absent for a bot in no team.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub team: Option<flow_like_types::bot_team::TeamBrief>,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -121,7 +129,8 @@ pub async fn talk_roster(
     let sub = user.sub()?;
     owned_bot(&state.db, &sub, &bot_id).await?;
     let members = roster_in(&state.db, &sub, &bot_id, now_millis()).await?;
-    Ok(Json(TalkRoster { members }))
+    let team = teams::team_brief_for(&state, &bot_id).await?;
+    Ok(Json(TalkRoster { members, team }))
 }
 
 #[utoipa::path(
@@ -155,7 +164,7 @@ pub async fn talk_exchange(
         BotPresence::Online,
     );
     let callee = crew_member(
-        &owned_bot(&state.db, &sub, &body.callee_id).await?,
+        &askable_bot(&state.db, &sub, &bot_id, &body.callee_id).await?,
         BotPresence::Unknown,
     );
     let host = ServerTalkHost::for_chat(state.clone(), &sub, "");
@@ -170,7 +179,7 @@ pub async fn talk_exchange(
     post,
     path = "/bots/{bot_id}/talk",
     tag = "Bots",
-    description = "A bot of yours asks another of your bots and waits for the answer. The exchange is recorded as a conversation between the two bots. Permission is the caller's to check: this endpoint only runs asks between bots you own.",
+    description = "A bot of yours asks another of your bots, a teammate or the lead of another team in your org, and waits for the answer. The exchange is recorded as a conversation between the two bots; across owners both owners read it. Permission is the caller's to check.",
     params(("bot_id" = String, Path, description = "The asking bot; yours")),
     request_body = TalkRequest,
     responses(
@@ -214,7 +223,7 @@ pub async fn talk(
         &owned_bot(&state.db, &sub, &bot_id).await?,
         BotPresence::Online,
     );
-    let callee_row = owned_bot(&state.db, &sub, &body.callee_id).await?;
+    let callee_row = askable_bot(&state.db, &sub, &bot_id, &body.callee_id).await?;
     let presence = roster_in(&state.db, &sub, &bot_id, now_millis())
         .await?
         .into_iter()

@@ -1,0 +1,120 @@
+//! Bot teams: people and bots in nested teams with one lead bot per team, and a room for each
+//! team. The tables and their contract live in `flow_like_types::bot_team`; the coordinator that
+//! reads them for the bot runtime is `bot_host::teams`.
+
+use crate::{
+    db::coordination::coordinate,
+    entity::{bot_team, bot_team_bot},
+    routes::{bots::lock_bot, inbox::team_room::lock_room},
+    state::AppState,
+};
+use axum::{
+    Router,
+    routing::{delete, get, post, put},
+};
+use sea_orm::{ColumnTrait, DatabaseTransaction, DbErr, EntityTrait, QueryFilter};
+
+pub(crate) mod access;
+pub mod bots;
+pub(crate) mod effects;
+pub mod model;
+pub mod people;
+pub(crate) mod room;
+pub mod teams;
+pub(crate) mod view;
+
+#[cfg(test)]
+mod tests;
+
+/// Takes the locks a team change needs: the teams, then the bots and the teams those bots are
+/// active in, then every room of them, each group in id order.
+pub(crate) async fn lock_scope(
+    txn: &DatabaseTransaction,
+    team_ids: &[&str],
+    bot_ids: &[&str],
+) -> Result<(), DbErr> {
+    let mut teams: Vec<String> = team_ids.iter().map(|id| id.to_string()).collect();
+    let mut bots: Vec<String> = bot_ids.iter().map(|id| id.to_string()).collect();
+    bots.sort();
+    bots.dedup();
+    for team_id in sorted(&mut teams) {
+        coordinate(txn, "bot-team", &[team_id]).await?;
+    }
+    for bot_id in &bots {
+        lock_bot(txn, bot_id).await?;
+    }
+    let active_rows = bot_team_bot::Entity::find()
+        .filter(bot_team_bot::Column::BotId.is_in(bots))
+        .filter(bot_team_bot::Column::Status.eq(access::active()))
+        .all(txn)
+        .await?;
+    teams.extend(active_rows.into_iter().map(|row| row.team_id));
+    for team_id in sorted(&mut teams) {
+        coordinate(txn, "bot-team", &[team_id]).await?;
+    }
+    let mut rooms: Vec<String> = bot_team::Entity::find()
+        .filter(bot_team::Column::Id.is_in(teams))
+        .all(txn)
+        .await?
+        .into_iter()
+        .filter_map(|team| team.conversation_id)
+        .collect();
+    for room_id in sorted(&mut rooms) {
+        lock_room(txn, room_id).await?;
+    }
+    Ok(())
+}
+
+/// [`lock_scope`] for a change that may prune bots anywhere in the orgs of `team_ids`: every
+/// team of those orgs and every bot in them.
+pub(crate) async fn lock_org_scope(
+    txn: &DatabaseTransaction,
+    team_ids: &[&str],
+) -> Result<(), DbErr> {
+    let mut ids: Vec<String> = Vec::new();
+    for team_id in team_ids {
+        ids.push(team_id.to_string());
+        if let Some(team) = bot_team::Entity::find_by_id(*team_id).one(txn).await? {
+            let org = access::org_of(txn, &team).await?;
+            ids.extend(org.ids());
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    let bots: Vec<String> = bot_team_bot::Entity::find()
+        .filter(bot_team_bot::Column::TeamId.is_in(ids.clone()))
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|row| row.bot_id)
+        .collect();
+    let team_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let bot_refs: Vec<&str> = bots.iter().map(String::as_str).collect();
+    lock_scope(txn, &team_refs, &bot_refs).await
+}
+
+fn sorted(ids: &mut Vec<String>) -> &[String] {
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/", get(teams::list_org).post(teams::create_team))
+        .route("/bots/{bot_id}/briefing", get(bots::briefing))
+        .route(
+            "/{team_id}",
+            axum::routing::patch(teams::patch_team).delete(teams::delete_team),
+        )
+        .route("/{team_id}/people", post(people::add_people))
+        .route("/{team_id}/join", post(people::join_team))
+        .route("/{team_id}/decline", post(people::decline_team))
+        .route("/{team_id}/people/{user_id}/role", put(people::set_role))
+        .route("/{team_id}/people/{user_id}", delete(people::remove_person))
+        .route("/{team_id}/bots", post(bots::add_bot))
+        .route("/{team_id}/bots/{bot_id}", delete(bots::remove_bot))
+        .route("/{team_id}/bots/{bot_id}/accept", post(bots::accept_bot))
+        .route("/{team_id}/bots/{bot_id}/decline", post(bots::decline_bot))
+        .route("/{team_id}/bots/{bot_id}/direct", put(bots::set_direct))
+}

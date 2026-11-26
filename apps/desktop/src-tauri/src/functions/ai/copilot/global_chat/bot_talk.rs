@@ -341,6 +341,7 @@ fn crew_member(bot: Bot) -> CrewMember {
         location: BotLocation::Desktop,
         presence: BotPresence::Online,
         classification: bot.classification,
+        ..CrewMember::default()
     }
 }
 

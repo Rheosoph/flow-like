@@ -14,10 +14,13 @@ mod generated;
 
 pub use generated::*;
 
-pub mod caller_apps;
 pub mod bot_decision_wait;
 pub mod bot_note;
+pub mod bot_team;
+pub mod bot_team_bot;
+pub mod bot_team_person;
 pub mod bot_turn_checkpoint;
+pub mod caller_apps;
 pub mod json_types;
 mod relations;
 pub mod sea_orm_active_enums;

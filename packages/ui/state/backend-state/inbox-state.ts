@@ -561,6 +561,8 @@ export interface IInvitation {
 	bot_name: string | null;
 	invited_by: string | null;
 	invited_at: string | null;
+	/** Why a bot invited you, in its words as its owner approved them. */
+	reason?: string | null;
 	/** `direct` is a message request, `group` a room invitation. */
 	conversation_kind?: ConversationKind;
 	/** A request's messages held for you: how many, and the newest few. */

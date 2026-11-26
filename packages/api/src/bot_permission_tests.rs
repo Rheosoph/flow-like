@@ -54,7 +54,7 @@ async fn database() -> DatabaseConnection {
             "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
             "leftAt" TEXT, "lastReadAt" TEXT,
         "status" TEXT NOT NULL DEFAULT 'ACTIVE', "limits" TEXT, "invitedBy" TEXT, "invitedAt" TEXT,
-        "acceptedAt" TEXT, "hiddenAt" TEXT, "clearedAt" TEXT, "clearedLegacyAt" TEXT, "clearedSeq" INTEGER,
+        "acceptedAt" TEXT, "inviteReason" TEXT, "hiddenAt" TEXT, "clearedAt" TEXT, "clearedLegacyAt" TEXT, "clearedSeq" INTEGER,
         "unreadCount" INTEGER, "lastEntryId" TEXT, PRIMARY KEY ("conversationId", "principalId"))"#,
     )
     .await

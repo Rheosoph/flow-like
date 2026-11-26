@@ -41,6 +41,8 @@ pub struct Model {
     pub invited_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "acceptedAt")]
     pub accepted_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_name = "inviteReason", column_type = "Text", nullable)]
+    pub invite_reason: Option<String>,
     #[sea_orm(column_name = "hiddenAt")]
     pub hidden_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "clearedAt")]

@@ -1,7 +1,9 @@
 //! A bot invites a person into the group chat it is in, after its owner approved the call. The
 //! person is named by their exact username or email address and resolved here, never searched.
-//! The invitation is the room's ordinary one with the bot as inviter: the person accepts or
-//! declines, and blocks between them and the bot's owner apply.
+//! The invitation is the room's ordinary one with the bot as inviter and the approved reason on
+//! it: the person accepts or declines, and blocks between them and the bot's owner apply. Someone
+//! away for a week also gets it by email. An address without an account gets a single-use link
+//! by email instead, which joins them once they signed up.
 
 use async_trait::async_trait;
 use axum::{
@@ -9,7 +11,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use flow_like_bot_tools::{InviteOutcome, InviteTarget, RoomInvites};
+use flow_like_bot_tools::{InviteOutcome, InviteTarget, RoomInvites, rooms::checked_reason};
 use flow_like_types::inbox::{ConversationEncryption, ConversationKind, PrincipalKind};
 use sea_orm::{
     ConnectionTrait, DbErr, EntityTrait, QueryFilter, QuerySelect,
@@ -19,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
-use super::user_context::{backend_error, context_error};
+use super::{room_invite_mail, user_context::backend_error};
 use crate::{
     bot_caller::{self, Names},
     entity::{conversation, conversation_member, user},
@@ -29,6 +31,7 @@ use crate::{
         inbox::{
             self, INBOX_INVITE_LIMIT, MEMBER_ACTIVE, MEMBER_PENDING,
             invitations::{InviteMode, Invitee, invite_and_notify},
+            links::{self, EmailInvite, MAX_OWNER_EMAIL_INVITES_PER_DAY},
             members::Principal,
         },
         user::identity::{public_display_name, public_handle},
@@ -50,13 +53,20 @@ const UNNAMED: &str = "This person";
 pub struct RoomInviteRequest {
     /// The person's exact username (a leading @ is fine) or exact email address.
     pub person: String,
+    /// Why they should join, as you approved it, at most 500 characters on one line. The person
+    /// reads it with the invitation and in any email. Without it, an address that has no account
+    /// is not invited.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RoomInviteResponse {
-    /// `invited`, `already_member` or `already_invited`.
+    /// `invited`, `emailed` (no account had the address, so an email invitation went out),
+    /// `already_member` or `already_invited`.
     pub status: String,
-    /// The person's public name; never their email address.
+    /// The person's public name, never their email address; for an invitation by email, the
+    /// address you gave.
     pub name: String,
 }
 
@@ -203,6 +213,7 @@ pub(crate) async fn plan_invite<C: ConnectionTrait>(
             },
             mode: InviteMode::Invite,
             owner_id: None,
+            reason: None,
         },
         name,
     })
@@ -228,17 +239,70 @@ pub(crate) async fn settle_invite<C: ConnectionTrait>(
     })
 }
 
-/// Invites the account `target` names into `conversation_id` as `bot_id`, which must be in it.
+/// Sends `bot_id`'s single-use link into the group to an address no account has. An email that
+/// could not be sent takes its link back, so asking again tries again.
+async fn invite_by_email(
+    state: &AppState,
+    bot_id: &str,
+    conversation_id: &str,
+    address: &str,
+    reason: &str,
+) -> Result<InviteOutcome, ApiError> {
+    let Some(mail) = state.mail_client.clone() else {
+        return Ok(InviteOutcome::NotInvitable {
+            why: "no account uses this address, and this hub sends no email to invite them; ask for their username once they have an account".into(),
+        });
+    };
+    let owner_id = bot_caller::live_owner(&state.db, bot_id).await?;
+    let invited = links::email_invite(state, conversation_id, bot_id, &owner_id, address, reason);
+    let link = match invited.await? {
+        EmailInvite::Created(link) => link,
+        EmailInvite::Pending => {
+            return Ok(InviteOutcome::AlreadyInvited {
+                name: address.to_string(),
+            });
+        }
+        EmailInvite::DailyLimit => {
+            return Ok(InviteOutcome::NotInvitable {
+                why: format!(
+                    "your owner's bots already sent {MAX_OWNER_EMAIL_INVITES_PER_DAY} email invitations in the last day"
+                ),
+            });
+        }
+    };
+    if let Err(error) = room_invite_mail::send_to_newcomer(state, &mail, &link).await {
+        if let Err(cleanup) = links::drop_email_invite(&state.db, &link.id).await {
+            tracing::warn!(%cleanup, link_id = %link.id, "Failed to withdraw an email invitation that was not sent");
+        }
+        return Err(error);
+    }
+    tracing::info!(link_id = %link.id, conversation_id, bot_id, "A bot invited an address by email");
+    Ok(InviteOutcome::Emailed)
+}
+
+/// Invites the person `target` names into `conversation_id` as `bot_id`, which must be in it,
+/// with the `reason` its owner approved. An address without an account is invited by email when
+/// there is a reason to send; a person away for a week gets an email beside the invitation.
 pub(crate) async fn invite_into_room(
     state: &AppState,
     bot_id: &str,
     conversation_id: &str,
     target: &InviteTarget,
+    reason: Option<&str>,
 ) -> Result<InviteOutcome, ApiError> {
-    let (invitee, name) = match plan_invite(&state.db, bot_id, conversation_id, target).await? {
+    let (mut invitee, name) = match plan_invite(&state.db, bot_id, conversation_id, target).await? {
+        InvitePlan::Settled(InviteOutcome::NoSuchPerson) => {
+            return match (target, reason) {
+                (InviteTarget::Email(address), Some(reason)) => {
+                    invite_by_email(state, bot_id, conversation_id, address, reason).await
+                }
+                _ => Ok(InviteOutcome::NoSuchPerson),
+            };
+        }
         InvitePlan::Settled(outcome) => return Ok(outcome),
         InvitePlan::Invite { invitee, name } => (invitee, name),
     };
+    invitee.reason = reason.map(str::to_string);
     let person_id = invitee.principal.id.clone();
     let outcome = match invite_and_notify(
         state,
@@ -257,14 +321,11 @@ pub(crate) async fn invite_into_room(
         }
         Err(error) => return Err(error),
     };
-    Ok(settle_invite(
-        &state.db,
-        conversation_id,
-        &person_id,
-        name,
-        !outcome.invited.is_empty(),
-    )
-    .await?)
+    let invited = !outcome.invited.is_empty();
+    if invited {
+        room_invite_mail::email_if_away(state, bot_id, conversation_id, &person_id, reason).await;
+    }
+    Ok(settle_invite(&state.db, conversation_id, &person_id, name, invited).await?)
 }
 
 /// `room_invite` for one bot in the conversation its server turn runs in.
@@ -286,10 +347,20 @@ impl ServerRoomInvites {
 
 #[async_trait]
 impl RoomInvites for ServerRoomInvites {
-    async fn invite(&self, person: &InviteTarget) -> flow_like_types::Result<InviteOutcome> {
-        invite_into_room(&self.state, &self.bot_id, &self.conversation_id, person)
-            .await
-            .map_err(backend_error)
+    async fn invite(
+        &self,
+        person: &InviteTarget,
+        reason: &str,
+    ) -> flow_like_types::Result<InviteOutcome> {
+        invite_into_room(
+            &self.state,
+            &self.bot_id,
+            &self.conversation_id,
+            person,
+            Some(reason),
+        )
+        .await
+        .map_err(backend_error)
     }
 }
 
@@ -327,6 +398,7 @@ fn response_of(
 ) -> Result<RoomInviteResponse, ApiError> {
     let (status, name) = match outcome {
         InviteOutcome::Invited { name } => ("invited", name),
+        InviteOutcome::Emailed => ("emailed", person.value().to_string()),
         InviteOutcome::AlreadyMember { name } => ("already_member", name),
         InviteOutcome::AlreadyInvited { name } => ("already_invited", name),
         InviteOutcome::NoSuchPerson => {
@@ -362,19 +434,20 @@ fn response_of(
     post,
     path = "/bots/{bot_id}/rooms/{conversation_id}/invitations",
     tag = "Bots",
-    description = "Invite a person into a group chat as one of your bots, after you approved it. Name the person by their exact username or email address; nobody is searched. They join once they accept.",
+    description = "Invite a person into a group chat as one of your bots, after you approved it. Name the person by their exact username or email address; nobody is searched. The person reads your reason with the invitation and joins once they accept. Someone who has not opened Flow-Like for a week also gets it by email. An address without an account gets an email with a link to sign up and join, which works once for 30 days.",
     params(
         ("bot_id" = String, Path, description = "Your bot, a member of the group chat"),
         ("conversation_id" = String, Path, description = "The group chat")
     ),
     request_body = RoomInviteRequest,
     responses(
-        (status = 200, description = "Invited, or already in the room or invited", body = RoomInviteResponse),
-        (status = 400, description = "Not one username or email address"),
+        (status = 200, description = "Invited or emailed, or already in the room or invited", body = RoomInviteResponse),
+        (status = 400, description = "Not one username or email address, or a reason that is empty, longer than 500 characters or more than one line"),
         (status = 401, description = "Not signed in"),
         (status = 403, description = "A bot token from another conversation"),
-        (status = 404, description = "BOT_INVITE_NO_SUCH_PERSON: no account has this username or email address; or not your bot, or the bot is not in this conversation"),
-        (status = 409, description = "BOT_INVITE_REFUSED: a direct conversation, a full invitation list, an ambiguous address, or the person takes no invitations from this bot")
+        (status = 404, description = "BOT_INVITE_NO_SUCH_PERSON: no account has this username, or this address without a reason to email; or not your bot, or the bot is not in this conversation"),
+        (status = 409, description = "BOT_INVITE_REFUSED: a direct conversation, a full invitation list, an ambiguous address, a person who takes no invitations from this bot, your bots having sent their 20 email invitations of the day, or a hub that sends no email"),
+        (status = 500, description = "The email invitation could not be sent; nothing was kept, so you can ask again")
     ),
     security(("bearer_auth" = []))
 )]
@@ -392,9 +465,25 @@ pub async fn invite_person(
     let person = InviteTarget::parse(&body.person).ok_or_else(|| {
         ApiError::bad_request("'person' must be one exact username or one email address")
     })?;
-    let outcome = ServerRoomInvites::new(&state, &bot_id, &conversation_id)
-        .invite(&person)
-        .await
-        .map_err(context_error)?;
+    let reason = body
+        .reason
+        .as_deref()
+        .map(|reason| {
+            checked_reason(reason).ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "'reason' is one line of 1 to {} characters",
+                    flow_like_types::bot_message::MAX_SUMMARY_CHARS
+                ))
+            })
+        })
+        .transpose()?;
+    let outcome = invite_into_room(
+        &state,
+        &bot_id,
+        &conversation_id,
+        &person,
+        reason.as_deref(),
+    )
+    .await?;
     response_of(outcome, &person).map(Json)
 }

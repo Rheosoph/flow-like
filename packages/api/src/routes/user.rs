@@ -29,11 +29,13 @@ pub async fn ensure_user_exists(state: &AppState, sub: &str) -> Result<(), crate
         return Ok(());
     }
 
+    let now = chrono::Utc::now().fixed_offset();
     let user = user::ActiveModel {
         id: sea_orm::ActiveValue::Set(sub.to_string()),
         tracking_id: sea_orm::ActiveValue::Set(Some(create_id())),
-        created_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
-        updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
+        created_at: sea_orm::ActiveValue::Set(now),
+        updated_at: sea_orm::ActiveValue::Set(now),
+        last_seen_at: sea_orm::ActiveValue::Set(Some(now)),
         ..Default::default()
     };
 
@@ -90,6 +92,7 @@ pub mod groups;
 pub mod handle;
 pub mod identity;
 pub mod info;
+pub(crate) mod last_seen;
 pub mod lookup;
 pub mod manage_invite;
 pub mod notifications;

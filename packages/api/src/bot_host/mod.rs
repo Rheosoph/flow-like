@@ -27,6 +27,7 @@ pub(crate) mod talk;
 pub(crate) mod task_authority;
 pub(crate) mod task_schedules;
 pub(crate) mod tasks;
+pub(crate) mod teams;
 pub(crate) mod worker;
 
 #[cfg(test)]

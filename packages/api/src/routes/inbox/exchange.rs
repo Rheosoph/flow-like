@@ -7,13 +7,18 @@ use super::{
     conversations::start_exchange,
     entries::{Content, Outgoing, Sent, fan_out, repeat_of, validate_send},
     lock_conversation,
+    members::{Principal, add_in},
     model::SendEntryRequest,
-    now_millis, wake,
+    now_millis, stored, wake,
 };
-use crate::{db::coordination::coordinate, error::ApiError, state::AppState};
+use crate::{
+    db::coordination::coordinate, entity::conversation_member, error::ApiError, state::AppState,
+};
 use chrono::{DateTime, FixedOffset};
-use flow_like_types::inbox::{InboxEntryKind, plain_envelope};
-use sea_orm::{ConnectionTrait, DatabaseTransaction};
+use flow_like_types::inbox::{InboxEntryKind, PrincipalKind, plain_envelope};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, sea_query::Expr,
+};
 use serde_json::Value;
 
 pub(crate) fn message_outgoing(message_id: &str, body: Value) -> Result<Outgoing, ApiError> {
@@ -54,6 +59,96 @@ pub(crate) async fn open_exchange(
             })
         })
         .await
+}
+
+/// A bot's room limits in an exchange across owners, from its team membership.
+#[derive(Debug, Clone)]
+pub(crate) struct BotLimits {
+    pub bot_id: String,
+    pub limits: Value,
+}
+
+/// [`open_exchange`] for two bots of different owners in one org: the other bot's owner reads the
+/// exchange too, and each bot in `limits` runs under its team's room limits there. Teams are the
+/// consent for the bots, so nobody is invited.
+pub(crate) async fn open_exchange_across(
+    state: &AppState,
+    owner_id: &str,
+    other_owner_id: &str,
+    first_bot: &str,
+    second_bot: &str,
+    limits: &[BotLimits],
+    title: Option<String>,
+) -> Result<String, ApiError> {
+    let (id, woken) = state
+        .transaction(|txn| {
+            let (owner, other, first, second, title, limits) = (
+                owner_id.to_string(),
+                other_owner_id.to_string(),
+                first_bot.to_string(),
+                second_bot.to_string(),
+                title.clone(),
+                limits.to_vec(),
+            );
+            Box::pin(async move {
+                let (low, high) = if first <= second {
+                    (first.as_str(), second.as_str())
+                } else {
+                    (second.as_str(), first.as_str())
+                };
+                coordinate(txn, "bot-exchange", &[low, high]).await?;
+                exchange_across_in(
+                    txn,
+                    &owner,
+                    &other,
+                    &first,
+                    &second,
+                    &limits,
+                    title,
+                    now_millis(),
+                )
+                .await
+            })
+        })
+        .await?;
+    wake(state, woken).await;
+    Ok(id)
+}
+
+/// [`open_exchange_across`] in the caller's transaction: the exchange, the other owner as a
+/// member and the bots' limits. Returns the exchange id and the people to wake.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn exchange_across_in<C: ConnectionTrait>(
+    txn: &C,
+    owner_id: &str,
+    other_owner_id: &str,
+    first_bot: &str,
+    second_bot: &str,
+    limits: &[BotLimits],
+    title: Option<String>,
+    now: DateTime<FixedOffset>,
+) -> Result<(String, Vec<String>), ApiError> {
+    let id = start_exchange(txn, owner_id, first_bot, second_bot, title, now).await?;
+    let reader = Principal {
+        id: other_owner_id.to_string(),
+        kind: PrincipalKind::User,
+    };
+    let woken = add_in(txn, &id, owner_id, &[reader], now).await?;
+    for bot in limits {
+        conversation_member::Entity::update_many()
+            .col_expr(
+                conversation_member::Column::Limits,
+                Expr::value(bot.limits.clone()),
+            )
+            .filter(conversation_member::Column::ConversationId.eq(id.as_str()))
+            .filter(conversation_member::Column::PrincipalId.eq(bot.bot_id.as_str()))
+            .filter(
+                conversation_member::Column::PrincipalKind.eq(stored(PrincipalKind::Bot.as_str())),
+            )
+            .exec(txn)
+            .await?;
+    }
+    Ok((id, woken))
 }
 
 /// `bot_id`'s message in the conversation it belongs to; a repeat of `message_id` returns the

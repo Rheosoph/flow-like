@@ -36,6 +36,7 @@ pub mod permissions;
 pub mod places;
 pub mod presence;
 mod provision;
+mod room_invite_mail;
 pub mod rooms;
 pub(crate) mod runtime;
 pub mod runtime_token;

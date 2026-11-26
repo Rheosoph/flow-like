@@ -5,7 +5,7 @@ use crate::{
         MEMBER_PENDING,
         blocks::block_in,
         fixture::{assert_code, at, bot_principal, database, group, insert_bot, user},
-        invitations::{cancel_in, invite_in},
+        invitations::{cancel_in, invitations_for, invite_in},
     },
 };
 use axum::http::StatusCode;
@@ -205,6 +205,7 @@ async fn the_bots_owner_may_withdraw_its_invitation_and_a_stranger_may_not() {
         principal: user("ana"),
         mode: crate::routes::inbox::invitations::InviteMode::Invite,
         owner_id: None,
+        reason: None,
     }];
     invite_in(&db, ROOM, BOT, &invitee, &Default::default(), at(1))
         .await
@@ -217,5 +218,24 @@ async fn the_bots_owner_may_withdraw_its_invitation_and_a_stranger_may_not() {
             .await
             .unwrap()
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn the_approved_reason_travels_with_the_invitation() {
+    let db = world().await;
+    let InvitePlan::Invite { mut invitee, .. } = plan(&db, "@ana.lima").await else {
+        panic!("expected an invitation");
+    };
+    invitee.reason = Some("You own the budget sheet.".into());
+    invite_in(&db, ROOM, BOT, &[invitee], &Default::default(), at(1))
+        .await
+        .unwrap();
+    let invitations = invitations_for(&db, "ana").await.unwrap();
+    assert_eq!(invitations.len(), 1);
+    assert_eq!(invitations[0].invited_by.as_deref(), Some(BOT));
+    assert_eq!(
+        invitations[0].reason.as_deref(),
+        Some("You own the budget sheet.")
     );
 }

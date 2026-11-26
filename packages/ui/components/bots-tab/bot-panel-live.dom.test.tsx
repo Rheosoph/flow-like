@@ -360,14 +360,6 @@ function panelButton(label: string) {
 	);
 }
 
-function card(name: string) {
-	return Array.from(container.querySelectorAll("button")).find(
-		(button) =>
-			button.querySelector("span.truncate")?.textContent === name &&
-			button.closest(".group"),
-	)?.textContent;
-}
-
 async function click(element: { click(): void } | null | undefined) {
 	expect(element ?? undefined).toBeDefined();
 	await act(async () => {
@@ -411,16 +403,16 @@ describe("what a bot may ask", () => {
 });
 
 describe("whether a desktop or device bot is online", () => {
-	test("a desktop bot reads the hub's report; its card, pill and Details agree", async () => {
+	test("a desktop bot reads the hub's report; its pill and Details agree", async () => {
 		await visit("bot=bot_scout&panel=details");
-		expect(card("Scout")).toContain("Online");
 		expect(pill()?.textContent).toContain("Online");
 		expect(panelText()).toContain("Status");
 		expect(panelText()).toContain("Online");
 	});
 
 	test("never reported reads as not seen yet, and a stale report as offline with its last seen", async () => {
-		expect(card("Dash")).toContain("Not seen yet");
+		await visit("bot=bot_dash");
+		expect(pill()?.textContent).toContain("Not seen yet");
 
 		reports = {
 			bot_scout: {
@@ -432,22 +424,22 @@ describe("whether a desktop or device bot is online", () => {
 			await client.invalidateQueries({ queryKey: botKeys.presence() });
 		});
 		await settle();
-		expect(card("Scout")).toContain("Offline");
+		await visit("bot=bot_scout&panel=details");
 		expect(pill()?.textContent).toContain("Offline");
 		expect(panelText()).toContain("Last seen");
 		expect(panelText()).toContain("hour");
 	});
 
 	test("cloud bots read as online without a report, a bot on this device keeps the drive", async () => {
-		expect(card("Writer")).toContain("Runs in the cloud");
 		await visit("bot=bot_writer");
 		expect(pill()?.querySelector("[class*='bg-primary']") !== null).toBe(true);
 		await visit("bot=bot_pebble");
 		expect(pill()?.textContent).toContain("Local only");
-		expect(card("Pebble")).not.toContain("Online");
+		expect(pill()?.textContent).not.toContain("Online");
 	});
 
 	test("polls every minute and reads again when the window gets focus", async () => {
+		await visit("bot=bot_scout");
 		const observers = client.getQueryCache().find({
 			queryKey: botKeys.presence(),
 		})?.observers;

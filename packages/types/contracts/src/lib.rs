@@ -40,6 +40,8 @@ pub mod bot_reply_files;
 #[cfg(feature = "bot-task")]
 pub mod bot_task;
 #[cfg(feature = "inbox")]
+pub mod bot_team;
+#[cfg(feature = "inbox")]
 pub mod bot_tool_trail;
 #[cfg(feature = "inbox")]
 pub mod bot_turn;

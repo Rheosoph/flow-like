@@ -61,6 +61,8 @@ model Bot {
   segments        ConversationSegment[]
   notes           BotNote[]
   calendarFeed    BotCalendarFeed?
+  teamBots        BotTeamBot[]
+  ledTeams        BotTeam[]             @relation("BotTeamLead")
 
   @@unique([ownerId, systemKey])
   @@unique([ownerId, importKey])

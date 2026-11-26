@@ -967,6 +967,7 @@ mod tests {
             status: UserStatus::Active,
             tier: crate::entity::sea_orm_active_enums::UserTier::Pro,
             share_email: None,
+            last_seen_at: Some(created),
         }
     }
 
