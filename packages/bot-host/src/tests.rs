@@ -422,6 +422,7 @@ fn turn(id: &str) -> BotTurn {
         reply_message_id: None,
         error_code: None,
         hops: 0,
+        discussion_hops: None,
         owner_id: "owner".into(),
         requester_id: Some("owner".into()),
         requester_name: None,
@@ -593,6 +594,46 @@ fn a_bots_hand_over_wakes_a_local_room_bot_up_to_the_discussion_budget() {
     );
     answer.envelope["body"]["hops"] = json!(MAX_HOPS);
     assert!(wakes(&[answer, own], group));
+}
+
+#[test]
+fn a_grant_and_the_budget_bots_carry_on_raise_the_local_hand_over_limit() {
+    use flow_like_types::{
+        bot_turn::{MAX_DISCUSSION_HOPS, discussion_hops},
+        inbox::ConversationKind,
+    };
+    let granted = discussion_hops(12);
+    let wakes = |line: &InboxEntry| {
+        crate::rule::waiting(
+            ConversationKind::Group,
+            "bot",
+            std::slice::from_ref(line),
+            line.created_at,
+            false,
+            false,
+        )
+    };
+    let mut line = plain("What do you think?");
+    line.message_id = "m2".into();
+    line.sender_id = "peer".into();
+    line.envelope["body"]["hops"] = json!(MAX_DISCUSSION_HOPS + 2);
+    line.envelope["body"]["mentions"] = json!(["bot"]);
+    assert!(wakes(&line).is_none(), "past the default budget");
+    line.envelope["body"]["discussion_hops"] = json!(granted);
+    let waiting = wakes(&line).expect("the chain's budget lets it through");
+    assert_eq!(waiting.discussion_hops, Some(granted));
+    line.envelope["body"]["hops"] = json!(granted + 1);
+    assert!(wakes(&line).is_none());
+
+    let mut ask = plain("@bot discuss it with peer");
+    ask.sender_id = flow_like_local_bots::LOCAL_OWNER_ID.into();
+    ask.envelope["body"]["mentions"] = json!(["bot"]);
+    ask.envelope["body"]["discussion"] = json!({ "rounds": 12 });
+    assert_eq!(
+        wakes(&ask).unwrap().discussion_hops,
+        Some(granted),
+        "a person's grant becomes the budget the reply carries on"
+    );
 }
 
 #[derive(Clone)]

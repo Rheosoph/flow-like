@@ -25,6 +25,7 @@ fn turn(id: &str, bot: &str) -> BotTurn {
         reply_message_id: None,
         error_code: None,
         hops: 0,
+        discussion_hops: None,
         owner_id: "owner".into(),
         requester_id: None,
         requester_name: None,

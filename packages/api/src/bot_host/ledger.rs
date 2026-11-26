@@ -121,32 +121,51 @@ pub(crate) struct Waking<'a> {
     /// The person whose message started the chain the turn belongs to: the requester of their
     /// own message, the chain's origin for a bot's ([`BotDelivery::chain_origin`]).
     pub origin_id: String,
+    /// The bot turns the chain's discussion may reach ([`BotDelivery::discussion_hops`]).
+    pub discussion_hops: Option<u32>,
     pub audience: TurnAudience,
 }
 
-/// The person whose message started the chain behind a message `sender` wrote as a turn's reply,
-/// where `reply_to` names that turn's trigger: the turn's origin, or for a turn queued before
-/// origins were recorded its requester when a person woke it. `None` when no such turn exists.
-pub(crate) async fn chain_origin<C: ConnectionTrait>(
+/// What a message carries on from the chain of bot turns behind it.
+#[derive(Debug, Default)]
+pub(crate) struct Chain {
+    /// The person whose message started it.
+    pub origin: Option<String>,
+    /// The bot turns a person allowed its discussion to reach; `None`: the default budget.
+    pub discussion_hops: Option<u32>,
+}
+
+/// The chain behind a message `sender` wrote as a turn's reply, where `reply_to` names that
+/// turn's trigger: the turn's origin and discussion budget. A turn queued before origins were
+/// recorded gives its requester when a person woke it. Empty when no such turn exists.
+pub(crate) async fn chain_of<C: ConnectionTrait>(
     db: &C,
     sender: &str,
     reply_to: Option<&str>,
-) -> Result<Option<String>, DbErr> {
+) -> Result<Chain, DbErr> {
     let Some(trigger) = reply_to else {
-        return Ok(None);
+        return Ok(Chain::default());
     };
-    let turn: Option<(Option<String>, Option<String>, i32)> =
+    let turn: Option<(Option<String>, Option<String>, i32, Option<i32>)> =
         bot_turn::Entity::find_by_id(turn_id(sender, trigger))
             .select_only()
             .columns([
                 bot_turn::Column::OriginId,
                 bot_turn::Column::RequesterId,
                 bot_turn::Column::Hops,
+                bot_turn::Column::DiscussionHops,
             ])
             .into_tuple()
             .one(db)
             .await?;
-    Ok(turn.and_then(|(origin, requester, hops)| origin.or(requester.filter(|_| hops == 0))))
+    Ok(
+        turn.map_or_else(Chain::default, |(origin, requester, hops, discussion)| {
+            Chain {
+                origin: origin.or(requester.filter(|_| hops == 0)),
+                discussion_hops: discussion.and_then(|hops| u32::try_from(hops).ok()),
+            }
+        }),
+    )
 }
 
 /// Whose request the message is: its sender, except that another bot of the owner in the owner's
@@ -181,6 +200,7 @@ async fn waking_of<'a, C: ConnectionTrait>(
                 .chain_origin
                 .clone()
                 .unwrap_or_else(|| requester_id.clone()),
+            discussion_hops: delivery.discussion_hops,
             requester_id,
             audience: TurnAudience::of(delivery.conversation_kind),
             recipient,
@@ -260,6 +280,9 @@ fn queued_row(
         hops: Set(i32::try_from(recipient.hops).unwrap_or(i32::MAX)),
         requester_id: Set(Some(waking.requester_id.clone())),
         origin_id: Set(Some(waking.origin_id.clone())),
+        discussion_hops: Set(waking
+            .discussion_hops
+            .map(|hops| i32::try_from(hops).unwrap_or(i32::MAX))),
         audience: Set(waking.audience.stored().to_string()),
         status_text: Set(None),
         unprompted: Set(recipient.unprompted().then_some(true)),
@@ -373,6 +396,9 @@ pub(crate) fn turn_json(turn: &bot_turn::Model, batched: Vec<String>) -> BotTurn
         reply_message_id: turn.reply_message_id.clone(),
         error_code: turn.error_code.clone(),
         hops: u32::try_from(turn.hops).unwrap_or(0),
+        discussion_hops: turn
+            .discussion_hops
+            .and_then(|hops| u32::try_from(hops).ok()),
         owner_id: turn.owner_id.clone(),
         requester_id: turn.requester_id.clone(),
         requester_name: None,

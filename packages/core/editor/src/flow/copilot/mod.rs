@@ -9,6 +9,7 @@ pub mod assistant;
 pub mod behavioral_evaluation;
 pub mod behavioral_state;
 pub mod benchmark_cases;
+pub mod bot_discussion;
 pub mod bot_notes;
 pub mod bot_reply_files;
 pub mod bot_run;

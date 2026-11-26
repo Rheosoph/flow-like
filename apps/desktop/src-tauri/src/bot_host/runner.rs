@@ -236,6 +236,7 @@ impl TurnRunner for NativeRunner {
             notes: job.notes.clone().filter(|_| !job.acknowledgement),
             trail: job.trail.clone().filter(|_| !job.acknowledgement),
             reply_files: job.reply_files.clone().filter(|_| !job.acknowledgement),
+            discussion: job.discussion.clone().filter(|_| !job.acknowledgement),
             room_updates: job.room_updates.clone(),
             approval_gate: Some(job.gate.clone()),
             requester: job.requester.clone(),

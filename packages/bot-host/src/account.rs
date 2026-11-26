@@ -24,6 +24,7 @@ use crate::{
 };
 use flow_like::flow::copilot::{
     ReplyFiles, TalkingWith, ToolTrail, TurnRequester,
+    bot_discussion::DiscussionProposals,
     bot_notes::NotesHandle,
     bot_talk::AnsweredRound,
     decision::{self, Decision, DecisionParticipant},
@@ -118,6 +119,7 @@ struct Live {
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
     reply_files: Option<ReplyFiles>,
+    discussion: Option<DiscussionProposals>,
 }
 
 #[derive(Default)]
@@ -397,6 +399,7 @@ impl Inner {
                     notes: None,
                     trail: None,
                     reply_files: None,
+                    discussion: None,
                 };
                 started.push((live.info.clone(), key.clone(), turn.id, receiver));
                 state.live.insert(key, live);
@@ -800,12 +803,15 @@ impl Inner {
                 .as_deref()
                 .map(|partner| TalkingWith::of(partner, bot_id, &names)),
             discussion_hops: (in_room && !asks && lead.hops > 0).then_some(lead.hops),
+            discussion_limit: flow_like_types::bot_turn::hop_limit(true, lead.discussion_hops),
             room_bots: if in_room {
                 room_bots(room.as_ref(), bot_id)
             } else {
                 Vec::new()
             },
         };
+        let discussion =
+            (in_room && !asks && !ephemeral_user_context).then(DiscussionProposals::new);
         if reacting && no_prompt {
             return self.stay_silent(lead).await;
         }
@@ -930,6 +936,7 @@ impl Inner {
             live.notes = notes.clone();
             live.trail = trail.clone();
             live.reply_files = reply_files.clone();
+            live.discussion = discussion.clone();
             live.usage = usage.clone();
         }
         let mut job = TurnJob {
@@ -955,6 +962,7 @@ impl Inner {
             notes: notes.clone(),
             trail,
             reply_files,
+            discussion,
             memory: memory.clone(),
             gate: gate.clone(),
             requester: Some(requester.clone()),
@@ -1626,7 +1634,7 @@ impl Inner {
         sealed: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
-        let (note, trail, files, usage);
+        let (note, trail, files, discussion, usage);
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -1639,6 +1647,7 @@ impl Inner {
             note = live.notes.as_ref().and_then(NotesHandle::touched);
             trail = live.trail.clone();
             files = live.reply_files.clone();
+            discussion = live.discussion.clone();
             usage = live.usage.clone();
         }
         let message_id = if failure.is_some() {
@@ -1654,6 +1663,9 @@ impl Inner {
             }
             if let Some(trail) = &trail {
                 trail.attach(&mut body);
+            }
+            if let Some(proposals) = &discussion {
+                proposals.attach(&mut body);
             }
         }
         if failure.is_none() && acknowledgement {

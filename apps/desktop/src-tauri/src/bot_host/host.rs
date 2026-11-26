@@ -16,6 +16,7 @@ use super::{
 use chrono::{Duration as Age, Utc};
 use flow_like::flow::copilot::{
     ReplyFiles, ToolTrail,
+    bot_discussion::DiscussionProposals,
     bot_notes::NotesHandle,
     decision::{self, Decision, DecisionParticipant},
     decision_event::{self, EventDecision},
@@ -82,6 +83,7 @@ struct Live {
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
     reply_files: Option<ReplyFiles>,
+    discussion: Option<DiscussionProposals>,
 }
 
 #[derive(Default)]
@@ -671,6 +673,7 @@ impl Inner {
                     notes: None,
                     trail: None,
                     reply_files: None,
+                    discussion: None,
                     usage: Default::default(),
                 };
                 retarget(&mut live, bot_id, &waiting);
@@ -810,20 +813,20 @@ impl Inner {
         if reacting && transcript.prompt.is_empty() {
             return End::silent();
         }
+        let trigger = oldest_first
+            .iter()
+            .find(|entry| entry.message_id == waiting.message_id);
+        let in_room = conversation.kind == ConversationKind::Group;
+        let asks = trigger
+            .and_then(rule::parse_body)
+            .is_some_and(|body| body.ask.is_some());
         let requester = (conversation.kind == ConversationKind::Group
             || reacting
             || !transcript.addressed)
             .then(|| {
-                let trigger = oldest_first
-                    .iter()
-                    .find(|entry| entry.message_id == waiting.message_id);
                 let requester_id = trigger
                     .map_or(LOCAL_OWNER_ID, |entry| entry.sender_id.as_str())
                     .to_owned();
-                let in_room = conversation.kind == ConversationKind::Group;
-                let asks = trigger
-                    .and_then(rule::parse_body)
-                    .is_some_and(|body| body.ask.is_some());
                 flow_like::flow::copilot::TurnRequester {
                     requester_name: names.get(&requester_id).cloned(),
                     requester_id,
@@ -837,6 +840,10 @@ impl Inner {
                         flow_like::flow::copilot::TalkingWith::of(partner, bot_id, &names)
                     }),
                     discussion_hops: (in_room && !asks && waiting.hops > 0).then_some(waiting.hops),
+                    discussion_limit: flow_like_types::bot_turn::hop_limit(
+                        true,
+                        waiting.discussion_hops,
+                    ),
                     room_bots: conversation
                         .members
                         .iter()
@@ -954,11 +961,14 @@ impl Inner {
             ToolTrail::new(transcript::tool_trail(bot_id, &oldest_first[..upto]))
         });
         let reply_files = (!ephemeral_user_context).then(ReplyFiles::new);
+        let discussion =
+            (in_room && !asks && !ephemeral_user_context).then(DiscussionProposals::new);
         let usage = flow_like::flow::copilot::bot_usage::BotUsage::default();
         if let Some(live) = lock(&self.state).live.get_mut(key) {
             live.notes = notes.clone();
             live.trail = trail.clone();
             live.reply_files = reply_files.clone();
+            live.discussion = discussion.clone();
             live.usage = usage.clone();
         }
         let mut sender_labels = HashMap::new();
@@ -998,6 +1008,7 @@ impl Inner {
             notes,
             trail,
             reply_files,
+            discussion,
             reply_stream: None,
         };
         if bot.model.decision.is_some() {
@@ -1570,7 +1581,7 @@ impl Inner {
         acknowledgement: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
-        let (note, trail, files, usage);
+        let (note, trail, files, discussion, usage);
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -1583,6 +1594,7 @@ impl Inner {
             note = live.notes.as_ref().and_then(NotesHandle::touched);
             trail = live.trail.clone();
             files = live.reply_files.clone();
+            discussion = live.discussion.clone();
             usage = live.usage.clone();
         }
         let (bot_id, conversation_id) = key;
@@ -1608,6 +1620,9 @@ impl Inner {
             }
             if let Some(trail) = &trail {
                 trail.attach(&mut envelope["body"]);
+            }
+            if let Some(proposals) = &discussion {
+                proposals.attach(&mut envelope["body"]);
             }
         }
         if let Some(envelope) = request.envelope.as_mut() {
@@ -1772,15 +1787,14 @@ fn reply_request(
     text: &str,
     error_code: Option<&str>,
 ) -> SendEntryRequest {
+    let mut body = reply_body(&waiting.message_id, waiting.hops, text, error_code);
+    if let Some(hops) = waiting.discussion_hops {
+        body["discussion_hops"] = serde_json::json!(hops);
+    }
     SendEntryRequest {
         message_id,
         kind: InboxEntryKind::Message,
-        envelope: Some(plain_envelope(reply_body(
-            &waiting.message_id,
-            waiting.hops,
-            text,
-            error_code,
-        ))),
+        envelope: Some(plain_envelope(body)),
         envelopes: None,
     }
 }

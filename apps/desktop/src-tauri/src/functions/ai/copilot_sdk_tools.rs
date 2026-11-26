@@ -4505,6 +4505,7 @@ mod tests {
             reactions: Vec::new(),
             talking_with: None,
             discussion_hops: None,
+            discussion_limit: flow_like_types::bot_turn::MAX_DISCUSSION_HOPS,
             room_bots: Vec::new(),
         });
         assert!(names(Some(&bot)).is_empty());

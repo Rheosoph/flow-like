@@ -25,7 +25,7 @@ pub(crate) const BOT_TURN_TABLE: &str = r#"CREATE TABLE public."BotTurn" (
         "conversationId" TEXT NOT NULL, "triggerMessageId" TEXT NOT NULL,
         "hostKind" TEXT NOT NULL, "status" TEXT NOT NULL, "attempts" INTEGER NOT NULL,
         "hostId" TEXT, "leaseUntil" TEXT, "operationId" TEXT, "replyMessageId" TEXT,
-        "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT, "originId" TEXT,
+        "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT, "originId" TEXT, "discussionHops" INTEGER,
         "audience" TEXT NOT NULL DEFAULT 'OWNER', "statusText" TEXT, "unprompted" BOOLEAN, "createdAt" TEXT NOT NULL,
         "updatedAt" TEXT NOT NULL, UNIQUE ("botId", "triggerMessageId"))"#;
 
@@ -253,6 +253,7 @@ pub(crate) async fn running_turn(
         hops: Set(1),
         requester_id: Set(None),
         origin_id: Set(None),
+        discussion_hops: Set(None),
         audience: Set("OWNER".into()),
         status_text: Set(None),
         unprompted: Set(None),

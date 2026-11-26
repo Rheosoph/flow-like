@@ -30,6 +30,7 @@ const PERSON_CAP =
 	" Messages from people other than you count toward a cap of 20 turns per person per day, together with the turns bots take in a discussion their message started.";
 
 const DISCUSSION_MESSAGES = 10;
+const LONG_DISCUSSION_MESSAGES = 40;
 const BOT_CAP =
 	" Turns that bots start for each other count toward a daily cap, and toward the 20-turn cap of the person whose message started the chain.";
 
@@ -53,7 +54,7 @@ function wakeOutcome(
 			return {
 				tone: "good",
 				title: "It answers",
-				detail: `The @mention hands Byte the word. Two bots can go back and forth for up to ${DISCUSSION_MESSAGES} messages after each message from a person.${BOT_CAP}`,
+				detail: `The @mention hands Byte the word. Two bots can go back and forth for up to ${DISCUSSION_MESSAGES} messages after each message from a person, or ${LONG_DISCUSSION_MESSAGES} when someone allows a longer discussion.${BOT_CAP}`,
 			};
 		}
 		if (reply) {

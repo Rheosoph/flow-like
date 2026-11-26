@@ -51,6 +51,10 @@ pub struct Waiting {
     /// The message names the bot, replies to it, or is in a direct conversation; otherwise the
     /// bot reads along and may stay silent.
     pub addressed: bool,
+    /// The bot turns the message's discussion may reach: a person's `body.discussion`, or what a
+    /// bot's message carries on in `body.discussion_hops`; `None`: the default budget. The reply
+    /// carries it on.
+    pub discussion_hops: Option<u32>,
 }
 
 struct Message<'a> {
@@ -169,8 +173,20 @@ fn hops_of(message: &Message, bot_sender: bool) -> u32 {
     }
 }
 
+/// The bot turns the discussion `message` belongs to may reach: what a person's message allows
+/// (`body.discussion`), or what a bot's message carries on (`body.discussion_hops`); `None`: the
+/// default budget.
+fn discussion_budget(message: &Message, bot_sender: bool) -> Option<u32> {
+    let body = message.body.as_ref()?;
+    if bot_sender {
+        body.discussion_hops
+    } else {
+        body.discussion.and_then(|grant| grant.hops())
+    }
+}
+
 /// Whether `message` still wakes `bot_id` after the bot turns behind it: a bot's room message
-/// that hands it the word ([`hands_over`]) gets the discussion budget, anything else the hop
+/// that hands it the word ([`hands_over`]) gets its discussion's budget, anything else the hop
 /// limit ([`hop_limit`]).
 fn within_hops(kind: ConversationKind, bot_id: &str, message: &Message, bot_sender: bool) -> bool {
     let handed_over = bot_sender
@@ -178,7 +194,7 @@ fn within_hops(kind: ConversationKind, bot_id: &str, message: &Message, bot_send
             .body
             .as_ref()
             .is_some_and(|body| hands_over(kind, body, bot_id));
-    hops_of(message, bot_sender) <= hop_limit(handed_over)
+    hops_of(message, bot_sender) <= hop_limit(handed_over, discussion_budget(message, bot_sender))
 }
 
 fn is_host_reply(message_id: &str) -> bool {
@@ -314,10 +330,8 @@ pub fn waiting_held(
             ))
         })
         .map(|message| {
-            let hops = hops_of(
-                message,
-                message.entry.sender_id != flow_like_local_bots::LOCAL_OWNER_ID,
-            );
+            let bot_sender = message.entry.sender_id != flow_like_local_bots::LOCAL_OWNER_ID;
+            let hops = hops_of(message, bot_sender);
             let sender = message.entry.sender_id.as_str();
             let requester_id = if kind == ConversationKind::Direct {
                 flow_like_local_bots::LOCAL_OWNER_ID
@@ -332,6 +346,7 @@ pub fn waiting_held(
                 seq: message.entry.seq,
                 hops,
                 proactive: reply_is_proactive(message.entry.kind, hops),
+                discussion_hops: discussion_budget(message, bot_sender),
             }
         })
         .or_else(|| reacted_to(kind, bot_id, entries, not_before))
@@ -378,10 +393,8 @@ pub fn waiting_participant(
     )) {
         return None;
     }
-    let hops = hops_of(
-        message,
-        participant_id != flow_like_local_bots::LOCAL_OWNER_ID,
-    );
+    let bot_sender = participant_id != flow_like_local_bots::LOCAL_OWNER_ID;
+    let hops = hops_of(message, bot_sender);
     Some(Waiting {
         message_id: message.entry.message_id.clone(),
         seq: message.entry.seq,
@@ -390,6 +403,7 @@ pub fn waiting_participant(
         requester_id: participant_id.to_owned(),
         audience: TurnAudience::of(kind),
         addressed: addressed(kind, bot_id, message, &messages),
+        discussion_hops: discussion_budget(message, bot_sender),
     })
 }
 
@@ -458,6 +472,7 @@ fn reacted_to(
             requester_id: flow_like_local_bots::LOCAL_OWNER_ID.to_string(),
             audience: TurnAudience::of(kind),
             addressed: true,
+            discussion_hops: None,
         })
         .next()
 }

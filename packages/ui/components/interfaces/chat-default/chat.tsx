@@ -194,6 +194,8 @@ export interface IChatConcurrency {
 export interface IChatGroup {
 	/** Rendered above a message: the speaker line, day dividers, membership notes. */
 	renderMessageHeader?: (message: IMessage, index: number) => React.ReactNode;
+	/** Rendered below a message: a card that acts on what it asked, such as a bot's proposal. */
+	renderMessageFooter?: (message: IMessage) => React.ReactNode;
 	/** Hover menu in a message's corner, e.g. edit and delete for your own. */
 	renderMessageMenu?: (message: IMessage) => React.ReactNode;
 	mentionables?: readonly Mentionable[];
@@ -989,6 +991,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 													interactions={settledByMessageId.get(item.data.id)}
 													onRespond={onRespondToInteraction}
 												/>
+												{group?.renderMessageFooter?.(item.data as IMessage)}
 											</div>
 										),
 									)}

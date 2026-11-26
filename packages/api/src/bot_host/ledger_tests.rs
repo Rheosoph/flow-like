@@ -25,7 +25,7 @@ use flow_like_types::{
         ERROR_BATCHED, ERROR_BOT_DELETED, ERROR_HOST_LOST, ERROR_QUEUE_EXPIRED, LEASE_SECS,
         MAX_ATTEMPTS, MAX_DISCUSSION_HOPS, MAX_HOPS, MAX_RUNNING_PER_OWNER, QUEUED_EXPIRY_SECS,
         STORED_CANCELLED, STORED_DONE, STORED_FAILED, STORED_QUEUED, STORED_RUNNING, TurnHostKind,
-        TurnStatus, reply_message_id, turn_id,
+        TurnStatus, discussion_hops, reply_message_id, turn_id,
     },
     inbox::{ConversationKind, InboxEntryKind},
 };
@@ -252,6 +252,29 @@ async fn a_hand_over_in_a_room_queues_up_to_the_discussion_budget() {
     assert_eq!(
         (rows[0].bot_id.as_str(), rows[0].hops),
         ("bot_1", MAX_DISCUSSION_HOPS as i32)
+    );
+}
+
+#[tokio::test]
+async fn a_discussion_a_person_allowed_to_run_longer_keeps_its_budget_on_the_turn() {
+    let db = database().await;
+    let granted = discussion_hops(12);
+    let mut within = recipient("bot_1", "user-a", SERVER);
+    within.mentioned = true;
+    within.hops = granted;
+    let mut past = recipient("bot_2", "user-a", SERVER);
+    past.mentioned = true;
+    past.hops = granted + 1;
+    let mut found = delivery(ConversationKind::Group, vec![within, past]);
+    found.sender_id = "bot_9".into();
+    found.hands_over = true;
+    found.discussion_hops = Some(granted);
+    assert_eq!(enqueue_in(&db, &found, at(1)).await.unwrap(), 1);
+    let rows = turns(&db).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].bot_id.as_str(), rows[0].discussion_hops),
+        ("bot_1", Some(granted as i32))
     );
 }
 

@@ -201,5 +201,6 @@ pub(super) fn delivery(kind: ConversationKind, recipients: Vec<BotRecipient>) ->
         recipients,
         hands_over: false,
         chain_origin: None,
+        discussion_hops: None,
     }
 }

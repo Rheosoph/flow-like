@@ -323,6 +323,7 @@ fn turn(
         reply_message_id: None,
         error_code: None,
         hops,
+        discussion_hops: None,
         owner_id: "owner".into(),
         requester_id: Some("owner".into()),
         requester_name: None,

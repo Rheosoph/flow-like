@@ -12,15 +12,33 @@ pub const MAX_HOPS: u32 = 3;
 /// Rounds two bots may go back and forth in a room for one message from a person; a round is one
 /// message from each.
 pub const MAX_DISCUSSION_ROUNDS: u32 = 5;
+/// Rounds a person may allow for one longer discussion
+/// ([`crate::bot_message::DiscussionGrant`]).
+pub const MAX_LONG_DISCUSSION_ROUNDS: u32 = 20;
 /// Bot turns behind a message that still wake a bot it hands the word to ([`hands_over`]):
 /// [`MAX_DISCUSSION_ROUNDS`] messages from each of two bots.
-pub const MAX_DISCUSSION_HOPS: u32 = 2 * MAX_DISCUSSION_ROUNDS - 1;
+pub const MAX_DISCUSSION_HOPS: u32 = discussion_hops(MAX_DISCUSSION_ROUNDS);
 
-/// The most bot turns behind a message that still wake a recipient: [`MAX_DISCUSSION_HOPS`] when
-/// the message hands the recipient the word, [`MAX_HOPS`] for anything else.
-pub const fn hop_limit(handed_over: bool) -> u32 {
+/// The bot turns a discussion of `rounds` rounds may reach: one message from each of two bots per
+/// round, the first at 0 hops.
+pub const fn discussion_hops(rounds: u32) -> u32 {
+    rounds.saturating_mul(2).saturating_sub(1)
+}
+
+/// The rounds a discussion that may reach `hops` bot turns has.
+pub const fn discussion_rounds(hops: u32) -> u32 {
+    hops.saturating_add(1) / 2
+}
+
+/// The most bot turns behind a message that still wake a recipient. A message that hands the
+/// recipient the word gets its chain's discussion budget: `discussion`, the hops a person allowed
+/// for it (at most [`MAX_LONG_DISCUSSION_ROUNDS`] rounds), or [`MAX_DISCUSSION_HOPS`]. Anything
+/// else gets [`MAX_HOPS`].
+pub fn hop_limit(handed_over: bool, discussion: Option<u32>) -> u32 {
     if handed_over {
-        MAX_DISCUSSION_HOPS
+        discussion.map_or(MAX_DISCUSSION_HOPS, |hops| {
+            hops.min(discussion_hops(MAX_LONG_DISCUSSION_ROUNDS))
+        })
     } else {
         MAX_HOPS
     }
@@ -406,6 +424,10 @@ pub struct BotTurn {
     pub error_code: Option<String>,
     /// Bot turns that led to the trigger message.
     pub hops: u32,
+    /// The bot turns a person allowed the turn's discussion to reach ([`hop_limit`]); `None`: the
+    /// default [`MAX_DISCUSSION_HOPS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_hops: Option<u32>,
     #[serde(default)]
     pub owner_id: String,
     /// The person or bot whose message woke the turn; `None` on turns queued before it was recorded.
@@ -478,8 +500,30 @@ mod tests {
             inbox::ConversationKind,
         };
         assert_eq!(MAX_DISCUSSION_HOPS + 1, 2 * MAX_DISCUSSION_ROUNDS);
-        assert_eq!(hop_limit(true), MAX_DISCUSSION_HOPS);
-        assert_eq!(hop_limit(false), MAX_HOPS);
+        assert_eq!(
+            discussion_rounds(MAX_DISCUSSION_HOPS),
+            MAX_DISCUSSION_ROUNDS
+        );
+        assert_eq!(hop_limit(true, None), MAX_DISCUSSION_HOPS);
+        assert_eq!(hop_limit(false, None), MAX_HOPS);
+        assert_eq!(hop_limit(true, Some(discussion_hops(12))), 23);
+        assert_eq!(hop_limit(false, Some(discussion_hops(12))), MAX_HOPS);
+        assert_eq!(
+            hop_limit(true, Some(u32::MAX)),
+            discussion_hops(MAX_LONG_DISCUSSION_ROUNDS),
+            "a declared budget never passes what a person may allow"
+        );
+        use crate::bot_message::DiscussionGrant;
+        assert_eq!(DiscussionGrant { rounds: 12 }.hops(), Some(23));
+        assert_eq!(DiscussionGrant { rounds: 1 }.hops(), Some(1));
+        assert_eq!(DiscussionGrant { rounds: 0 }.hops(), None);
+        assert_eq!(
+            DiscussionGrant {
+                rounds: MAX_LONG_DISCUSSION_ROUNDS + 1
+            }
+            .hops(),
+            None
+        );
         let naming = MessageBody {
             text: "@Story what do you think?".into(),
             mentions: vec!["bot_story".into()],
@@ -780,6 +824,7 @@ mod tests {
             reply_message_id: None,
             error_code: None,
             hops: 0,
+            discussion_hops: None,
             owner_id: "user_a".into(),
             requester_id: Some("user_a".into()),
             requester_name: None,

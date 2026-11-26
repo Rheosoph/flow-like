@@ -59,12 +59,19 @@ pub(crate) struct BotDelivery {
     /// The person whose message started the chain of bot turns behind a bot's message, from the
     /// turn that wrote it; `None` for anyone else's entry, which starts a chain of its own.
     pub chain_origin: Option<String>,
+    /// The bot turns the entry's discussion may reach: what a person's room message allows
+    /// (`body.discussion`), or for a bot's message what its chain was allowed; `None`: the
+    /// default budget.
+    pub discussion_hops: Option<u32>,
 }
 
 impl BotDelivery {
     /// The most bot turns behind the entry that still wake `recipient`.
     pub(crate) fn hop_limit(&self, recipient: &BotRecipient) -> u32 {
-        flow_like_types::bot_turn::hop_limit(self.hands_over && recipient.mentioned)
+        flow_like_types::bot_turn::hop_limit(
+            self.hands_over && recipient.mentioned,
+            self.discussion_hops,
+        )
     }
 }
 

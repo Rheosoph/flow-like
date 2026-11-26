@@ -351,6 +351,7 @@ fn a_reply_answers_the_trigger_one_hop_further_and_a_failure_names_its_code() {
         hops: 2,
         requester_id: Some("user-a".into()),
         origin_id: Some("user-a".into()),
+        discussion_hops: None,
         audience: "OWNER".into(),
         status_text: None,
         unprompted: None,
@@ -619,8 +620,9 @@ async fn bots_answering_each_other_stop_at_the_hop_cap() {
     assert!(queued.is_empty(), "{queued:?}");
 }
 
-#[tokio::test]
-async fn bots_handing_each_other_the_word_in_a_room_get_the_discussion_budget() {
+/// Two bots handing each other the word with @mentions after a person's message that allows
+/// `granted` hops; the turns that ran, with their hops.
+async fn discussion_between_two_bots(granted: Option<u32>) -> Vec<(&'static str, i32)> {
     let db = database().await;
     insert_bot(&db, "bot_1", "user-a", "SERVER").await;
     insert_bot(&db, "bot_2", "user-b", "SERVER").await;
@@ -654,13 +656,9 @@ async fn bots_handing_each_other_the_word_in_a_room_get_the_discussion_budget() 
         hops: 0,
         interactive: false,
     };
-    enqueue_in(
-        &db,
-        &super::fixture::delivery(ConversationKind::Group, vec![opener]),
-        now_millis(),
-    )
-    .await
-    .unwrap();
+    let mut kickoff = super::fixture::delivery(ConversationKind::Group, vec![opener]);
+    kickoff.discussion_hops = granted;
+    enqueue_in(&db, &kickoff, now_millis()).await.unwrap();
 
     let (mut bot, mut trigger) = ("bot_1", "m1".to_string());
     let mut ran = Vec::new();
@@ -668,6 +666,12 @@ async fn bots_handing_each_other_the_word_in_a_room_get_the_discussion_budget() 
         let turn = claim_now(&db, bot, &trigger, "h1").await;
         ran.push((bot, turn.hops));
         assert_eq!(turn.origin_id.as_deref(), Some("user-a"), "{bot}");
+        assert_eq!(
+            turn.discussion_hops,
+            granted.map(|hops| hops as i32),
+            "{bot} at {} keeps the chain's budget",
+            turn.hops
+        );
         let partner = if bot == "bot_1" { "bot_2" } else { "bot_1" };
         let reply_id = reply_message_id(bot, &trigger);
         let text = format!("@{partner} what do you make of this?");
@@ -688,12 +692,58 @@ async fn bots_handing_each_other_the_word_in_a_room_get_the_discussion_budget() 
         }
         (bot, trigger) = (partner, reply_id);
     }
-    let expected: Vec<(&str, i32)> = (0..=MAX_DISCUSSION_HOPS as i32)
+    ran
+}
+
+fn alternating(last_hops: u32) -> Vec<(&'static str, i32)> {
+    (0..=last_hops as i32)
         .map(|hops| (if hops % 2 == 0 { "bot_1" } else { "bot_2" }, hops))
-        .collect();
+        .collect()
+}
+
+#[tokio::test]
+async fn bots_handing_each_other_the_word_in_a_room_get_the_discussion_budget() {
     assert_eq!(
-        ran, expected,
+        discussion_between_two_bots(None).await,
+        alternating(MAX_DISCUSSION_HOPS),
         "each bot gets five turns; the last reply hands over to no one"
+    );
+}
+
+#[tokio::test]
+async fn a_person_allowing_a_longer_discussion_carries_its_budget_through_the_chain() {
+    let granted = flow_like_types::bot_turn::discussion_hops(7);
+    assert_eq!(
+        discussion_between_two_bots(Some(granted)).await,
+        alternating(granted),
+        "seven rounds: fourteen turns"
+    );
+}
+
+#[test]
+fn a_proposal_for_a_longer_discussion_rides_on_the_reply() {
+    let turn = reply_turn();
+    let answer = Answer {
+        acknowledgement: false,
+        text: "This needs more rounds.".into(),
+        resumed: false,
+        silent: false,
+        completed: false,
+        event_delivery: None,
+        note: None,
+        tool_calls: Vec::new(),
+        files: Vec::new(),
+        discussion_proposal: Some(flow_like_types::bot_message::DiscussionProposal {
+            rounds: 12,
+            reason: "Three markets to compare".into(),
+        }),
+        usage_stats: Vec::new(),
+        taint: Default::default(),
+    };
+    let body = answer_request(&turn, &answer).unwrap().envelope.unwrap()["body"].clone();
+    assert_eq!(
+        body["discussion_proposal"],
+        json!({ "rounds": 12, "reason": "Three markets to compare" })
     );
 }
 
@@ -893,6 +943,7 @@ fn reply_turn() -> bot_turn::Model {
         hops: 0,
         requester_id: None,
         origin_id: None,
+        discussion_hops: None,
         audience: "ROOM".into(),
         status_text: None,
         unprompted: None,
@@ -918,6 +969,7 @@ fn usage_stats_yield_to_reply_files_near_the_body_limit() {
             format!("https://example.com/{}", "r".repeat(1_000)),
             Some("application/pdf".into()),
         )],
+        discussion_proposal: None,
         usage_stats: Vec::new(),
         taint: Default::default(),
     };
@@ -954,6 +1006,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         note: None,
         tool_calls: Vec::new(),
         files: Vec::new(),
+        discussion_proposal: None,
         usage_stats: Vec::new(),
         taint: Default::default(),
     };
@@ -968,6 +1021,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         note: None,
         tool_calls: Vec::new(),
         files: Vec::new(),
+        discussion_proposal: None,
         usage_stats: Vec::new(),
         taint: Default::default(),
     };

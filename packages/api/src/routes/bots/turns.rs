@@ -52,8 +52,12 @@ pub struct BotTurn {
     /// later one answered together with it (`reply_message_id` names the answer).
     pub error_code: Option<String>,
     /// Bot turns that led to the trigger message. A message with more than 3 queues no turn,
-    /// except a bot's room message that @mentions another bot, which wakes it up to 9.
+    /// except a bot's room message that @mentions another bot, which wakes it up to the
+    /// discussion's limit.
     pub hops: u32,
+    /// The bot turns a person allowed this turn's discussion to reach, up to 39; absent: 9.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discussion_hops: Option<u32>,
     pub owner_id: String,
     /// The person or bot whose message woke the turn.
     pub requester_id: Option<String>,
@@ -84,6 +88,7 @@ impl From<contract::BotTurn> for BotTurn {
             reply_message_id: turn.reply_message_id,
             error_code: turn.error_code,
             hops: turn.hops,
+            discussion_hops: turn.discussion_hops,
             owner_id: turn.owner_id,
             requester_id: turn.requester_id,
             requester_name: turn.requester_name,
@@ -610,6 +615,7 @@ mod tests {
             reply_message_id: None,
             error_code: None,
             hops: 1,
+            discussion_hops: None,
             owner_id: "user_a".into(),
             requester_id: Some("user_b".into()),
             requester_name: Some("Mia".into()),
