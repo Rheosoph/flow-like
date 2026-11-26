@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { act } from "react";
+import { type ReactNode, act } from "react";
 import {
 	installDomGlobals,
 	restoreDomGlobals,
@@ -218,4 +218,42 @@ test("a narrower tab opens it over the chat, and a closed panel takes no room", 
 		chat: "700",
 		max: "1120",
 	});
+});
+
+async function renderListFirst(dock?: ReactNode) {
+	await act(async () =>
+		root.render(
+			<CrewSplitLayout
+				listFirst
+				dock={dock}
+				header={<header>Chats</header>}
+				emptyDock={<p>Pick a chat</p>}
+			>
+				<div>Crew</div>
+			</CrewSplitLayout>,
+		),
+	);
+}
+
+test("a list-first layout fills the empty dock beside the list, and a phone shows the list alone", async () => {
+	await resizeTo(1200);
+	await renderListFirst();
+	expect(host.querySelector("aside")?.textContent).toBe("Pick a chat");
+	expect(host.querySelector('[role="separator"]')).toBeNull();
+	expect(host.querySelector("header")?.textContent).toBe("Chats");
+
+	await resizeTo(500);
+	expect(host.querySelector("aside")).toBeNull();
+	expect(host.querySelector("header")?.textContent).toBe("Chats");
+});
+
+test("an open chat on a phone covers the list and drops the header", async () => {
+	await renderListFirst(<textarea defaultValue="Draft" />);
+	expect(host.querySelector("aside textarea")).not.toBeNull();
+	expect(host.querySelector("header")).toBeNull();
+	expect(host.querySelector("aside")?.style.width).toBe("");
+
+	await resizeTo(1200);
+	expect(host.querySelector("header")?.textContent).toBe("Chats");
+	expect(host.querySelector("aside textarea")).not.toBeNull();
 });

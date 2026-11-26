@@ -208,6 +208,21 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
             ],
             keep: vec![
                 keep(
+                    "BotTeam",
+                    "createdBy",
+                    "attribution only; the team belongs to its people and outlives its creator",
+                ),
+                keep(
+                    "BotTeamPerson",
+                    "invitedBy",
+                    "attribution only; the invitee's membership outlives the inviter",
+                ),
+                keep(
+                    "BotTeamBot",
+                    "invitedBy",
+                    "attribution only; the bot's membership outlives the inviter",
+                ),
+                keep(
                     "LockedItem",
                     "ownerId",
                     "retention obligations outlive the account that uploaded the file",

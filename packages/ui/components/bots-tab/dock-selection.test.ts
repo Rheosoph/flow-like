@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { IBot } from "../../state/backend-state/bot-state";
 import {
+	botsViewQuery,
 	dockMoveRoute,
 	dockPanelQuery,
 	dockRoute,
 	dockSelectionForBot,
 	dockSelectionKey,
 	dockSelectionQuery,
+	parseBotsView,
 	parseDockPanel,
 	resolveDockSelection,
 	systemDockBot,
@@ -203,5 +205,21 @@ describe("a bot's direct conversation opens as the bot's chat", () => {
 		for (const id of ["c_anna", "c_room", "c_other", "missing"]) {
 			expect(resolve(id)).toEqual({ type: "conversation", conversationId: id });
 		}
+	});
+});
+
+describe("bots view and dock target", () => {
+	test("view=org is read and written without touching other parameters", () => {
+		expect(parseBotsView(new URLSearchParams("view=org"))).toBe("org");
+		expect(parseBotsView(new URLSearchParams("view=table"))).toBe("chats");
+		expect(botsViewQuery("org", "bot=a")).toBe("bot=a&view=org");
+		expect(botsViewQuery("chats", "bot=a&view=org")).toBe("bot=a");
+		expect(botsViewQuery("chats", "view=table")).toBe("view=table");
+	});
+
+	test("selecting a chat leaves the org view even for the same selection", () => {
+		expect(
+			dockSelectionQuery({ type: "bot", botId: "a" }, "bot=a&view=org"),
+		).toBe("bot=a");
 	});
 });

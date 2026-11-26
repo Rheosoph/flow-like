@@ -14,7 +14,7 @@ use flow_like_local_bots::{
     SegmentsQuery, SendEntryRequest, WriteSegmentRequest,
 };
 use flow_like_types::{
-    bot_turn::{TurnStatus, failure_message_id, reply_message_id, turn_id},
+    bot_turn::{MAX_DISCUSSION_HOPS, TurnStatus, failure_message_id, reply_message_id, turn_id},
     inbox::{ConversationKind, InboxEntryKind},
 };
 use serde_json::{Value, json};
@@ -839,6 +839,27 @@ fn a_bot_never_waits_for_its_own_message_and_hops_are_capped() {
         json!({ "text": "pong" }),
     );
     f.send(&group.id, &ada.id, "a2", "message", mention(Some(4)));
+    let waiting = f.waiting(&group, &bob.id).unwrap();
+    assert_eq!(
+        (waiting.message_id.as_str(), waiting.hops),
+        ("a2", 4),
+        "a hand-over by mention runs on within the discussion budget"
+    );
+
+    f.send(
+        &group.id,
+        &bob.id,
+        "b2",
+        "message",
+        json!({ "text": "pong again" }),
+    );
+    f.send(
+        &group.id,
+        &ada.id,
+        "a2x",
+        "message",
+        mention(Some(MAX_DISCUSSION_HOPS + 1)),
+    );
     assert_eq!(f.waiting(&group, &bob.id), None);
 
     f.send(&group.id, &ada.id, "a3", "message", mention(None));

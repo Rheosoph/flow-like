@@ -1,7 +1,9 @@
 //! A bot bringing a person into the group chat its turn runs in. The bot names the person by the
 //! exact username or email address it was given, never through a search. The owner approves every
-//! invitation on a card that says who and why, then the person accepts or declines. The host binds
-//! the room, so model arguments cannot name another conversation.
+//! invitation on a card that says who and why; the person reads the same reason with the
+//! invitation, then accepts or declines. An address without an account gets the invitation by
+//! email, as a link to sign up and join. The host binds the room, so model arguments cannot name
+//! another conversation.
 
 use std::sync::Arc;
 
@@ -22,8 +24,10 @@ pub const ROOM_INVITE: &str = flow_like_types::bot_message::ROOM_INVITE_TOOL;
 /// The hub's refusal codes for an invitation it did not send.
 pub const NO_SUCH_PERSON_CODE: &str = "BOT_INVITE_NO_SUCH_PERSON";
 pub const REFUSED_CODE: &str = "BOT_INVITE_REFUSED";
+/// How long the link of an email invitation works.
+pub const EMAIL_INVITE_DAYS: i64 = 30;
 
-const DESCRIPTION: &str = "Invite a person into this group chat. `person` is their exact Flow-Like username or their exact email address, as someone here gave it to you: there is no search, so never guess or complete one. Your owner approves every invitation on a card that shows `reason`, then the person accepts or declines; they read nothing of the room before that. Only for people, in group chats.";
+const DESCRIPTION: &str = "Invite a person into this group chat. `person` is their exact Flow-Like username or their exact email address, as someone here gave it to you: there is no search, so never guess or complete one. Someone whose address has no account yet gets the invitation by email, with a link to sign up and join. Write `reason` to the person: they read it with the invitation and in any email, after your owner approved it on a card, every time. They accept or decline and read nothing of the room before that. Only for people, in group chats.";
 
 /// Who a bot invites: a username (a leading `@` dropped) or an email address, compared exactly
 /// apart from letter case.
@@ -80,6 +84,8 @@ pub enum InviteOutcome {
     Invited {
         name: String,
     },
+    /// No account has the address, so the person got the invitation by email.
+    Emailed,
     AlreadyMember {
         name: String,
     },
@@ -103,6 +109,7 @@ pub fn hub_reply(reply: &serde_json::Value) -> Result<InviteOutcome> {
         .to_string();
     match reply.get("status").and_then(serde_json::Value::as_str) {
         Some("invited") => Ok(InviteOutcome::Invited { name }),
+        Some("emailed") => Ok(InviteOutcome::Emailed),
         Some("already_member") => Ok(InviteOutcome::AlreadyMember { name }),
         Some("already_invited") => Ok(InviteOutcome::AlreadyInvited { name }),
         other => Err(flow_like_types::anyhow!(
@@ -127,7 +134,8 @@ pub fn hub_refusal(code: &str, message: &str) -> Option<InviteOutcome> {
 /// device through the hub.
 #[async_trait]
 pub trait RoomInvites: Send + Sync {
-    async fn invite(&self, person: &InviteTarget) -> Result<InviteOutcome>;
+    /// `reason` is what the owner approved; the person reads it with the invitation.
+    async fn invite(&self, person: &InviteTarget, reason: &str) -> Result<InviteOutcome>;
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -135,7 +143,8 @@ pub trait RoomInvites: Send + Sync {
 pub struct RoomInviteArgs {
     /// The person's exact username (a leading @ is fine) or exact email address.
     pub person: String,
-    /// One or two sentences your owner reads before approving: why this person should join.
+    /// One or two sentences to the person: why they should join. Your owner approves it first;
+    /// the person reads it with the invitation and in any email.
     pub reason: String,
 }
 
@@ -152,6 +161,14 @@ pub fn specs() -> Vec<ToolSpec> {
     }]
 }
 
+/// An invitation's reason, trimmed: one line of 1 to [`MAX_SUMMARY_CHARS`] characters.
+pub fn checked_reason(reason: &str) -> Option<String> {
+    let reason = reason.trim();
+    let chars = reason.chars().count();
+    (chars > 0 && chars <= MAX_SUMMARY_CHARS && !reason.chars().any(char::is_control))
+        .then(|| reason.to_string())
+}
+
 /// Checks the arguments a `room_invite` card is built from.
 pub fn checked_invite(args: &RoomInviteArgs) -> ToolResult<(InviteTarget, String)> {
     let target = InviteTarget::parse(&args.person).ok_or_else(|| {
@@ -160,14 +177,12 @@ pub fn checked_invite(args: &RoomInviteArgs) -> ToolResult<(InviteTarget, String
             args.person.trim()
         ))
     })?;
-    let reason = args.reason.trim();
-    let chars = reason.chars().count();
-    if chars == 0 || chars > MAX_SUMMARY_CHARS || reason.chars().any(char::is_control) {
-        return Err(ToolError::invalid(format!(
+    let reason = checked_reason(&args.reason).ok_or_else(|| {
+        ToolError::invalid(format!(
             "'reason' is one line of 1 to {MAX_SUMMARY_CHARS} characters"
-        )));
-    }
-    Ok((target, reason.to_string()))
+        ))
+    })?;
+    Ok((target, reason))
 }
 
 /// What an approval card shows for a `room_invite` call; `None` for invalid arguments.
@@ -201,14 +216,23 @@ fn backend(env: &dyn ToolEnv) -> ToolResult<Arc<dyn RoomInvites>> {
 
 pub async fn room_invite(env: &dyn ToolEnv, args: RoomInviteArgs) -> ToolResult<ToolOutput> {
     let rooms = backend(env)?;
-    let (target, _) = checked_invite(&args)?;
+    let (target, reason) = checked_invite(&args)?;
     let person = target.value();
-    let (status, name, message) = match rooms.invite(&target).await? {
+    let (status, name, message) = match rooms.invite(&target, &reason).await? {
         InviteOutcome::Invited { name } => (
             "invited",
             name,
             "Invited. They join once they accept; until then they read nothing of this room.",
         ),
+        InviteOutcome::Emailed => {
+            return Ok(ToolOutput::new(json!({
+                "status": "emailed",
+                "person": { "email": person },
+                "message": format!(
+                    "No Flow-Like account uses this address, so they got an email with your reason and a link to sign up and join. The link works once, for {EMAIL_INVITE_DAYS} days."
+                ),
+            })));
+        }
         InviteOutcome::AlreadyMember { name } => {
             ("already_member", name, "They are already in this room.")
         }
@@ -249,14 +273,17 @@ mod tests {
 
     #[derive(Default)]
     struct FakeRooms {
-        asked: Mutex<Vec<InviteTarget>>,
+        asked: Mutex<Vec<(InviteTarget, String)>>,
         outcome: Mutex<Option<InviteOutcome>>,
     }
 
     #[async_trait]
     impl RoomInvites for FakeRooms {
-        async fn invite(&self, person: &InviteTarget) -> Result<InviteOutcome> {
-            self.asked.lock().unwrap().push(person.clone());
+        async fn invite(&self, person: &InviteTarget, reason: &str) -> Result<InviteOutcome> {
+            self.asked
+                .lock()
+                .unwrap()
+                .push((person.clone(), reason.to_string()));
             Ok(self
                 .outcome
                 .lock()
@@ -313,6 +340,10 @@ mod tests {
             hub_reply(&json!({ "status": "already_invited", "name": "Ana" })).unwrap(),
             InviteOutcome::AlreadyInvited { name: "Ana".into() }
         );
+        assert_eq!(
+            hub_reply(&json!({ "status": "emailed", "name": "ana@example.org" })).unwrap(),
+            InviteOutcome::Emailed
+        );
         assert!(hub_reply(&json!({ "status": "maybe" })).is_err());
         assert_eq!(
             hub_refusal(NO_SUCH_PERSON_CODE, "No account"),
@@ -361,7 +392,7 @@ mod tests {
         let env = env_with(rooms.clone()).await;
         let outcome = crate::run(
             ROOM_INVITE,
-            json!({ "person": "ana@example.org", "reason": "Budget owner" }),
+            json!({ "person": "ana@example.org", "reason": " Budget owner " }),
             &env,
         )
         .await;
@@ -370,8 +401,31 @@ mod tests {
         assert_eq!(outcome.result["person"]["name"], "Ana Lima");
         assert_eq!(
             *rooms.asked.lock().unwrap(),
-            [InviteTarget::Email("ana@example.org".into())]
+            [(
+                InviteTarget::Email("ana@example.org".into()),
+                "Budget owner".to_string()
+            )]
         );
+    }
+
+    #[tokio::test]
+    async fn an_address_without_an_account_is_invited_by_email() {
+        let rooms = Arc::new(FakeRooms {
+            outcome: Mutex::new(Some(InviteOutcome::Emailed)),
+            ..Default::default()
+        });
+        let env = env_with(rooms).await;
+        let outcome = crate::run(
+            ROOM_INVITE,
+            json!({ "person": "new@example.org", "reason": "You run the venue." }),
+            &env,
+        )
+        .await;
+        assert_eq!(outcome.status, crate::Status::Ok, "{:?}", outcome.error);
+        assert_eq!(outcome.result["status"], "emailed");
+        assert_eq!(outcome.result["person"]["email"], "new@example.org");
+        let message = outcome.result["message"].as_str().unwrap();
+        assert!(message.contains("sign up"), "{message}");
     }
 
     #[tokio::test]

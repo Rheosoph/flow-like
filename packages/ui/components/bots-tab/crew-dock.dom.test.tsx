@@ -243,21 +243,29 @@ afterAll(async () => {
 	restoreDomGlobals();
 });
 
-function card(local: boolean) {
-	return Array.from(container.querySelectorAll("button")).find(
+function chatRows(name: string) {
+	return Array.from(
+		container.querySelectorAll<HTMLButtonElement>("nav button"),
+	).filter(
 		(button) =>
-			button.textContent?.includes("Assistant") &&
-			button.textContent.includes("Built in") &&
-			button.textContent.includes("Local only") === local,
+			button.querySelector(".font-semibold span.truncate")?.textContent ===
+			name,
 	);
 }
 
+function chatRow(name: string) {
+	return chatRows(name)[0];
+}
+
+function card(local: boolean) {
+	return chatRows("Assistant")[local ? 1 : 0];
+}
+
 function currentCards() {
+	const assistants = chatRows("Assistant");
 	return Array.from(
-		container.querySelectorAll("button[aria-current='true']"),
-	).map((button) =>
-		button.textContent?.includes("Local only") ? "local" : "account",
-	);
+		container.querySelectorAll("nav button[aria-current='true']"),
+	).map((button) => (button === assistants[1] ? "local" : "account"));
 }
 
 function activeConversation() {
@@ -433,11 +441,7 @@ describe("Needs you", () => {
 	const scoutAsks = () => asks("bot:bot_scout");
 
 	function cardButton(name: string) {
-		return Array.from(container.querySelectorAll("button")).find(
-			(button) =>
-				button.textContent?.includes(name) &&
-				button.textContent.includes("Built in"),
-		);
+		return chatRow(name);
 	}
 
 	function openChatIn(card: Element | undefined) {
@@ -685,12 +689,9 @@ describe("where the panel opens", () => {
 		);
 	}
 
-	test("a wide tab opens it beside the chat and gives the dock its width", async () => {
+	test("a wide tab opens it beside the chat", async () => {
 		await mountAt(1400);
-		const aside = container.querySelector("aside");
-		expect(aside?.style.width).toBe("420px");
 		await openPanel();
-		expect(aside?.style.width).toBe("820px");
 		expect(chatCovered()).toBe(false);
 		expect(hasPanelButton("Close details")).toBe(true);
 		expect(hasPanelButton("Back to the chat")).toBe(false);
@@ -698,13 +699,11 @@ describe("where the panel opens", () => {
 
 		await click(panelButton("Close details"));
 		expect(panelOpen()).toBe(false);
-		expect(aside?.style.width).toBe("420px");
 	});
 
 	test("a narrow tab lays it over the chat, with the way back and the dock's own close", async () => {
 		await mountAt(900);
 		await openPanel();
-		expect(container.querySelector("aside")?.style.width).toBe("420px");
 		expect(chatCovered()).toBe(true);
 		expect(hasPanelButton("Back to the chat")).toBe(true);
 		expect(hasPanelButton("Close chat")).toBe(true);

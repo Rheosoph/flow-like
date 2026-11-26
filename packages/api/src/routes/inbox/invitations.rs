@@ -58,6 +58,8 @@ pub(crate) struct Invitee {
     pub principal: Principal,
     pub mode: InviteMode,
     pub owner_id: Option<String>,
+    /// Why a bot invites them, as its owner approved it; the invitee reads it.
+    pub reason: Option<String>,
 }
 
 fn cannot_invite(principal_id: &str) -> ApiError {
@@ -168,10 +170,11 @@ fn invitee(id: &str, kind: PrincipalKind, mode: InviteMode, owner: Option<&Strin
         },
         mode,
         owner_id: owner.cloned(),
+        reason: None,
     }
 }
 
-fn validate_limits(limits: &BotRoomLimits) -> Result<(), ApiError> {
+pub(crate) fn validate_limits(limits: &BotRoomLimits) -> Result<(), ApiError> {
     if limits.mask.is_some_and(|mask| mask < 0) {
         return Err(ApiError::bad_request(
             "Room limits: the permission mask can't be negative",
@@ -200,6 +203,7 @@ pub(super) fn pending_row(
     conversation_id: &str,
     principal: &Principal,
     inviter: &str,
+    reason: Option<&str>,
     now: DateTime<FixedOffset>,
 ) -> conversation_member::ActiveModel {
     conversation_member::ActiveModel {
@@ -215,6 +219,7 @@ pub(super) fn pending_row(
         invited_by: Set(Some(inviter.to_string())),
         invited_at: Set(Some(now)),
         accepted_at: Set(None),
+        invite_reason: Set(reason.map(str::to_string)),
         hidden_at: Set(None),
         cleared_at: Set(None),
         cleared_legacy_at: Set(None),
@@ -232,7 +237,7 @@ pub(crate) struct InviteOutcome {
     pub wake: Vec<String>,
 }
 
-async fn set_member_limits<C: ConnectionTrait>(
+pub(super) async fn set_member_limits<C: ConnectionTrait>(
     txn: &C,
     conversation_id: &str,
     bot_id: &str,
@@ -349,11 +354,15 @@ pub(crate) async fn invite_in<C: ConnectionTrait>(
             ),
         ));
     }
-    conversation_member::Entity::insert_many(
-        asked
-            .iter()
-            .map(|invitee| pending_row(conversation_id, &invitee.principal, inviter, now)),
-    )
+    conversation_member::Entity::insert_many(asked.iter().map(|invitee| {
+        pending_row(
+            conversation_id,
+            &invitee.principal,
+            inviter,
+            invitee.reason.as_deref(),
+            now,
+        )
+    }))
     .on_conflict(
         OnConflict::columns([
             conversation_member::Column::ConversationId,
@@ -369,6 +378,7 @@ pub(crate) async fn invite_in<C: ConnectionTrait>(
             conversation_member::Column::InvitedBy,
             conversation_member::Column::InvitedAt,
             conversation_member::Column::AcceptedAt,
+            conversation_member::Column::InviteReason,
             conversation_member::Column::UnreadCount,
             conversation_member::Column::LastEntryId,
         ])
@@ -610,6 +620,8 @@ pub struct Invitation {
     pub bot_name: Option<String>,
     pub invited_by: Option<String>,
     pub invited_at: Option<DateTime<FixedOffset>>,
+    /// Why a bot invited you, in its words as its owner approved them.
+    pub reason: Option<String>,
     /// `direct` for a message request, `group` for a room invitation.
     pub conversation_kind: String,
     /// A request's messages held for you: how many, and the newest few.
@@ -722,6 +734,7 @@ pub(crate) async fn invitations_for<C: ConnectionTrait>(
                 principal_id: row.principal_id,
                 invited_by: row.invited_by,
                 invited_at: row.invited_at,
+                reason: row.invite_reason,
             }
         })
         .collect())
@@ -922,7 +935,7 @@ async fn display_name(state: &AppState, principal_id: &str) -> String {
     }
 }
 
-async fn person_name(state: &AppState, user_id: &str) -> String {
+pub(crate) async fn person_name(state: &AppState, user_id: &str) -> String {
     user::Entity::find_by_id(user_id)
         .select_only()
         .column(user::Column::Name)
@@ -938,8 +951,9 @@ async fn person_name(state: &AppState, user_id: &str) -> String {
         .unwrap_or_else(|| "Someone".to_string())
 }
 
-/// Tells each invitee, or the owner of an invited bot, through the notification pipeline.
-/// Failures are logged: an invitation stands without its notice.
+/// Tells each invitee, or the owner of an invited bot, through the notification pipeline, with
+/// the inviting bot's reason when there is one. Failures are logged: an invitation stands without
+/// its notice.
 pub(crate) async fn notify_invited(
     state: &AppState,
     inviter: &str,
@@ -1000,7 +1014,12 @@ pub(crate) async fn notify_invited(
                 user_id,
                 app_id: None,
                 title,
-                description: Some("Accept or decline in your invitations.".to_string()),
+                description: Some(
+                    invitee
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| "Accept or decline in your invitations.".to_string()),
+                ),
                 icon: Some("users".to_string()),
                 image: None,
                 link: Some("/chat?invitations=1".to_string()),

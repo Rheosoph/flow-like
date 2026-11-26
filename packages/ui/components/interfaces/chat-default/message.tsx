@@ -422,11 +422,35 @@ const FeedbackDialog = ({
 /** Hosts without a feedback endpoint hide rating controls. */
 export const ChatFeedbackEnabledContext = createContext(true);
 
+/** An ask's edit and copy sit in its header and appear on hover; touch uses the long-press menu. */
+const AskActions = ({
+	onEdit,
+	onCopy,
+}: {
+	onEdit?: () => void;
+	onCopy: () => void;
+}) => (
+	<span data-fl-chat-hover-action className="flex items-center gap-2">
+		{onEdit && (
+			<MessageActionButton
+				onClick={onEdit}
+				title={i18next.t("editMessage2", "Edit message")}
+			>
+				<EditIcon className="size-3.5" />
+			</MessageActionButton>
+		)}
+		<MessageActionButton
+			onClick={onCopy}
+			title={i18next.t("copyMessage", "Copy message")}
+		>
+			<CopyIcon className="size-3.5" />
+		</MessageActionButton>
+	</span>
+);
+
 const MessageActions = ({
-	isUser,
 	feedbackEnabled,
 	hasFooterContent,
-	compact = false,
 	rating,
 	gaveMoreFeedback,
 	onThumbsUp,
@@ -435,10 +459,8 @@ const MessageActions = ({
 	onEdit,
 	onCopy,
 }: {
-	isUser: boolean;
 	feedbackEnabled: boolean;
 	hasFooterContent: boolean;
-	compact?: boolean;
 	rating: number;
 	gaveMoreFeedback: boolean;
 	onThumbsUp: () => void;
@@ -450,22 +472,11 @@ const MessageActions = ({
 }) => (
 	<div
 		className={cn(
-			"flex flex-row items-center gap-3",
-			compact
-				? "absolute bottom-5 right-8 z-10 h-auto w-auto gap-2"
-				: cn(
-						"h-6 w-full",
-						isUser
-							? hasFooterContent
-								? "justify-end px-2 pt-2 mt-2"
-								: "justify-end px-2 mt-0.5"
-							: hasFooterContent
-								? "justify-start mt-2"
-								: "justify-start mt-0.5",
-					),
+			"flex h-6 w-full flex-row items-center justify-start gap-3",
+			hasFooterContent ? "mt-2" : "mt-0.5",
 		)}
 	>
-		{!isUser && feedbackEnabled && (
+		{feedbackEnabled && (
 			<>
 				<FeedbackButton
 					onClick={onThumbsUp}
@@ -908,7 +919,11 @@ export const MessageComponent = memo(
 			Boolean(message.interaction) ||
 			processedAttachments.length > 0 ||
 			Boolean(FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report);
-		const compactUserActions = !room && isUser && !hasFooterContent;
+		const showActions = !loading && !approvalOnly;
+		const openEditDialog =
+			onMessageUpdate && (editable ?? !isUser)
+				? () => setShowEditDialog(true)
+				: undefined;
 		const hasReplyAction = !room && !isUser && Boolean(onReply);
 		const hasSelectedReactions = Boolean(
 			message.reactions?.length ||
@@ -1002,7 +1017,17 @@ export const MessageComponent = memo(
 									{t("asked", "Asked")}
 									{pending && <PendingAskStatus pending={pending} />}
 								</span>
-								{message.thinking && <ThinkingStamp value={message.thinking} />}
+								<span className="flex shrink-0 items-center gap-3">
+									{message.thinking && (
+										<ThinkingStamp value={message.thinking} />
+									)}
+									{showActions && (
+										<AskActions
+											onEdit={openEditDialog}
+											onCopy={copyToClipboard}
+										/>
+									)}
+								</span>
 							</span>
 						)}
 						{isUser && message.pointedAt && (
@@ -1025,7 +1050,6 @@ export const MessageComponent = memo(
 							ref={contentRef}
 							className={cn(
 								"w-full max-w-full whitespace-break-spaces text-wrap text-sm leading-relaxed",
-								compactUserActions && "pr-10",
 								isUser && showToggle && !isExpanded && "overflow-hidden",
 							)}
 							style={
@@ -1225,46 +1249,32 @@ export const MessageComponent = memo(
 									onReply && !interactionDisabled ? replyToMessage : undefined
 								}
 								onCopy={copyToClipboard}
-								onEdit={
-									onMessageUpdate && (editable ?? !isUser)
-										? () => setShowEditDialog(true)
-										: undefined
-								}
+								onEdit={openEditDialog}
 								extra={renderMenu?.(message)}
 							/>
 						)}
-						{room && !loading && !approvalOnly && (
+						{room && showActions && (
 							<RoomMessageActions
 								align={isUser ? "end" : "start"}
 								disabled={interactionDisabled}
 								onReply={
 									onReply && !interactionDisabled ? replyToMessage : undefined
 								}
-								onEdit={
-									onMessageUpdate && (editable ?? !isUser)
-										? () => setShowEditDialog(true)
-										: undefined
-								}
+								onEdit={openEditDialog}
 								onCopy={copyToClipboard}
 								menu={renderMenu?.(message)}
 							/>
 						)}
-						{!room && !loading && !approvalOnly && (
+						{!room && !isUser && showActions && (
 							<MessageActions
-								isUser={isUser}
 								feedbackEnabled={feedbackEnabled}
 								hasFooterContent={hasFooterContent}
-								compact={compactUserActions}
 								rating={message.rating ?? 0}
 								gaveMoreFeedback={gaveMoreFeedback}
 								onThumbsUp={() => upsertFeedback(1)}
 								onThumbsDown={() => upsertFeedback(-1)}
 								onFeedbackClick={() => setShowFeedbackDialog(true)}
-								onEdit={
-									onMessageUpdate && (editable ?? !isUser)
-										? () => setShowEditDialog(true)
-										: undefined
-								}
+								onEdit={openEditDialog}
 								onCopy={copyToClipboard}
 							/>
 						)}

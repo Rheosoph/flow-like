@@ -30,7 +30,7 @@ export type NeedsYouItem =
 			appearance?: Partial<BotAppearance>;
 	  };
 
-function NeedsYouCard({
+export function NeedsYouCard({
 	avatar,
 	name,
 	where,
@@ -167,7 +167,8 @@ function InvitationNeed({
 									"You choose what {{bot}} may do there",
 									{ bot: botName },
 								)
-							: t("crew.invitations.meta", "Join to read and write in it")
+							: invitation.reason?.trim() ||
+								t("crew.invitations.meta", "Join to read and write in it")
 				}
 				actions={
 					<>
@@ -238,9 +239,17 @@ export function NeedsYouSection({
 	text,
 	onOpenConversation,
 	onOpenAssistant,
+	extra,
+	extraCount = 0,
+	compact = false,
 }: Readonly<{
 	/** Replaces "Needs you" where the section stands on its own. */
 	title?: ReactNode;
+	/** More cards for the same section, such as team invitations. */
+	extra?: ReactNode;
+	extraCount?: number;
+	/** One column, for a narrow list. */
+	compact?: boolean;
 	items: readonly NeedsYouItem[];
 	directory: CrewDirectory;
 	text: ConversationText;
@@ -248,17 +257,24 @@ export function NeedsYouSection({
 	onOpenAssistant: () => void;
 }>) {
 	const { t } = useTranslation("bots");
-	if (items.length === 0) return null;
+	if (items.length + extraCount === 0) return null;
 	return (
 		<CrewSection
 			title={title ?? t("crew.needs.title", "Needs you")}
 			aside={
 				<span className="inline-flex h-5 min-w-5 items-center justify-center self-center rounded-full bg-primary/15 px-1.5 text-xs font-semibold text-primary">
-					{items.length}
+					{items.length + extraCount}
 				</span>
 			}
 		>
-			<div className="grid grid-cols-[repeat(auto-fill,minmax(min(250px,100%),1fr))] gap-3">
+			<div
+				className={
+					compact
+						? "flex flex-col gap-3"
+						: "grid grid-cols-[repeat(auto-fill,minmax(min(250px,100%),1fr))] gap-3"
+				}
+			>
+				{extra}
 				{items.map((item) => {
 					if (item.type === "invitation") {
 						return (

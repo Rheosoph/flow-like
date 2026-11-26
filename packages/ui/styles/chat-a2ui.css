@@ -105,6 +105,26 @@
 	}
 }
 
+/* With a pointer the actions only show on hover, so they float over the surface
+   instead of reserving an empty row under every interactive answer. */
+@media (hover: hover) and (pointer: fine) {
+	[data-fl-a2ui-fence] {
+		position: relative;
+	}
+
+	[data-fl-a2ui-fence] [data-slot="a2ui-fence-actions"] {
+		position: absolute;
+		top: 0.375rem;
+		right: 0.375rem;
+		z-index: 1;
+		margin: 0;
+		border: 1px solid var(--border);
+		border-radius: calc(var(--radius) - 2px);
+		background: color-mix(in oklab, var(--background) 85%, transparent);
+		backdrop-filter: blur(6px);
+	}
+}
+
 @media (prefers-reduced-motion: reduce) {
 	[data-fl-a2ui-fence] [data-slot="a2ui-fence-actions"] {
 		transition: none;

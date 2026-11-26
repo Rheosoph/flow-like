@@ -31,6 +31,7 @@ model Conversation {
   meetings       Meeting[]
   inviteLinks    ConversationInviteLink[]
   botNotes       BotNote[]
+  botTeam        BotTeam?
 
   @@unique([createdBy, importKey])
 }
@@ -58,7 +59,7 @@ model ConversationInviteLink {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   token          String       @unique
   name           String?
-  /// The member who made it, a user sub; no foreign key.
+  /// The member who made it: a user sub, or the bot that sent an email invitation; no foreign key.
   createdBy      String
   /// -1 is unlimited.
   maxUses        BigInt       @default(-1)
@@ -66,6 +67,11 @@ model ConversationInviteLink {
   expiresAt      DateTime?    @db.Timestamptz(3)
   createdAt      DateTime     @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime     @updatedAt @db.Timestamptz(3)
+  /// A bot's email invitation to someone without an account: the lowercased address it went to.
+  /// Such a link works once and is never listed to members.
+  email          String?
+  /// Why the bot invited them, as its owner approved it; shown on the link's page and in the email.
+  reason         String?
 
   @@index([conversationId, createdAt])
   @@index([createdBy])
@@ -135,6 +141,8 @@ model ConversationMember {
   invitedBy      String?
   invitedAt      DateTime?    @db.Timestamptz(3)
   acceptedAt     DateTime?    @db.Timestamptz(3)
+  /// Why a bot invited this person, as its owner approved it; shown with the pending invitation.
+  inviteReason   String?
 
   /// Hidden until a new message or explicit reopening; the history boundaries survive reopening.
   hiddenAt        DateTime? @db.Timestamptz(3)

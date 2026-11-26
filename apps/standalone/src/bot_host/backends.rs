@@ -668,6 +668,7 @@ impl flow_like_bot_tools::RoomInvites for HubRooms {
     async fn invite(
         &self,
         person: &flow_like_bot_tools::InviteTarget,
+        reason: &str,
     ) -> Result<flow_like_bot_tools::InviteOutcome> {
         let room = self
             .0
@@ -678,7 +679,11 @@ impl flow_like_bot_tools::RoomInvites for HubRooms {
         match self
             .0
             .hub
-            .write(&path, Vec::new(), json!({ "person": person.value() }))
+            .write(
+                &path,
+                Vec::new(),
+                json!({ "person": person.value(), "reason": reason }),
+            )
             .await
         {
             Ok(reply) => flow_like_bot_tools::rooms::hub_reply(&reply),

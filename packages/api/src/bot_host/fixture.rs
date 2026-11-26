@@ -107,6 +107,7 @@ pub(super) async fn conversation(
             invited_by: Set(None),
             invited_at: Set(None),
             accepted_at: Set(None),
+            invite_reason: Set(None),
             hidden_at: Set(None),
             cleared_at: Set(None),
             cleared_legacy_at: Set(None),

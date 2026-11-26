@@ -160,6 +160,7 @@ pub(super) fn member_row(
         invited_by: Set(None),
         invited_at: Set(None),
         accepted_at: Set(None),
+        invite_reason: Set(None),
         hidden_at: Set(None),
         cleared_at: Set(None),
         cleared_legacy_at: Set(None),
@@ -220,7 +221,7 @@ pub(crate) async fn start_direct_as<C: ConnectionTrait>(
             kind: PrincipalKind::User,
         };
         let recipient = if request {
-            invitations::pending_row(&id, other, &creator.id, now)
+            invitations::pending_row(&id, other, &creator.id, None, now)
         } else {
             member_row(&id, other, Some(&creator.id), now)
         };

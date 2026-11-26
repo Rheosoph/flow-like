@@ -1,0 +1,66 @@
+/// A team of bots and the people who work with them. Teams nest: the teams under one top-level
+/// team form an org, and every active member of any of its teams sees the whole org.
+model BotTeam {
+  id             String          @id
+  name           String
+  /// What every bot in the team reads about its work.
+  purpose        String?
+  parentId       String?
+  parent         BotTeam?        @relation("BotTeamTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children       BotTeam[]       @relation("BotTeamTree")
+  /// One of the team's active bots; null while the team has no lead.
+  leadBotId      String?
+  lead           Bot?            @relation("BotTeamLead", fields: [leadBotId], references: [id], onDelete: SetNull)
+  /// Teammates ask each other without the first-time Allow card once their owners agreed.
+  directAsks     Boolean         @default(false)
+  /// The team room: a group conversation of the team's active people and bots.
+  conversationId String?         @unique
+  conversation   Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  /// The person who created the team.
+  createdBy      String
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime        @default(now()) @db.Timestamptz(3)
+  people         BotTeamPerson[]
+  bots           BotTeamBot[]
+
+  @@index([parentId])
+}
+
+/// A person in a team. ADMIN manages the team, MEMBER works with its bots. PENDING until they accept.
+model BotTeamPerson {
+  teamId     String
+  team       BotTeam   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// ADMIN | MEMBER
+  role       String    @default("MEMBER")
+  /// PENDING | ACTIVE
+  status     String    @default("PENDING")
+  invitedBy  String?
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  acceptedAt DateTime? @db.Timestamptz(3)
+
+  @@id([teamId, userId])
+  @@index([userId])
+}
+
+/// A bot in a team. An owner's own bot joins at once; another person's bot is PENDING until its
+/// owner accepts. A bot is active in at most one team.
+model BotTeamBot {
+  teamId       String
+  team         BotTeam   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  botId        String
+  bot          Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  /// PENDING | ACTIVE
+  status       String    @default("PENDING")
+  /// The bot's owner agreed to direct asks in this team.
+  directAgreed Boolean   @default(false)
+  /// The BotRoomLimits its owner set for the team and its room; null adds none.
+  limits       Json?
+  invitedBy    String?
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  acceptedAt   DateTime? @db.Timestamptz(3)
+
+  @@id([teamId, botId])
+  @@index([botId])
+}

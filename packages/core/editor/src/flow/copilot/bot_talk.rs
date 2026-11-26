@@ -23,6 +23,7 @@ use std::{
 
 use async_trait::async_trait;
 use flow_like_types::bot::{BotLocation, BotSystemKind};
+use flow_like_types::bot_team::{TeamBrief, team_brief_text};
 use flow_like_types::data_classification::{DataClassification, DataSensitivity};
 use flow_like_types::tokio;
 use serde::{Deserialize, Serialize};
@@ -49,7 +50,7 @@ const MAX_ANSWER_CHARS: usize = 20_000;
 const PERMISSION_PREVIEW_CHARS: usize = 400;
 const DESCRIPTION_PREVIEW_CHARS: usize = 140;
 
-const ASK_BOT_DESCRIPTION: &str = r#"Ask one of your owner's other bots (listed under YOUR CREW) and wait for its answer. `bot` is its name or id from that list. `message` is your complete question: the other bot sees only this message and its earlier exchanges with you, never this conversation, so include what it needs and nothing private it doesn't. The first question to a bot needs your owner's approval, and every question and answer is saved in a conversation your owner can read. Ask one bot at a time."#;
+const ASK_BOT_DESCRIPTION: &str = r#"Ask one of the bots listed under YOUR CREW (your owner's other bots, your teammates and other teams' leads) and wait for its answer. `bot` is its name or id from that list. `message` is your complete question: the other bot sees only this message and its earlier exchanges with you, never this conversation, so include what it needs and nothing private it doesn't. The first question to a bot needs your owner's approval unless the list marks it as asked directly, and every question and answer is saved in a conversation its owner can read. Ask one bot at a time."#;
 
 /// Whether a bot's host is reachable right now.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +74,18 @@ pub struct CrewMember {
     pub location: BotLocation,
     pub presence: BotPresence,
     pub classification: DataSensitivity,
+    /// The owner's display name, for a bot of another owner (a teammate or another team's lead).
+    #[serde(default)]
+    pub owner_name: Option<String>,
+    /// The team the bot is in, when the roster reaches it through a team.
+    #[serde(default)]
+    pub team: Option<String>,
+    /// Set when the bot leads that team.
+    #[serde(default)]
+    pub lead_of: Option<String>,
+    /// Asked without the owner's permission step: the team allows direct asks.
+    #[serde(default)]
+    pub direct: bool,
 }
 
 impl CrewMember {
@@ -158,8 +171,14 @@ type Gate =
 /// the exchanges live in, and a turn that runs without anyone watching.
 #[async_trait]
 pub trait BotTalkHost: Send + Sync {
-    /// The owner's bots `caller` may ask, Assistant and Flux included, never `caller` itself.
+    /// The bots `caller` may ask: its owner's, Assistant and Flux included, plus teammates and
+    /// other teams' leads of any owner; never `caller` itself.
     async fn roster(&self, caller: &CrewMember) -> flow_like_types::Result<Vec<CrewMember>>;
+
+    /// What `caller` knows about its team and org; `None` for a bot outside every team.
+    async fn team_brief(&self, _caller: &CrewMember) -> flow_like_types::Result<Option<TeamBrief>> {
+        Ok(None)
+    }
 
     /// The bot `reference` names in `caller`'s roster; see [`resolve_crew_member`].
     async fn resolve(
@@ -420,6 +439,7 @@ impl BotTalk {
             location,
             presence: BotPresence::Online,
             classification: bot.classification,
+            ..Default::default()
         };
         Self::new(host, caller, bot.tool_host.runs("ask_user"))
     }
@@ -552,12 +572,12 @@ impl BotTalk {
             return lines.join("\n");
         }
         lines.push(format!(
-            "Your owner's other bots. They are bots, not apps: reach one only with `{ASK_BOT_TOOL}`, never with app tools. When your owner asks you to ask, contact or write to one of them, use `{ASK_BOT_TOOL}` and say which bot an answer came from."
+            "Bots you can ask: your owner's other bots, your teammates and the leads of other teams. They are bots, not apps: reach one only with `{ASK_BOT_TOOL}`, never with app tools. When your owner asks you to ask, contact or write to one of them, use `{ASK_BOT_TOOL}` and say which bot an answer came from."
         ));
         lines.push(if self.interactive {
-            "Your owner approves the first question to each bot, once or for good. Every question and answer is saved in a conversation your owner can read.".to_string()
+            "Your owner approves the first question to each bot, once or for good, unless it is marked as asked directly. Every question and answer is saved in a conversation its owner can read.".to_string()
         } else {
-            "No one can approve a first question during this run, so only bots your owner already allowed you to ask will answer. Every question and answer is saved in a conversation your owner can read.".to_string()
+            "No one can approve a first question during this run, so only bots your owner already allowed you to ask, or that are marked as asked directly, will answer. Every question and answer is saved in a conversation its owner can read.".to_string()
         });
         lines.push(format!(
             "When an answer leaves something open, ask the same bot a follow-up: it remembers your earlier exchanges. You can ask one bot up to {MAX_EXCHANGE_ROUNDS} questions for one request, follow-ups included."
@@ -570,7 +590,7 @@ impl BotTalk {
     pub fn turn_section(&self) -> Option<String> {
         let asker = &self.asked_by.last()?.name;
         let mut section = format!(
-            "## THIS TURN\n{asker}, another of your owner's bots, asks you this through `{ASK_BOT_TOOL}`. Your owner isn't part of this exchange but can read it later. Answer {asker} completely in this one reply: no one can answer questions during this turn. If you need more from {asker}, end your answer with what you need; {asker} can follow up. Share only what the question needs."
+            "## THIS TURN\n{asker}, another bot, asks you this through `{ASK_BOT_TOOL}`. Your owner isn't part of this exchange but can read it later. Answer {asker} completely in this one reply: no one can answer questions during this turn. If you need more from {asker}, end your answer with what you need; {asker} can follow up. Share only what the question needs."
         );
         if self.asked_by.len() > 1 {
             section.push_str(&format!(
@@ -589,9 +609,11 @@ impl BotTalk {
         } else {
             None
         };
+        let team = self.team_section().await;
         let sections: Vec<String> = self
             .turn_section()
             .into_iter()
+            .chain(team)
             .chain(
                 crew.as_deref()
                     .filter(|crew| !crew.is_empty())
@@ -602,6 +624,12 @@ impl BotTalk {
             prompt: (!sections.is_empty()).then(|| sections.join("\n\n")),
             asks: crew.is_some_and(|crew| !crew.is_empty()),
         }
+    }
+
+    /// The team brief a bot in a team reads every turn, whether or not it can ask.
+    async fn team_section(&self) -> Option<String> {
+        let brief = self.host.team_brief(&self.caller).await.ok().flatten()?;
+        Some(team_brief_text(&brief))
     }
 
     pub(super) fn nested(&self, callee: &CrewMember, taint: DataSensitivity) -> BotTalk {
@@ -685,9 +713,11 @@ impl BotTalk {
             ));
         }
         let mut warnings = Vec::new();
-        match self.permission(&callee, &request.message, owner).await {
-            Ok(warning) => warnings.extend(warning),
-            Err(stop) => return exchange.stopped(stop),
+        if !callee.direct {
+            match self.permission(&callee, &request.message, owner).await {
+                Ok(warning) => warnings.extend(warning),
+                Err(stop) => return exchange.stopped(stop),
+            }
         }
         self.run_exchange(request, callee, round, exchange, taint, warnings)
             .await
@@ -856,18 +886,30 @@ fn crew_line(member: &CrewMember) -> String {
         .and_then(|text| text.lines().map(str::trim).find(|line| !line.is_empty()))
         .map(|line| format!(" — {}", sentence(&clip(line, DESCRIPTION_PREVIEW_CHARS))))
         .unwrap_or_else(|| ".".to_string());
+    let foreign = member.owner_name.is_some();
     let place = match member.location {
         BotLocation::Server => "in the cloud",
+        BotLocation::Desktop if foreign => "on a desktop",
         BotLocation::Desktop => "on your desktop",
+        BotLocation::Device if foreign => "on a device",
         BotLocation::Device => "on one of your devices",
     };
+    let belonging = match (&member.owner_name, &member.team, &member.lead_of) {
+        (Some(owner), _, Some(lead)) => format!(", {owner}'s bot, lead of {lead}"),
+        (Some(owner), Some(team), None) => format!(", {owner}'s bot in {team}"),
+        (Some(owner), None, None) => format!(", {owner}'s bot"),
+        (None, _, Some(lead)) => format!(", lead of {lead}"),
+        (None, Some(team), None) => format!(", in {team}"),
+        (None, None, None) => String::new(),
+    };
+    let direct = if member.direct { " Ask directly." } else { "" };
     let presence = match member.presence {
         BotPresence::Online => "online",
         BotPresence::Offline => "offline",
         BotPresence::Unknown => "presence unknown",
     };
     format!(
-        "- {} (id: {}{built_in}){description} Runs {place}, {presence}.",
+        "- {} (id: {}{built_in}){belonging}{description} Runs {place}, {presence}.{direct}",
         member.name, member.id
     )
 }
@@ -1316,6 +1358,7 @@ mod tests {
         conversations: Mutex<Vec<(BTreeSet<String>, String)>>,
         messages: Mutex<Vec<Message>>,
         turns: Mutex<Vec<NestedBotTurn>>,
+        brief: Option<TeamBrief>,
         turn: TurnFn,
     }
 
@@ -1330,8 +1373,14 @@ mod tests {
                 conversations: Mutex::default(),
                 messages: Mutex::default(),
                 turns: Mutex::default(),
+                brief: None,
                 turn,
             }
+        }
+
+        fn in_team(mut self, brief: TeamBrief) -> Self {
+            self.brief = Some(brief);
+            self
         }
 
         fn granting(self, grants: &[(&str, &str)]) -> Self {
@@ -1379,6 +1428,13 @@ mod tests {
                 .filter(|bot| self.lists_caller || bot.id != caller.id)
                 .cloned()
                 .collect())
+        }
+
+        async fn team_brief(
+            &self,
+            _caller: &CrewMember,
+        ) -> flow_like_types::Result<Option<TeamBrief>> {
+            Ok(self.brief.clone())
         }
 
         async fn has_grant(
@@ -2484,7 +2540,9 @@ mod tests {
         )));
 
         let headless = BotTalk::new(host.clone(), scout(), false).crew_section(&crew);
-        assert!(headless.contains("only bots your owner already allowed you to ask will answer"));
+        assert!(headless.contains(
+            "only bots your owner already allowed you to ask, or that are marked as asked directly, will answer"
+        ));
         assert_eq!(
             talk.crew_section(&[]),
             "## YOUR CREW\nYour owner has no other bots you can ask."
@@ -2493,14 +2551,12 @@ mod tests {
         assert_eq!(talk.turn_section(), None);
         let ledger_turn = talk.nested(&ledger(), DataSensitivity::default());
         let section = ledger_turn.turn_section().unwrap();
-        assert!(
-            section.starts_with("## THIS TURN\nScout, another of your owner's bots, asks you this")
-        );
+        assert!(section.starts_with("## THIS TURN\nScout, another bot, asks you this"));
         assert!(section.contains("no one can answer questions during this turn"));
         assert!(!section.contains("came through"));
         let digest_turn = ledger_turn.nested(&digest(), DataSensitivity::default());
         let section = digest_turn.turn_section().unwrap();
-        assert!(section.contains("\nLedger, another of your owner's bots"));
+        assert!(section.contains("\nLedger, another bot"));
         assert!(section.ends_with("The question came through: Scout → Ledger → you."));
     }
 
@@ -2753,5 +2809,144 @@ mod tests {
         let nested = talk(&host, false).nested(&ledger(), DataSensitivity::default());
         let turn = nested.turn_section().unwrap();
         assert!(turn.contains("Scout can follow up"));
+    }
+
+    fn patch() -> CrewMember {
+        CrewMember {
+            description: Some("Keeps laptops patched.".into()),
+            location: BotLocation::Server,
+            presence: BotPresence::Online,
+            owner_name: Some("Jonas".into()),
+            team: Some("Security".into()),
+            direct: true,
+            ..member("bot_patch", "Patch")
+        }
+    }
+
+    fn brief() -> TeamBrief {
+        TeamBrief {
+            bot_id: "bot_scout".into(),
+            bot_name: "Scout".into(),
+            owner_name: "Mara".into(),
+            team_id: "team_security".into(),
+            team_name: "Security".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_crew_line_names_the_owner_and_team_of_a_colleagues_bot() {
+        assert_eq!(
+            crew_line(&patch()),
+            "- Patch (id: bot_patch), Jonas's bot in Security — Keeps laptops patched. Runs in the cloud, online. Ask directly."
+        );
+        let lead = CrewMember {
+            lead_of: Some("Security".into()),
+            direct: false,
+            ..patch()
+        };
+        assert!(crew_line(&lead).contains(", Jonas's bot, lead of Security — "));
+        let own = CrewMember {
+            owner_name: None,
+            lead_of: None,
+            direct: false,
+            ..patch()
+        };
+        assert!(crew_line(&own).contains("(id: bot_patch), in Security — "));
+        assert_eq!(
+            crew_line(&digest()),
+            "- Research digest (id: bot_digest). Runs in the cloud, presence unknown."
+        );
+    }
+
+    #[test]
+    fn an_old_roster_without_team_fields_still_parses() {
+        let member: CrewMember = serde_json::from_value(json!({
+            "id": "bot_old",
+            "name": "Old",
+            "description": null,
+            "system": null,
+            "location": "server",
+            "presence": "online",
+            "classification": {}
+        }))
+        .unwrap();
+        assert_eq!(member.owner_name, None);
+        assert!(!member.direct);
+    }
+
+    #[tokio::test]
+    async fn a_direct_callee_is_asked_without_the_owners_permission() {
+        let direct = CrewMember {
+            direct: true,
+            ..ledger()
+        };
+        let host = Arc::new(FakeHost::new(
+            vec![scout(), direct, digest()],
+            answering("Done."),
+        ));
+        let owner = Owner::absent();
+
+        let result = parsed(
+            &talk(&host, true)
+                .ask(&question("Pay it?"), owner.as_ref())
+                .await,
+        );
+
+        assert!(owner.calls().is_empty());
+        assert_eq!(result["status"], "ok");
+        assert_eq!(host.callees(), ["bot_ledger"]);
+        let headless = parsed(
+            &BotTalk::new(host.clone(), scout(), false)
+                .ask(&question("Again?"), owner.as_ref())
+                .await,
+        );
+        assert_eq!(headless["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn a_direct_callee_still_passes_the_classification_gate() {
+        let secret = CrewMember {
+            direct: true,
+            classification: DataSensitivity {
+                classification: Some(DataClassification::Restricted),
+                pii: false,
+            },
+            ..ledger()
+        };
+        let host = Arc::new(FakeHost::new(vec![scout(), secret], answering("no")));
+        let result = parsed(
+            &talk(&host, true)
+                .ask(&question("Secrets"), Owner::absent().as_ref())
+                .await,
+        );
+        assert_ne!(result["status"], "ok");
+        assert!(host.turns().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_team_section_comes_before_the_crew_and_survives_the_hop_limit() {
+        let host =
+            Arc::new(FakeHost::new(vec![scout(), patch()], answering("ok")).in_team(brief()));
+        let turn = talk(&host, true).turn().await;
+        let prompt = turn.prompt.unwrap();
+        let team = prompt.find("## YOUR TEAM").unwrap();
+        assert!(team < prompt.find("## YOUR CREW").unwrap());
+        assert!(turn.asks);
+
+        let asked_by = vec![member("a", "A"), member("b", "B"), member("c", "C")];
+        let deep = BotTalk::resumed(host.clone(), scout(), asked_by, DataSensitivity::default());
+        let turn = deep.turn().await;
+        assert!(!turn.asks);
+        let prompt = turn.prompt.unwrap();
+        assert!(prompt.contains("## YOUR TEAM"));
+        assert!(!prompt.contains("## YOUR CREW"));
+    }
+
+    #[tokio::test]
+    async fn a_bot_outside_every_team_reads_no_team_section() {
+        let host = Arc::new(FakeHost::new(crew(), answering("ok")));
+        let prompt = talk(&host, true).turn().await.prompt.unwrap();
+        assert!(!prompt.contains("## YOUR TEAM"));
     }
 }

@@ -16,6 +16,7 @@ import {
 	type IBitState,
 	type IBoardState,
 	type IBotState,
+	type IBotTeamState,
 	type ICapabilities,
 	type IDataSourceState,
 	type IDatabaseState,
@@ -112,6 +113,7 @@ import { AudioState } from "./tauri-provider/audio-state";
 import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
 import { BotState } from "./tauri-provider/bot-state";
+import { BotTeamState } from "./tauri-provider/bot-team-state";
 import type { CommandSyncRemoteIdentity } from "./tauri-provider/command-sync";
 import { DataSourceState } from "./tauri-provider/data-source-state";
 import { DatabaseState } from "./tauri-provider/db-state";
@@ -200,6 +202,7 @@ export class TauriBackend implements IBackendState {
 	sinkState: ISinkState;
 	salesState: ISalesState;
 	botState: IBotState;
+	botTeamState: IBotTeamState;
 	inboxState: IInboxState;
 	meetingClient: MeetingClient;
 	usageState: IUsageState;
@@ -256,6 +259,7 @@ export class TauriBackend implements IBackendState {
 		this.sinkState = new SinkState();
 		this.salesState = new SalesState(this);
 		this.botState = new BotState(this);
+		this.botTeamState = new BotTeamState(this);
 		this.inboxState = withEndToEnd(
 			new InboxState(this),
 			tauriInboxCrypto,

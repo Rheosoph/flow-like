@@ -2,17 +2,19 @@ use super::{
     INBOX_DIRECT_FIXED, INBOX_LINK_LIMIT, INBOX_LINK_NOT_ALLOWED, INBOX_LINK_NOT_FOUND,
     INBOX_LINK_USED_UP, INBOX_MEMBER_LIMIT, MEMBER_ACTIVE, MEMBER_PENDING,
     conversations::{NewConversation, start_direct, start_group},
-    fixture::{assert_code, at, database, user},
+    fixture::{assert_code, at, database, insert_bot, user},
     invitations::{classify, invite_in},
     links::{
-        CreateConversationLinkRequest, LinkJoin, MAX_LINKS, NewLink, create_link_in, join_link_in,
-        links_in, live_link, revoke_link_in, validate_link,
+        CreateConversationLinkRequest, EmailInvite, LinkJoin, MAX_LINKS,
+        MAX_OWNER_EMAIL_INVITES_PER_DAY, NewLink, create_email_invite_in, create_link_in,
+        join_link_in, links_in, live_link, revoke_link_in, validate_link,
     },
     members::remove_in,
 };
 use crate::entity::{conversation_invite_link, conversation_member, inbox_entry};
 use axum::http::StatusCode;
 use chrono::Duration;
+use flow_like_bot_tools::rooms::EMAIL_INVITE_DAYS;
 use flow_like_types::inbox::{ConversationEncryption, ConversationKind, MAX_CONVERSATION_MEMBERS};
 use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use std::collections::BTreeMap;
@@ -41,7 +43,7 @@ async fn world() -> DatabaseConnection {
             "id" TEXT PRIMARY KEY, "conversationId" TEXT NOT NULL, "token" TEXT NOT NULL UNIQUE,
             "name" TEXT, "createdBy" TEXT NOT NULL, "maxUses" INTEGER NOT NULL,
             "countJoined" INTEGER NOT NULL, "expiresAt" TEXT, "createdAt" TEXT NOT NULL,
-            "updatedAt" TEXT NOT NULL)"#,
+            "updatedAt" TEXT NOT NULL, "email" TEXT, "reason" TEXT)"#,
     )
     .await
     .unwrap();
@@ -447,4 +449,122 @@ async fn an_invitee_who_opens_a_link_is_in_at_once() {
             .joined
     );
     assert_eq!(member(&db, "stranger").await.unwrap().status, MEMBER_ACTIVE);
+}
+
+async fn email_invite(
+    db: &DatabaseConnection,
+    address: &str,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> EmailInvite {
+    email_invite_by(db, "user-c", "user-a", address, now).await
+}
+
+async fn email_invite_by(
+    db: &DatabaseConnection,
+    bot: &str,
+    owner: &str,
+    address: &str,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> EmailInvite {
+    create_email_invite_in(db, "room", bot, owner, address, "You run the venue.", now)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_email_invitation_is_one_unlisted_join_for_its_address() {
+    let db = world().await;
+    let EmailInvite::Created(made) = email_invite(&db, " Ana@Example.org ", at(10)).await else {
+        panic!("expected a new email invitation");
+    };
+    assert_eq!(made.email.as_deref(), Some("ana@example.org"));
+    assert_eq!(made.reason.as_deref(), Some("You run the venue."));
+    assert_eq!(made.max_uses, 1);
+    assert_eq!(made.created_by, "user-c");
+    assert_eq!(
+        made.expires_at,
+        Some(at(10) + Duration::days(EMAIL_INVITE_DAYS))
+    );
+    assert_eq!(
+        email_invite(&db, "ana@example.org", at(11)).await,
+        EmailInvite::Pending,
+        "the address already holds a live invitation, so no second email goes out"
+    );
+    assert!(
+        links_in(&db, "room", "user-a").await.unwrap().is_empty(),
+        "members never see the invitee's link"
+    );
+    assert!(live_link(&db, &made.token, at(12)).await.unwrap().is_some());
+
+    assert!(
+        join_link_in(&db, &made.token, "stranger", at(20))
+            .await
+            .unwrap()
+            .joined
+    );
+    assert_eq!(
+        member(&db, "stranger").await.unwrap().added_by.as_deref(),
+        Some("user-c")
+    );
+    let error = join_link_in(&db, &made.token, "other", at(21))
+        .await
+        .unwrap_err();
+    assert_code(&error, StatusCode::FORBIDDEN, INBOX_LINK_USED_UP);
+    assert!(
+        matches!(
+            email_invite(&db, "ana@example.org", at(22)).await,
+            EmailInvite::Created(_)
+        ),
+        "a used invitation no longer holds the address"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_email_invitation_frees_its_address() {
+    let db = world().await;
+    assert!(matches!(
+        email_invite(&db, "ana@example.org", at(10)).await,
+        EmailInvite::Created(_)
+    ));
+    let later = at(10) + Duration::days(EMAIL_INVITE_DAYS) + Duration::seconds(1);
+    assert!(matches!(
+        email_invite(&db, "ana@example.org", later).await,
+        EmailInvite::Created(_)
+    ));
+}
+
+#[tokio::test]
+async fn an_owners_bots_share_twenty_email_invitations_a_day_beside_the_members_links() {
+    let db = world().await;
+    insert_bot(&db, "bot-one", "olga", "SERVER").await;
+    insert_bot(&db, "bot-two", "olga", "SERVER").await;
+    insert_bot(&db, "bot-mia", "mia", "SERVER").await;
+    for index in 0..MAX_OWNER_EMAIL_INVITES_PER_DAY {
+        let bot = if index % 2 == 0 { "bot-one" } else { "bot-two" };
+        assert!(matches!(
+            email_invite_by(&db, bot, "olga", &format!("p{index}@example.org"), at(10)).await,
+            EmailInvite::Created(_)
+        ));
+    }
+    assert_eq!(
+        email_invite_by(&db, "bot-two", "olga", "late@example.org", at(11)).await,
+        EmailInvite::DailyLimit,
+        "a second bot of the same owner draws from the same day"
+    );
+    assert!(matches!(
+        email_invite_by(&db, "bot-mia", "mia", "late@example.org", at(11)).await,
+        EmailInvite::Created(_)
+    ));
+    let next_day = at(10) + Duration::days(1) + Duration::seconds(1);
+    assert!(matches!(
+        email_invite_by(&db, "bot-one", "olga", "later@example.org", next_day).await,
+        EmailInvite::Created(_)
+    ));
+    for _ in 0..MAX_LINKS {
+        link(&db, "user-a", &UNLIMITED).await;
+    }
+    assert_eq!(
+        links_in(&db, "room", "user-a").await.unwrap().len() as u64,
+        MAX_LINKS
+    );
 }

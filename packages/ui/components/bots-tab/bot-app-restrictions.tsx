@@ -2,7 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { ChevronDown, Plus, ShieldCheck, X } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useBotApps, useSetBotAppRestrictions } from "../../hooks/use-bots";
 import { useInvoke } from "../../hooks/use-invoke";
@@ -170,6 +170,7 @@ function AllowList({
 	onChange: (next: string[] | null) => void;
 }>) {
 	const { t } = useTranslation("bots");
+	const limitId = useId();
 	const limited = Array.isArray(value);
 	const names = useMemo(
 		() => new Map(options.map((option) => [option.id, option.name])),
@@ -181,8 +182,9 @@ function AllowList({
 	];
 	return (
 		<div className="flex flex-col gap-1.5">
-			<label className="flex items-center gap-2 text-sm">
+			<label htmlFor={limitId} className="flex items-center gap-2 text-sm">
 				<Checkbox
+					id={limitId}
 					checked={limited}
 					onCheckedChange={(next) => onChange(next === true ? [] : null)}
 					aria-label={t("restrictions.limit", "Only some {{what}}", {
@@ -342,6 +344,7 @@ export function RestrictionsEditor({
 	const permissionLabels = usePermissionLabels();
 	const groupLabels = useGroupLabels();
 	const presetLabels = usePresetLabels();
+	const fieldId = useId();
 	const preset = detectPreset(value);
 	const listLabels: Record<ScopeList, string> = {
 		tables: t("restrictions.groups.tables", "Tables"),
@@ -389,10 +392,12 @@ export function RestrictionsEditor({
 							{group.permissions.map((id) => (
 								<label
 									key={id}
+									htmlFor={`${fieldId}-${id}`}
 									className="flex items-center justify-between gap-3 text-sm"
 								>
 									{permissionLabels[id]}
 									<Switch
+										id={`${fieldId}-${id}`}
 										checked={holds(value, id)}
 										disabled={disabled}
 										aria-label={permissionLabels[id]}
@@ -404,9 +409,13 @@ export function RestrictionsEditor({
 							))}
 							{!permissionsOnly && group.id === "files" && (
 								<>
-									<label className="flex items-center justify-between gap-3 text-sm">
+									<label
+										htmlFor={`${fieldId}-read-only`}
+										className="flex items-center justify-between gap-3 text-sm"
+									>
 										{t("restrictions.readOnlyFiles", "Never change files")}
 										<Switch
+											id={`${fieldId}-read-only`}
 											checked={value.scopes.files.read_only}
 											disabled={disabled}
 											aria-label={t(

@@ -1,8 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { EyeOffIcon } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
 	type ReactNode,
 	useCallback,
@@ -11,8 +10,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { useAuth } from "react-oidc-context";
-import { botPresence, useBotPresence } from "../../hooks/use-bot-presence";
+import { useOrg } from "../../hooks/use-bot-teams";
 import { emitGuideEvent } from "../../lib/guide/guide-events";
 import { useBackend } from "../../state/backend-state";
 import type { IBot } from "../../state/backend-state/bot-state";
@@ -21,40 +19,24 @@ import {
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import { ChatBotReactionProvider } from "../global-chat/chat-bot-reaction";
-import { useHomeScope } from "../home/home-content/shared";
-import { homeGreetingName } from "../home/home-greeting";
 import { Button } from "../ui/button";
 import type { BotPanelActions } from "./bot-details";
 import type { BotPanelTab } from "./bot-panel-tabs";
 import { BotVisibilityDialog } from "./bot-visibility-dialog";
-import { shownBots } from "./bot-visibility-model";
+import { BotsChatsHeader } from "./bots-chats-header";
+import { ChatEmptyDock } from "./chat-empty-dock";
 import {
 	type CrewData,
 	CrewDataScope,
+	NO_CONVERSATIONS,
 	revealPromptChat,
 	useBotIds,
 	useCrewPickerSource,
 	useNeedsYou,
 } from "./crew-data";
 import { CrewDock } from "./crew-dock";
-import {
-	CREW_GRID_CLASS,
-	CrewBotCard,
-	CrewGridSkeleton,
-	type CrewMember,
-	NewBotTile,
-	useCrewMembers,
-	useShownCrew,
-} from "./crew-grid";
-import { CrewHeader } from "./crew-header";
-import {
-	crewPrincipalIds,
-	crewSummaryLine,
-	hasBotsHostedElsewhere,
-	matchesSearch,
-	otherMemberIds,
-} from "./crew-model";
-import { CrewSection } from "./crew-section";
+import { type CrewMember, useCrewMembers, useShownCrew } from "./crew-grid";
+import { crewPrincipalIds, matchesSearch } from "./crew-model";
 import { CrewSplitLayout, type DockPanelLayout } from "./crew-split-layout";
 import {
 	type DockSelection,
@@ -68,10 +50,12 @@ import { LocalBotsBanner, useLocalBotsBanner } from "./local-bots-banner";
 import { requestMessageJump } from "./message-jump";
 import { StarredMessagesDialog } from "./message-marks";
 import { MoveLocalBotsDialog } from "./move-local-bots-dialog";
-import { NeedsYouSection } from "./needs-you-section";
 import { NewMessageDialog } from "./new-message-dialog";
 import { NewRoomDialog } from "./new-room-dialog";
-import { RoomsSection } from "./rooms-section";
+import { OrgChartView } from "./org-chart";
+import { TeamChatList } from "./team-chat-list";
+import { teamRooms } from "./team-chat-list-model";
+import { useBotsView } from "./use-bots-view";
 import { useConversationText } from "./use-conversation-text";
 import { useCrewDirectory } from "./use-crew-directory";
 import { useDockSelection } from "./use-dock-selection";
@@ -79,20 +63,6 @@ import { moveCheckKeys } from "./use-local-bot-moves";
 import { useMoveRequest } from "./use-move-request";
 
 const NO_BOTS: readonly IBot[] = [];
-
-function useGreetingName(): string | undefined {
-	const auth = useAuth();
-	const backend = useBackend();
-	const scope = useHomeScope();
-	const account = useQuery({
-		queryKey: [backend.userState.getInfo.name, ...scope],
-		queryFn: () => backend.userState.getInfo(),
-		enabled: auth.isAuthenticated && Boolean(auth.user?.access_token),
-		staleTime: 60_000,
-		retry: false,
-	});
-	return homeGreetingName(undefined, account.data, auth.user?.profile);
-}
 
 /**
  * Shows the global chat each time it asks to be seen: a queued draft, an opened activity entry, or
@@ -193,6 +163,10 @@ function CrewLayout(data: Readonly<CrewData>) {
 		closeDock,
 		openDock,
 	} = useDockSelection();
+	const { view: urlView, setView } = useBotsView();
+	const { org, available: teamsAvailable } = useOrg();
+	const showViewSwitch = teamsAvailable && signedIn;
+	const view = showViewSwitch ? urlView : "chats";
 	const resolved = useMemo(
 		() => resolveDockSelection(selection, bots, conversations, me),
 		[selection, bots, conversations, me],
@@ -220,9 +194,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 
 	const allCrew = useCrewMembers(bots);
 	const crew = useShownCrew(allCrew, data.hiddenBots);
-	const hiddenCount = allCrew.length - crew.length;
 	const showVisibility = useCallback(() => setVisibilityOpen(true), []);
-	const presence = useBotPresence(hasBotsHostedElsewhere(bots)).data;
 	const myBotIds = useBotIds(bots);
 	const localBots = useMemo(
 		() => bots?.filter((bot) => bot.local) ?? NO_BOTS,
@@ -240,13 +212,18 @@ function CrewLayout(data: Readonly<CrewData>) {
 		showingGlobalChat,
 	});
 	const principalIds = useMemo(
-		() => crewPrincipalIds(conversations, invitations),
-		[conversations, invitations],
+		() => [
+			...crewPrincipalIds(conversations, invitations),
+			...org.bots.map((bot) => bot.owner_id),
+			...org.invitations.flatMap((item) =>
+				item.invited_by ? [item.invited_by] : [],
+			),
+		],
+		[conversations, invitations, org],
 	);
 	const directory = useCrewDirectory(principalIds, { me, bots });
 	const text = useConversationText(directory, me);
 	const pickerSource = useCrewPickerSource(data, directory);
-	const greetingName = useGreetingName();
 
 	const openConversation = useCallback(
 		(conversationId: string) => {
@@ -296,11 +273,6 @@ function CrewLayout(data: Readonly<CrewData>) {
 		},
 		[bots, openDock, panelCoversChat, resolved, select, selectPanel],
 	);
-	/** "Show chat" reopens the dock on its chat, not under the sheet it was closed on. */
-	const showDockChat = useCallback(() => {
-		if (panelCoversChat) selectPanel(null);
-		else openDock();
-	}, [openDock, panelCoversChat, selectPanel]);
 	const openPromptChat = useCallback(
 		() => revealPromptChat(showChatOf),
 		[showChatOf],
@@ -315,9 +287,6 @@ function CrewLayout(data: Readonly<CrewData>) {
 	useRevealGlobalChat(revealGlobalChat);
 
 	const query = search.trim();
-	const visibleCrew = crew.filter((member) =>
-		matchesSearch(query, [member.name, member.description]),
-	);
 	const visibleNeeds = needs.filter((item) =>
 		item.type === "assistant"
 			? matchesSearch(query, [item.name])
@@ -333,40 +302,30 @@ function CrewLayout(data: Readonly<CrewData>) {
 						text.entryText(item.conversation.last_entry),
 					]),
 	);
-	const visibleConversations = conversations.filter((conversation) =>
-		matchesSearch(
-			query,
-			conversation.kind === "group"
-				? [
-						text.title(conversation),
-						...otherMemberIds(conversation, me).map((id) => directory(id).name),
-					]
-				: [text.title(conversation)],
-		),
+	const listContext = useMemo(
+		() => ({
+			me,
+			text,
+			directory,
+			selectedConversationId:
+				selectedKey && resolved.type === "conversation"
+					? resolved.conversationId
+					: null,
+			onOpen: openConversation,
+			onLeave: (conversationId: string) => {
+				if (
+					resolved.type === "conversation" &&
+					resolved.conversationId === conversationId
+				)
+					closeDock();
+			},
+		}),
+		[me, text, directory, selectedKey, resolved, openConversation, closeDock],
 	);
-	const nothingFound =
-		Boolean(query) &&
-		visibleCrew.length === 0 &&
-		visibleNeeds.length === 0 &&
-		visibleConversations.length === 0;
-
-	let summary: string;
-	if (mode === "account") {
-		summary = crewSummaryLine((key, options) => t(key, options), {
-			needs: needs.length,
-			bots: bots ? shownBots(bots, data.hiddenBots).length : null,
-		});
-	} else if (mode === "local") {
-		summary = t(
-			"local.summary",
-			"Your bots and chats stay on this computer. Sign in to talk with people.",
-		);
-	} else {
-		summary = t(
-			"crew.summary.signedOut",
-			"Sign in to create bots and talk with people. Assistant and Flux work without an account.",
-		);
-	}
+	const rooms = useMemo(
+		() => teamRooms(org, conversations),
+		[org, conversations],
+	);
 
 	const openMember = useCallback(
 		(member: CrewMember) => {
@@ -374,6 +333,13 @@ function CrewLayout(data: Readonly<CrewData>) {
 			emitGuideEvent("bots:chat-opened");
 		},
 		[select],
+	);
+	const openChatOf = useCallback(
+		(botId: string) => {
+			const bot = bots?.find((item) => item.id === botId);
+			select(bot ? dockSelectionForBot(bot, bots) : { type: "bot", botId });
+		},
+		[bots, select],
 	);
 	const editBot = useCallback(
 		(botId: string) => setEditor({ open: true, botId }),
@@ -422,182 +388,134 @@ function CrewLayout(data: Readonly<CrewData>) {
 		[bots, openConversation, select],
 	);
 
+	const header = (
+		<BotsChatsHeader
+			view={view}
+			onViewChange={setView}
+			showViewSwitch={showViewSwitch}
+			search={search}
+			onSearchChange={setSearch}
+			canManageBlocks={signedIn}
+			onNewBot={hasCrew && bots ? openNewBot : undefined}
+			onNewRoom={hasCrew ? () => setNewRoomOpen(true) : undefined}
+			onNewMessage={hasCrew ? () => setNewMessageOpen(true) : undefined}
+			onShowStarred={hasCrew ? () => setStarredOpen(true) : undefined}
+			onManageVisibility={hasCrew && bots ? showVisibility : undefined}
+		/>
+	);
+	const banners = (
+		<>
+			{localBanner.shown && (
+				<div className="px-3 pt-3">
+					<LocalBotsBanner
+						count={localBots.length}
+						onReview={() => showMove(null)}
+						onDismiss={localBanner.hide}
+					/>
+				</div>
+			)}
+			{data.botsFailed && (
+				<div className="px-3 pt-3">
+					<CrewNotice
+						action={
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onClick={data.retryBots}
+							>
+								{t("crew.retry", "Try again")}
+							</Button>
+						}
+					>
+						{t(
+							"crew.loadFailedFlux",
+							"Couldn't load your bots. Flux still works.",
+						)}
+					</CrewNotice>
+				</div>
+			)}
+		</>
+	);
+
 	return (
 		<>
-			<CrewSplitLayout
-				panelOpen={panelOpen}
-				onPanelLayoutChange={setPanelLayout}
-				onCloseDock={closeDock}
-				dock={
-					dockOpen ? (
-						<CrewDock
-							selection={resolved}
-							sourceSelection={selection}
-							account={{
-								me,
-								mode,
-								bots,
-								botsLoading: data.botsLoading,
-								botsFailed: data.botsFailed,
-								retryBots: data.retryBots,
-							}}
-							actions={panelActions}
-							panel={panelControl}
-							onClose={closeDock}
+			{view === "org" ? (
+				<div className="flex h-full min-h-0 w-full flex-1 flex-col">
+					{header}
+					{banners}
+					<div className="flex min-h-0 flex-1 flex-col">
+						<OrgChartView
+							me={me}
+							bots={bots}
+							onOpenChat={openChatOf}
+							onOpenConversation={openConversation}
 						/>
-					) : undefined
-				}
-			>
-				<div className="mx-auto flex max-w-280 flex-col gap-8.5 px-9 pt-7 pb-14 @max-[640px]/crew:px-4 @max-[640px]/crew:pt-5 @max-[640px]/crew:pb-10 @max-[520px]/crew:gap-5">
-					<CrewHeader
-						canManageBlocks={signedIn}
-						name={greetingName}
-						summary={summary}
-						search={search}
-						onSearchChange={setSearch}
-						onNewBot={hasCrew && bots ? openNewBot : undefined}
-						onShowChat={dockOpen ? undefined : showDockChat}
-						onManageVisibility={hasCrew && bots ? showVisibility : undefined}
-					/>
-					{localBanner.shown && (
-						<LocalBotsBanner
-							count={localBots.length}
-							onReview={() => showMove(null)}
-							onDismiss={localBanner.hide}
-						/>
-					)}
-					{data.botsFailed && (
-						<CrewNotice
-							action={
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									onClick={data.retryBots}
-								>
-									{t("crew.retry", "Try again")}
-								</Button>
-							}
-						>
-							{t(
-								"crew.loadFailedFlux",
-								"Couldn't load your bots. Flux still works.",
-							)}
-						</CrewNotice>
-					)}
-					<NeedsYouSection
-						items={visibleNeeds}
-						directory={directory}
-						text={text}
-						onOpenConversation={openConversation}
-						onOpenAssistant={openPromptChat}
-					/>
-					{(!query || visibleCrew.length > 0) && (
-						<CrewSection
-							title={t("crew.yourCrew", "Your crew")}
-							actions={
-								hiddenCount > 0 && (
-									<Button
-										type="button"
-										variant="ghost"
-										size="sm"
-										className="text-muted-foreground"
-										onClick={showVisibility}
-									>
-										<EyeOffIcon aria-hidden />
-										{t(
-											"crew.visibility.hiddenCount",
-											"{{count}} hidden in this profile",
-											{ count: hiddenCount },
-										)}
-									</Button>
-								)
-							}
-							aside={
-								bots && (
-									<span className="text-[13px] font-normal text-muted-foreground">
-										{t("crew.summary.bots", "{{count}} bots", {
-											count: crew.length,
-											defaultValue_one: "{{count}} bot",
-										})}
-									</span>
-								)
-							}
-						>
-							<div className={CREW_GRID_CLASS}>
-								{data.botsLoading ? (
-									<CrewGridSkeleton />
-								) : (
-									visibleCrew.map((member) => (
-										<CrewBotCard
-											key={member.key}
-											member={member}
-											presence={botPresence(member.bot, presence)}
-											selected={
-												selectedKey === dockSelectionKey(member.selection)
-											}
-											onSelect={openMember}
-											onSettings={
-												member.bot
-													? () => openSettings(member.bot as IBot)
-													: undefined
-											}
-										/>
-									))
-								)}
-								{!query && hasCrew && (
-									<NewBotTile disabled={!bots} onClick={openNewBot} />
-								)}
-							</div>
-						</CrewSection>
-					)}
-					{hasCrew && (
-						<RoomsSection
-							conversations={visibleConversations}
-							context={{
-								me,
-								text,
-								directory,
-								selectedConversationId:
-									selectedKey && resolved.type === "conversation"
-										? resolved.conversationId
-										: null,
-								onOpen: openConversation,
-								onLeave: (conversationId) => {
-									if (
-										resolved.type === "conversation" &&
-										resolved.conversationId === conversationId
-									)
-										closeDock();
-								},
-							}}
-							status={{
-								searching: Boolean(query),
-								loading: data.conversationsLoading,
-								failed: data.conversationsFailed,
-								onRetry: data.retryConversations,
-								emptyText:
-									mode === "local"
-										? t(
-												"local.roomsEmpty",
-												"No conversations yet. Start one with one of your bots.",
-											)
-										: undefined,
-							}}
-							onNewRoom={() => setNewRoomOpen(true)}
-							onNewMessage={() => setNewMessageOpen(true)}
-							onShowStarred={() => setStarredOpen(true)}
-						/>
-					)}
-					{nothingFound && (
-						<p className="py-8 text-center text-sm text-muted-foreground">
-							{t("crew.search.empty", "Nothing matches “{{query}}”.", {
-								query,
-							})}
-						</p>
-					)}
+					</div>
 				</div>
-			</CrewSplitLayout>
+			) : (
+				<CrewSplitLayout
+					listFirst
+					header={header}
+					panelOpen={panelOpen}
+					onPanelLayoutChange={setPanelLayout}
+					onCloseDock={closeDock}
+					emptyDock={
+						<ChatEmptyDock
+							rooms={rooms}
+							onOpenConversation={openConversation}
+						/>
+					}
+					dock={
+						dockOpen ? (
+							<CrewDock
+								selection={resolved}
+								sourceSelection={selection}
+								account={{
+									me,
+									mode,
+									bots,
+									botsLoading: data.botsLoading,
+									botsFailed: data.botsFailed,
+									retryBots: data.retryBots,
+								}}
+								actions={panelActions}
+								panel={panelControl}
+								onClose={closeDock}
+							/>
+						) : undefined
+					}
+				>
+					{banners}
+					<TeamChatList
+						org={org}
+						conversations={hasCrew ? conversations : NO_CONVERSATIONS}
+						crew={crew}
+						context={listContext}
+						needs={visibleNeeds}
+						search={search}
+						selectedKey={selectedKey}
+						status={{
+							searching: Boolean(query),
+							loading: data.conversationsLoading,
+							failed: data.conversationsFailed,
+							onRetry: data.retryConversations,
+							emptyText:
+								mode === "local"
+									? t(
+											"local.roomsEmpty",
+											"No conversations yet. Start one with one of your bots.",
+										)
+									: undefined,
+						}}
+						loadingCrew={data.botsLoading}
+						onOpenConversation={openConversation}
+						onOpenMember={openMember}
+						onOpenAssistant={openPromptChat}
+						onSettings={openSettings}
+					/>
+				</CrewSplitLayout>
+			)}
 			<BotEditorDialog
 				open={editor.open}
 				onOpenChange={setEditorOpen}
@@ -651,8 +569,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 }
 
 /**
- * The Bots tab at `/bots`: your crew, what needs you, rooms and people, and a dock that holds
- * one conversation. The global chat overlay closes while it is open, so no chat shows twice.
+ * The Bots tab at `/bots`: chats grouped by team beside the open conversation, or the org chart. The global chat overlay closes while it is open, so no chat shows twice.
  */
 export function BotsView() {
 	const closeOverlay = useGlobalChatStore((s) => s.closeOverlay);

@@ -8,6 +8,7 @@ pub mod audio;
 pub mod audit;
 pub mod auth;
 pub mod bit;
+pub mod bot_teams;
 pub mod bots;
 pub mod channel;
 pub mod chat;

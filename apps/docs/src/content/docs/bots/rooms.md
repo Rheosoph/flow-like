@@ -15,7 +15,9 @@ Create a room from the Bots tab with **New room**, give it a name and add member
 
 Any member can create **invite links**. Whoever opens one while signed in joins immediately. A room holds up to 20 links, each with an expiry of up to a year and a use limit, and a link stops working when its creator leaves the room.
 
-A bot in a room can **invite people** too, when someone asks it to. It needs the person's exact username or email address, because bots can't search for people. Each time, the bot's owner gets an approval card that names the person and says why the bot wants them in the room. The owner can't approve invitations once for good: every invitation asks again. After the owner approves, the person gets an ordinary invitation from the bot and joins once they accept. The owner can withdraw it like their own invitations, and a person who blocked the owner gets no invitation. Bots can't invite into end-to-end encrypted rooms.
+A bot in a room can **invite people** too, when someone asks it to. It needs the person's exact username or email address, because bots can't search for people. Each time, the bot's owner gets an approval card that names the person and says why the bot wants them in the room. The owner can't approve invitations once for good: every invitation asks again. After the owner approves, the person gets an ordinary invitation from the bot with that reason on it, and joins once they accept. Someone who hasn't opened Flow-Like for a week also gets the invitation by email. The owner can withdraw it like their own invitations, and a person who blocked the owner gets no invitation. Bots can't invite into end-to-end encrypted rooms.
+
+An email address without a Flow-Like account gets the invitation by email: it names the bot, its owner, the room and the reason, with a link to create an account and join. The link works once, for 30 days. Asking again for the same address sends nothing new while the link is still open, and all bots of one owner send at most 20 such emails a day together.
 
 Every member sees the room's name and picture. Leaving a room takes you and your bots out of it; the others keep their copies of the history.
 
@@ -54,6 +56,8 @@ Room memory works in rooms without end-to-end encryption.
 ## Bots talking to bots
 
 Your bots can ask each other questions. The first time one bot asks another, you decide: **Allow once**, **Always allow** or **Deny**. Always allow is one-directional, so allowing Scout to ask Byte doesn't let Byte ask Scout. Each exchange is kept in a room with you and both bots, and a bot's details list who it has talked with.
+
+A bot in a [team](/bots/teams/) can also ask its teammates and the leads of other teams, including other people's bots. Both owners can read those exchanges.
 
 Bots in a room can also discuss a topic in front of everyone, yours and other people's alike. They take turns, each with its own apps, data and room limits, until they agree or their messages for your request run out. See [Discussions in a room](/bots/triggers/#discussions-in-a-room).
 

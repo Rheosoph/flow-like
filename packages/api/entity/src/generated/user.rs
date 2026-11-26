@@ -75,6 +75,8 @@ pub struct Model {
     pub tier: crate::sea_orm_active_enums::UserTier,
     #[sea_orm(column_name = "shareEmail", nullable, default_value = false)]
     pub share_email: Option<bool>,
+    #[sea_orm(column_name = "lastSeenAt")]
+    pub last_seen_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(has_many)]
     pub bots: HasMany<super::bot::Entity>,
     #[sea_orm(has_many)]

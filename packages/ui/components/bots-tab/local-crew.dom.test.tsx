@@ -214,6 +214,16 @@ function buttonContaining(...texts: string[]) {
 	) as HTMLButtonElement | undefined;
 }
 
+function chatRow(name: string) {
+	return Array.from(
+		container.querySelectorAll<HTMLButtonElement>("nav button"),
+	).find(
+		(button) =>
+			button.querySelector(".font-semibold span.truncate")?.textContent ===
+				name || button.querySelector(".font-semibold")?.textContent === name,
+	);
+}
+
 function lookOf(element?: Element) {
 	return element?.querySelector("[data-kind]")?.getAttribute("data-kind");
 }
@@ -276,18 +286,14 @@ afterAll(async () => {
 describe("BotsView signed out on the desktop", () => {
 	test("shows Assistant, Flux and the bots that live on this computer", () => {
 		const text = container.textContent ?? "";
-		expect(text).toContain(
-			"Your bots and chats stay on this computer. Sign in to talk with people.",
-		);
-		expect(text).toContain("Assistant");
-		expect(text).toContain("Flux");
-		expect(lookOf(buttonContaining("Assistant", "Built in"))).toBe("pip");
-		expect(lookOf(buttonContaining("Flux", "Built in"))).toBe("flux");
-		expect(text).toContain("Scout lives here");
-		expect(text).toContain("Writer lives here");
-		expect(text).toContain("4 bots");
-		expect(text.split("Local only").length - 1).toBe(2);
-		expect(text.split("Built in").length - 1).toBe(2);
+		expect(text).toContain("Your bots");
+		expect(lookOf(chatRow("Assistant"))).toBe("pip");
+		expect(lookOf(chatRow("Flux"))).toBe("flux");
+		expect(chatRow("Writer")?.textContent).toContain("Writer lives here");
+		expect(chatRow("Scout")).toBeDefined();
+		expect(
+			container.querySelectorAll("button[aria-label^='Settings for ']").length,
+		).toBe(2);
 		expect(text).not.toContain("Sign in to create bots");
 		expect(text).not.toContain("live only on this computer");
 	});
@@ -299,7 +305,7 @@ describe("BotsView signed out on the desktop", () => {
 			container.querySelector("aside [data-testid='global-chat']"),
 		).not.toBeNull();
 		expect(chatBot()).toBe("pip");
-		await click(buttonContaining("Flux", "Built in"));
+		await click(chatRow("Flux"));
 		expect(chatBot()).toBe("flux");
 	});
 
@@ -310,27 +316,18 @@ describe("BotsView signed out on the desktop", () => {
 		expect(header?.disabled).toBe(false);
 		await click(header);
 		expect(editorProps.at(-1)).toEqual({ open: true, botId: null });
-		const tile = buttonContaining("New bot", "Describe what it should do");
-		expect(tile?.disabled).toBe(false);
 	});
 
 	test("lists the chats on this computer with you as `local`", () => {
 		const text = container.textContent ?? "";
 		expect(text).toContain("Weekend plans");
-		expect(text).toContain("1 person · 2 bots");
-		expect(text).toContain("You: Hi Scout");
-		expect(
-			container.querySelectorAll(
-				"[aria-label='This chat lives only on this computer.']",
-			).length,
-		).toBe(2);
-		expect(
-			container.querySelector("[aria-label='Scout, Your bot']"),
-		).not.toBeNull();
+		expect(text).toContain("Rooms");
+		expect(chatRow("Weekend plans")?.textContent).toContain("No messages yet");
+		expect(chatRow("Scout")?.textContent).toContain("You: Hi Scout");
 	});
 
 	test("a local bot opens its own chat, says where it lives and offers no move while signed out", async () => {
-		await click(buttonContaining("Scout", "Runs in the desktop app"));
+		await click(chatRow("Scout"));
 		expect(
 			container.querySelector("aside [data-testid='global-chat']"),
 		).not.toBeNull();
@@ -366,7 +363,7 @@ describe("BotsView signed out on the desktop", () => {
 	});
 
 	test("the Assistant without an account row answers as `general`", async () => {
-		await click(buttonContaining("Assistant", "Built in"));
+		await click(chatRow("Assistant"));
 		expect(useGlobalChatStore.getState().activeConversationId).toBe(
 			"bot:general",
 		);
@@ -376,7 +373,7 @@ describe("BotsView signed out on the desktop", () => {
 	});
 
 	test("a bot's direct message opens as the bot's own chat on this computer", async () => {
-		await click(buttonContaining("Scout", "You: Hi Scout"));
+		await click(chatRow("Scout"));
 		const dock = dockText();
 		expect(dock).toContain("Scout");
 		expect(dock).toContain("Local only");
@@ -443,9 +440,8 @@ describe("BotsView signed out where bots can't live on the device", () => {
 		);
 		await settle();
 		const text = host.textContent ?? "";
-		expect(text).toContain(
-			"Sign in to create bots and talk with people. Assistant and Flux work without an account.",
-		);
+		expect(text).toContain("Assistant");
+		expect(text).toContain("Flux");
 		expect(text).not.toContain("Scout");
 		expect(text).not.toContain("Rooms and people");
 		const newBot = Array.from(host.querySelectorAll("header button")).find(

@@ -125,14 +125,12 @@ describe("the unpaired stage", () => {
 		expect(pair.disabled).toBe(true);
 		await typeLink("flowlike://pair-screen?v=1&h=x");
 		await act(async () => {
-			container
-				.querySelector("form")
-				?.dispatchEvent(
-					new window.Event("submit", {
-						bubbles: true,
-						cancelable: true,
-					}) as never,
-				);
+			container.querySelector("form")?.dispatchEvent(
+				new window.Event("submit", {
+					bubbles: true,
+					cancelable: true,
+				}) as never,
+			);
 		});
 		expect(onPair).toHaveBeenCalledWith("flowlike://pair-screen?v=1&h=x");
 		await hide();
@@ -146,14 +144,12 @@ describe("the unpaired stage", () => {
 		});
 		await typeLink("flowlike://pair-screen?v=1");
 		await act(async () => {
-			container
-				.querySelector("form")
-				?.dispatchEvent(
-					new window.Event("submit", {
-						bubbles: true,
-						cancelable: true,
-					}) as never,
-				);
+			container.querySelector("form")?.dispatchEvent(
+				new window.Event("submit", {
+					bubbles: true,
+					cancelable: true,
+				}) as never,
+			);
 		});
 		expect(container.querySelector('[role="alert"]')?.textContent).toContain(
 			"did not answer the pairing",

@@ -66,6 +66,7 @@ export const sidebar = [
 			{ label: "Where Bots Run", slug: "bots/hosts" },
 			{ label: "Triggers & Automation", slug: "bots/triggers" },
 			{ label: "Rooms & People", slug: "bots/rooms" },
+			{ label: "Teams", slug: "bots/teams" },
 			{ label: "Memory & Workspace", slug: "bots/memory" },
 			{ label: "Safety & Permissions", slug: "bots/safety" },
 			{ label: "API & SDKs", slug: "bots/api" },
@@ -473,6 +474,10 @@ export const sidebar = [
 			{
 				label: "Execution Backends",
 				slug: "self-hosting/execution-backends",
+			},
+			{
+				label: "Query Service",
+				slug: "self-hosting/query-service",
 			},
 			{
 				label: "Desktop Client",

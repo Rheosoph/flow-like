@@ -427,6 +427,31 @@ fn build() -> FkGraph {
             });
         }
     }
+    graph.register::<crate::entity::bot_team::Entity>();
+    graph.register::<crate::entity::bot_team_person::Entity>();
+    graph.register::<crate::entity::bot_team_bot::Entity>();
+    for (child, column, parent, action) in [
+        ("BotTeamPerson", "teamId", "BotTeam", FkAction::Cascade),
+        ("BotTeamPerson", "userId", "User", FkAction::Cascade),
+        ("BotTeamBot", "teamId", "BotTeam", FkAction::Cascade),
+        ("BotTeamBot", "botId", "Bot", FkAction::Cascade),
+        ("BotTeam", "parentId", "BotTeam", FkAction::SetNull),
+        ("BotTeam", "leadBotId", "Bot", FkAction::SetNull),
+        (
+            "BotTeam",
+            "conversationId",
+            "Conversation",
+            FkAction::SetNull,
+        ),
+    ] {
+        graph.edges.push(FkEdge {
+            child: child.to_owned(),
+            column: column.to_owned(),
+            parent: parent.to_owned(),
+            parent_column: "id".to_owned(),
+            action,
+        });
+    }
     for &(name, primary_key, columns) in SQL_TABLES {
         graph.tables.insert(
             name.to_owned(),

@@ -410,9 +410,13 @@ function workspaceCalls(botId: string) {
 	return getWorkspace.mock.calls.filter(([id]) => id === botId).length;
 }
 
-function buttonContaining(...texts: string[]) {
-	return Array.from(container.querySelectorAll("button")).find((button) =>
-		texts.every((text) => button.textContent?.includes(text)),
+function chatRow(name: string) {
+	return Array.from(
+		container.querySelectorAll<HTMLButtonElement>("nav button"),
+	).find(
+		(button) =>
+			button.querySelector(".font-semibold span.truncate")?.textContent ===
+			name,
 	);
 }
 
@@ -489,14 +493,14 @@ describe("the pill and the bot's panel", () => {
 	});
 
 	test("its tabs follow the bot's abilities", async () => {
-		await click(buttonContaining("Scout", "Runs in the cloud"));
+		await click(chatRow("Scout"));
 		expect(pillName()).toBe("Scout");
 		expect(pill()?.textContent).toContain("Runs in the cloud");
 		await click(pill());
 		expect(tabs()).toEqual(["Details", "Files", "Data", "Memory", "Calendar"]);
 		expect(panelButton("Open workspace") === undefined).toBe(false);
 
-		await click(buttonContaining("Writer", "Runs in the cloud"));
+		await click(chatRow("Writer"));
 		expect(panelOpen()).toBe(false);
 		await click(pill());
 		expect(tabs()).toEqual(["Details", "Memory", "Calendar"]);
@@ -505,7 +509,7 @@ describe("the pill and the bot's panel", () => {
 	});
 
 	test("a local bot shows its account communication limit in Details", async () => {
-		await click(buttonContaining("Pebble", "Local only"));
+		await click(chatRow("Pebble"));
 		expect(pillName()).toBe("Pebble");
 		expect(pill()?.textContent).toContain("Local only");
 		await click(pill());
@@ -579,7 +583,7 @@ describe("the bot's workspace in the panel", () => {
 						release = () => resolve({ app_id: "ws-scout" });
 					})
 				: workspaceOf(botId);
-		await click(buttonContaining("Scout", "Runs in the cloud"));
+		await click(chatRow("Scout"));
 		expect(lastUrl()).toBe("/bots?bot=bot_scout");
 		await click(pill());
 		await openTab("Files");
@@ -636,7 +640,7 @@ describe("the bot's workspace in the panel", () => {
 		expect(activeTab()).toBe("Data");
 		expect(panelText()).toContain("Tables of ws-scout");
 
-		await click(buttonContaining("Writer", "Runs in the cloud"));
+		await click(chatRow("Writer"));
 		expect(lastUrl()).toBe("/bots?bot=bot_writer");
 		expect(pillName()).toBe("Writer");
 		expect(panelOpen()).toBe(false);
@@ -760,12 +764,16 @@ describe("the bot's workspace in the panel", () => {
 		}
 	});
 
-	test("Show chat reopens a closed dock on the chat, not under the sheet", async () => {
+	test("a reveal request reopens a closed dock on the chat, not under the sheet", async () => {
 		expect(chatCovered()).toBe(true);
 		await click(panelButton("Close chat"));
-		expect(dock() === null).toBe(true);
+		expect(pill() === null || pill() === undefined).toBe(true);
 
-		await click(buttonContaining("Show chat"));
+		await act(async () => {
+			useGlobalChatStore.getState().loadConversation("bot:bot_dora", []);
+			useGlobalChatStore.getState().requestReveal();
+		});
+		await settle();
 		expect(pillName()).toBe("Dora");
 		expect(panelOpen()).toBe(false);
 		expect(chatCovered()).toBe(false);
