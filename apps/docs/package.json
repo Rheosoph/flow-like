@@ -31,6 +31,6 @@
 	},
 	"devDependencies": {
 		"cheerio": "^1.0.0",
-		"puppeteer": "24.43.1"
+		"puppeteer": "25.18.1"
 	}
 }

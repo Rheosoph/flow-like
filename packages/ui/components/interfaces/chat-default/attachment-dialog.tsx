@@ -70,6 +70,10 @@ import {
 	attachmentKey,
 	getDisplayFileName,
 } from "./attachment";
+import {
+	AttachmentCraftPreview,
+	attachmentCraftViewer,
+} from "./attachment-craft-preview";
 
 type SortKey = "name" | "type" | "size";
 type FilterKey = ProcessedAttachment["type"] | "all";
@@ -97,7 +101,10 @@ export const canPreviewFile = (file: ProcessedAttachment) => {
 	) {
 		return true;
 	}
-	return canPreview(file.url, file.name || undefined);
+	return (
+		!!attachmentCraftViewer(file) ||
+		canPreview(file.url, file.name || undefined)
+	);
 };
 
 async function fetchAttachment(
@@ -1040,7 +1047,17 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 				</div>
 			);
 		case "document":
-		case "other":
+		case "other": {
+			const craft = attachmentCraftViewer(file);
+			if (craft) {
+				return (
+					<AttachmentCraftPreview
+						file={file}
+						viewer={craft.viewer}
+						filename={craft.filename}
+					/>
+				);
+			}
 			if (showTextPreview) {
 				return (
 					<div className="w-full h-full">
@@ -1049,6 +1066,7 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 				);
 			}
 			return noPreview;
+		}
 		default:
 			return noPreview;
 	}

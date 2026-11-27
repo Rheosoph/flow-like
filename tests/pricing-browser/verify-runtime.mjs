@@ -38,7 +38,7 @@ try {
 	const text = () =>
 		page.$eval("[data-runtime-calculator]", (node) => node.textContent);
 	const setDuration = async (value) => {
-		await page.click("[data-runtime-calculator] input", { clickCount: 3 });
+		await page.click("[data-runtime-calculator] input", { count: 3 });
 		await page.keyboard.press("Backspace");
 		if (value) await page.type("[data-runtime-calculator] input", value);
 	};

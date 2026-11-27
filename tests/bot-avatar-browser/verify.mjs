@@ -84,7 +84,9 @@ try {
 		headless: true,
 		executablePath:
 			process.env.CHROME_PATH ??
-			(existsSync(systemChrome) ? systemChrome : puppeteer.executablePath()),
+			(existsSync(systemChrome)
+				? systemChrome
+				: await puppeteer.executablePath()),
 	});
 	const page = await browser.newPage();
 	page.setDefaultTimeout(10000);
