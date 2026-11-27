@@ -1,5 +1,6 @@
 import {
 	type AskStatus,
+	type OrgTeamNode,
 	activeBots,
 	activeTeamOf,
 	askStatus,
@@ -35,11 +36,13 @@ export type AskGroups = Record<AskGroupKey, IOrgBot[]> & { none: IOrgBot[] };
 export interface Highlight {
 	botIds: ReadonlySet<string>;
 	teamIds: ReadonlySet<string>;
+	appIds: ReadonlySet<string>;
 }
 
 export const NO_HIGHLIGHT: Highlight = {
 	botIds: new Set(),
 	teamIds: new Set(),
+	appIds: new Set(),
 };
 
 export function highlightFor(org: IOrgView, botId: string | null): Highlight {
@@ -50,7 +53,7 @@ export function highlightFor(org: IOrgView, botId: string | null): Highlight {
 		const team = activeTeamOf(org, id);
 		if (team) for (const entry of teamPath(org, team.id)) teamIds.add(entry.id);
 	}
-	return { botIds, teamIds };
+	return { botIds, teamIds, appIds: new Set(orgBot(org, botId)?.app_ids) };
 }
 
 export function groupAsks(org: IOrgView, fromId: string): AskGroups {
@@ -176,10 +179,14 @@ export function partOfOptions(
 		.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function newTeamParents(org: IOrgView, me: string | null): ITeam[] {
-	return org.teams
-		.filter((team) => isTeamAdmin(team, me))
-		.sort((a, b) => a.name.localeCompare(b.name));
+/** Teams the viewer can put a new team inside, in outline order with their depth. */
+export function newTeamParents(
+	org: IOrgView,
+	me: string | null,
+): OrgTeamNode[] {
+	return flattenForest(orgForest(org)).filter((node) =>
+		isTeamAdmin(node.team, me),
+	);
 }
 
 export type DropAction = "add" | "invite";

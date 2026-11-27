@@ -193,6 +193,7 @@ impl Target {
     }
 }
 
+#[cfg(test)]
 fn new_connection(app: &str, event: &str, mode: AuthMode) -> Connection {
     new_target_connection(&Target::event(app, event), mode)
 }
@@ -310,19 +311,16 @@ pub async fn get(
     Path((app, event)): Path<(String, String)>,
 ) -> Result<Json<TeamsConnectionView>, ApiError> {
     authorize(&state, &user, &app, &event, false).await?;
-    get_inner(&state, &Target::event(&app, &event)).await.map(Json)
+    get_inner(&state, &Target::event(&app, &event))
+        .await
+        .map(Json)
 }
 
 pub(super) async fn get_inner(
     state: &AppState,
     target: &Target,
 ) -> Result<TeamsConnectionView, ApiError> {
-    let mut result = view(
-        state,
-        target,
-        target.connection(state).await?.map(|c| c.0),
-    )
-    .await?;
+    let mut result = view(state, target, target.connection(state).await?.map(|c| c.0)).await?;
     if let Some((health, _)) =
         store::get::<Value>(state, &format!("health:{}", result.connection_id)).await?
         && health["client_id"] == result.client_id

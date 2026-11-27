@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     bot_host::teams::{active_team_of, team_brief_for},
-    entity::{bot, bot_team, bot_team_bot, bot_team_person},
+    entity::{bot, bot_team, bot_team_app, bot_team_bot, bot_team_person},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::{
@@ -94,6 +94,11 @@ pub(crate) async fn prune_outsiders<C: ConnectionTrait>(
         .into_iter()
         .map(|row| row.user_id)
         .collect();
+    bot_team_app::Entity::delete_many()
+        .filter(bot_team_app::Column::TeamId.is_in(ids.clone()))
+        .filter(bot_team_app::Column::PinnedBy.is_not_in(insiders.iter().cloned()))
+        .exec(db)
+        .await?;
     let rows = bot_team_bot::Entity::find()
         .filter(bot_team_bot::Column::TeamId.is_in(ids))
         .all(db)
@@ -350,7 +355,7 @@ pub async fn add_bot(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
 pub(crate) async fn remove_bot_in<C: ConnectionTrait>(
@@ -490,7 +495,7 @@ pub async fn accept_bot(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
 pub(crate) async fn decline_bot_in<C: ConnectionTrait>(
@@ -590,7 +595,7 @@ pub async fn set_direct(
 ) -> Result<Json<Team>, ApiError> {
     let sub = user.sub()?;
     set_direct_in(&state.db, &sub, &team_id, &bot_id, body.agreed).await?;
-    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
 /// Whether `user_id` may read what `bot_id` knows of its team: its owner or an active person of

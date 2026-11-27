@@ -4,6 +4,7 @@ import type {
 	IBotTeamState,
 	ICreateTeamRequest,
 	IOrgView,
+	IPinnableApp,
 	ITeam,
 	ITeamBriefing,
 	ITeamThread,
@@ -33,6 +34,10 @@ function personPath(teamId: string, userId: string): string {
 
 function botPath(teamId: string, botId: string): string {
 	return `${teamPath(teamId)}/bots/${encodeURIComponent(botId)}`;
+}
+
+function appPinPath(teamId: string, appId: string): string {
+	return `${teamPath(teamId)}/apps/${encodeURIComponent(appId)}`;
 }
 
 function chatPath(botId: string, userId: string): string {
@@ -81,6 +86,7 @@ export class WebBotTeamState implements IBotTeamState {
 			reach: list(response?.reach),
 			chats: list(response?.chats),
 			classifications: list(response?.classifications),
+			apps: list(response?.apps),
 		};
 	}
 
@@ -313,5 +319,47 @@ export class WebBotTeamState implements IBotTeamState {
 			{ classification },
 			this.backend.auth,
 		);
+	}
+
+	async listPinnableApps(teamId: string): Promise<IPinnableApp[]> {
+		const response = await apiGet<IPinnableApp[]>(
+			`${teamPath(teamId)}/apps/pinnable`,
+			this.backend.auth,
+		);
+		return list(response);
+	}
+
+	async pinApp(teamId: string, appId: string): Promise<ITeam> {
+		return expectTeam(
+			await apiPost<ITeam>(
+				`${teamPath(teamId)}/apps`,
+				{ app_id: appId },
+				this.backend.auth,
+			),
+			`pin app ${appId} to team ${teamId}`,
+		);
+	}
+
+	async approveAppPin(teamId: string, appId: string): Promise<ITeam> {
+		return expectTeam(
+			await apiPost<ITeam>(
+				`${appPinPath(teamId, appId)}/approve`,
+				undefined,
+				this.backend.auth,
+			),
+			`approve app ${appId} for team ${teamId}`,
+		);
+	}
+
+	async declineAppPin(teamId: string, appId: string): Promise<void> {
+		await apiPost(
+			`${appPinPath(teamId, appId)}/decline`,
+			undefined,
+			this.backend.auth,
+		);
+	}
+
+	async unpinApp(teamId: string, appId: string): Promise<void> {
+		await apiDelete(appPinPath(teamId, appId), this.backend.auth);
 	}
 }

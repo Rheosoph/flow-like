@@ -6,6 +6,8 @@ export interface TeamTagOption {
 	name: string;
 	/** The tag without its `#`. */
 	tag: string;
+	/** The team room's picture, the team's icon. */
+	imageUrl?: string;
 	leadName?: string;
 	/** The lead's classification when the reader can't talk to it because of it; the option is listed but can't be picked. */
 	lockedLevel?: string;
@@ -96,6 +98,7 @@ export function teamTagOptions(
 				id: team.id,
 				name: team.name,
 				tag,
+				...(team.image_url ? { imageUrl: team.image_url } : {}),
 				...(lead ? { leadName: lead } : {}),
 				...(lockedLevel ? { lockedLevel } : {}),
 			},

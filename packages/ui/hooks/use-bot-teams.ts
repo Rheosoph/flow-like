@@ -17,12 +17,14 @@ import type {
 	TeamRole,
 } from "../state/backend-state/bot-team-state";
 import type { IBotRoomLimits } from "../state/backend-state/inbox-state";
-import { inboxKeys } from "./use-inbox";
+import { inboxKeys, useSetConversationImage } from "./use-inbox";
 
 export const botTeamKeys = {
 	all: ["bot-teams"] as const,
 	org: () => [...botTeamKeys.all, "org"] as const,
 	briefing: (botId: string) => [...botTeamKeys.all, "briefing", botId] as const,
+	pinnable: (teamId: string) =>
+		[...botTeamKeys.all, "pinnable", teamId] as const,
 };
 
 const ORG_STALE_TIME = 30_000;
@@ -36,6 +38,7 @@ const EMPTY_ORG: IOrgView = {
 	reach: [],
 	chats: [],
 	classifications: [],
+	apps: [],
 };
 
 function requireTeamState(state: IBotTeamState | undefined): IBotTeamState {
@@ -47,6 +50,41 @@ function requireTeamState(state: IBotTeamState | undefined): IBotTeamState {
 export function invalidateTeams(queryClient: QueryClient) {
 	void queryClient.invalidateQueries({ queryKey: botTeamKeys.all });
 	void queryClient.invalidateQueries({ queryKey: inboxKeys.all });
+}
+
+function storeTeamImage(
+	queryClient: QueryClient,
+	teamId: string,
+	imageUrl: string | null,
+) {
+	queryClient.setQueryData<IOrgView>(botTeamKeys.org(), (org) =>
+		org
+			? {
+					...org,
+					teams: org.teams.map((team) =>
+						team.id === teamId ? { ...team, image_url: imageUrl } : team,
+					),
+				}
+			: org,
+	);
+}
+
+/** Sets or removes a team's icon, which is its room's picture, and shows it in the org at once. */
+export function useSetTeamIcon() {
+	const setImage = useSetConversationImage();
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			roomId,
+			image,
+		}: {
+			teamId: string;
+			roomId: string;
+			image: string | null;
+		}) => setImage.mutateAsync({ conversationId: roomId, image }),
+		onSuccess: (room, { teamId }) =>
+			storeTeamImage(queryClient, teamId, room.image_url ?? null),
+	});
 }
 
 /** Every org the reader belongs to. Empty without a hub account. */
@@ -74,6 +112,17 @@ export function useTeamBriefing(botId: string | null | undefined) {
 		queryKey: botTeamKeys.briefing(botId ?? ""),
 		queryFn: () => requireTeamState(state).getBriefing(botId as string),
 		enabled: Boolean(state && botId),
+		staleTime: ORG_STALE_TIME,
+	});
+}
+
+/** The reader's apps for a team's pin dialog; loads only while `enabled`. */
+export function usePinnableApps(teamId: string | null, enabled: boolean) {
+	const state = useBackend().botTeamState;
+	return useQuery({
+		queryKey: botTeamKeys.pinnable(teamId ?? ""),
+		queryFn: () => requireTeamState(state).listPinnableApps(teamId as string),
+		enabled: Boolean(state && teamId && enabled),
 		staleTime: ORG_STALE_TIME,
 	});
 }
@@ -203,6 +252,21 @@ export function useTeamActions() {
 				},
 			) =>
 				state.setClassification(args.orgId, args.userId, args.classification),
+		),
+		pinApp: useTeamMutation((state, args: { teamId: string; appId: string }) =>
+			state.pinApp(args.teamId, args.appId),
+		),
+		approveAppPin: useTeamMutation(
+			(state, args: { teamId: string; appId: string }) =>
+				state.approveAppPin(args.teamId, args.appId),
+		),
+		declineAppPin: useTeamMutation(
+			(state, args: { teamId: string; appId: string }) =>
+				state.declineAppPin(args.teamId, args.appId),
+		),
+		unpinApp: useTeamMutation(
+			(state, args: { teamId: string; appId: string }) =>
+				state.unpinApp(args.teamId, args.appId),
 		),
 	};
 }

@@ -206,6 +206,8 @@ impl NodeLogic for CreateLocalDatabaseNode {
             format!("db_{}", table)
         };
         let cache_key = references::selection_cache_key(&base_key, &selector)?;
+        let initialization = connection::initialization_slot(context, &cache_key).await?;
+        let initializing = initialization.lock().await;
         let cache_set = context.cache.read().await.contains_key(&cache_key);
         if !cache_set {
             let database_path = connection::database_path(context, user_scoped)?;
@@ -285,6 +287,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
                 .await
                 .insert(cache_key.clone(), cacheable);
         }
+        drop(initializing);
 
         let db = NodeDBConnection { cache_key };
 
@@ -388,5 +391,25 @@ mod tests {
             warnings(&context),
             vec!["Table 'stale' in apps/app/storage/db is stale".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn parallel_opens_of_one_table_share_one_initialization_slot() {
+        let context = test_context().await;
+        let (first, second) = tokio::join!(
+            connection::initialization_slot(&context, "db_cards"),
+            connection::initialization_slot(&context, "db_cards"),
+        );
+        let (first, second) = (first.unwrap(), second.unwrap());
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let other = connection::initialization_slot(&context, "db_review_log")
+            .await
+            .unwrap();
+        assert!(!Arc::ptr_eq(&first, &other));
+
+        let _opening = first.lock().await;
+        assert!(second.try_lock().is_err(), "a second open waits for the first");
+        assert!(other.try_lock().is_ok(), "other tables open independently");
     }
 }

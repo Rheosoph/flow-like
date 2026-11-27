@@ -22,7 +22,7 @@ use axum::{
 };
 use flow_like::flow::{board::ExecutionMode, event::EventExecutionMode, node::NodePermission};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
 use super::db::get_event_from_db;
@@ -72,8 +72,9 @@ pub struct PrerunEventResponse {
     pub has_wasm_nodes: bool,
     /// package_id values of all WASM nodes present in the board
     pub wasm_package_ids: Vec<String>,
-    /// Per-package permissions declared by WASM nodes (package_id -> list of permissions)
-    pub wasm_package_permissions: HashMap<String, Vec<NodePermission>>,
+    /// Per-package permissions declared by WASM nodes (package_id -> list of permissions).
+    /// Ordered, so a bootstrap that embeds this answer keeps a stable ETag.
+    pub wasm_package_permissions: BTreeMap<String, Vec<NodePermission>>,
     /// Stable hash over the board-derived fields. Frontends may cache the
     /// response and revalidate in the background; a changed signature
     /// signals the underlying board has shifted.
@@ -104,7 +105,7 @@ pub(crate) fn build_response(
         can_execute_locally,
         has_wasm_nodes: payload.has_wasm_nodes,
         wasm_package_ids: payload.wasm_package_ids,
-        wasm_package_permissions: payload.wasm_package_permissions,
+        wasm_package_permissions: payload.wasm_package_permissions.into_iter().collect(),
         signature: payload.signature,
         page_id,
         manifest_revision,
@@ -113,6 +114,28 @@ pub(crate) fn build_response(
 
 fn page_board_id_for_response(board_id: String, can_execute_locally: bool) -> String {
     can_execute_locally.then_some(board_id).unwrap_or_default()
+}
+
+/// What the page prerun route answers for a lifecycle (`Special`) trigger of a resolved Page
+/// contract. `can_use_direct_board` is the caller's ReadBoards and ExecuteBoards.
+pub(crate) fn page_prerun_response(
+    board_id: String,
+    prerun: PrerunPayload,
+    event_execution_mode: EventExecutionMode,
+    can_use_direct_board: bool,
+    page_id: String,
+    manifest_revision: String,
+) -> PrerunEventResponse {
+    let can_execute_locally =
+        can_use_direct_board && event_execution_mode != EventExecutionMode::Remote;
+    build_response(
+        page_board_id_for_response(board_id, can_execute_locally),
+        prerun,
+        event_execution_mode,
+        can_execute_locally,
+        Some(page_id),
+        Some(manifest_revision),
+    )
 }
 
 /// Analyze an event to determine what's needed before execution.
@@ -285,7 +308,62 @@ pub async fn prerun_page_event(
 
 #[cfg(test)]
 mod tests {
-    use super::page_board_id_for_response;
+    use super::{
+        EventExecutionMode, ExecutionMode, PrerunPayload, page_board_id_for_response,
+        page_prerun_response,
+    };
+    use std::collections::HashMap;
+
+    fn payload() -> PrerunPayload {
+        PrerunPayload {
+            runtime_variables: Vec::new(),
+            oauth_requirements: Vec::new(),
+            requires_local_execution: false,
+            execution_mode: ExecutionMode::Hybrid,
+            has_wasm_nodes: false,
+            wasm_package_ids: Vec::new(),
+            wasm_package_permissions: HashMap::new(),
+            signature: "sig".into(),
+        }
+    }
+
+    #[test]
+    fn a_page_lifecycle_prerun_names_the_board_only_to_callers_who_may_run_it_locally() {
+        let local = page_prerun_response(
+            "board-1".into(),
+            payload(),
+            EventExecutionMode::Local,
+            true,
+            "page-1".into(),
+            "per2_rev".into(),
+        );
+        assert!(local.can_execute_locally);
+        assert_eq!(local.board_id, "board-1");
+        assert_eq!(local.page_id.as_deref(), Some("page-1"));
+        assert_eq!(local.manifest_revision.as_deref(), Some("per2_rev"));
+
+        let pinned_remote = page_prerun_response(
+            "board-1".into(),
+            payload(),
+            EventExecutionMode::Remote,
+            true,
+            "page-1".into(),
+            "per2_rev".into(),
+        );
+        assert!(!pinned_remote.can_execute_locally);
+        assert_eq!(pinned_remote.board_id, "");
+
+        let viewer = page_prerun_response(
+            "board-1".into(),
+            payload(),
+            EventExecutionMode::Local,
+            false,
+            "page-1".into(),
+            "per2_rev".into(),
+        );
+        assert!(!viewer.can_execute_locally);
+        assert_eq!(viewer.board_id, "");
+    }
 
     #[test]
     fn runtime_only_page_prerun_omits_board_identity() {

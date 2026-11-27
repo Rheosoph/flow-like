@@ -61,6 +61,7 @@ function useBotTeamsAdapter(botId: string): TeamsAdapter {
 	return useMemo(
 		() => ({
 			scope: `bot/${botId}`,
+			target: "bot" as const,
 			setup: setupFn && ((input) => setupFn(botId, input)),
 			disconnect: disconnectFn && (() => disconnectFn(botId)),
 			package: packageFn && (() => packageFn(botId)),

@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import type {
+	IOrgApp,
 	IOrgView,
+	IPinnableApp,
 	TalkReach,
 } from "../../../state/backend-state/bot-team-state";
 import {
@@ -64,6 +66,7 @@ let org: IOrgView = {
 	],
 	invitations: [],
 };
+let pinnable: IPinnableApp[] = [];
 const created: unknown[] = [];
 const calls: string[] = [];
 const record = (name: string) => ({
@@ -99,7 +102,13 @@ mock.module("../../../hooks/use-bot-teams", () => ({
 		openThread: record("openThread"),
 		requestChat: record("requestChat"),
 		setClassification: record("setClassification"),
+		pinApp: record("pinApp"),
+		approveAppPin: record("approveAppPin"),
+		declineAppPin: record("declineAppPin"),
+		unpinApp: record("unpinApp"),
 	}),
+	useSetTeamIcon: () => record("setTeamIcon"),
+	usePinnableApps: () => ({ isLoading: false, isError: false, data: pinnable }),
 }));
 
 const actualLookup = { ...(await import("../../../hooks/use-user-lookup")) };
@@ -157,6 +166,8 @@ async function show(me = "mara") {
 				bots: [],
 				onOpenChat: (id: string) => opened.push(`chat:${id}`),
 				onOpenConversation: (id: string) => opened.push(`room:${id}`),
+				onOpenApp: (id: string, where: string) =>
+					opened.push(`app:${where}:${id}`),
 			}),
 		),
 	);
@@ -266,6 +277,37 @@ describe("org chart", () => {
 		await act(async () => root.unmount());
 	});
 
+	test("the + under a team creates a team inside it", async () => {
+		created.length = 0;
+		await show();
+		await act(async () => labelled("New team inside Kestrel").click());
+		const name = window.document.querySelector(
+			"#org-new-team-name",
+		) as unknown as HTMLInputElement;
+		const setter = Object.getOwnPropertyDescriptor(
+			window.HTMLInputElement.prototype,
+			"value",
+		)?.set;
+		await act(async () => {
+			setter?.call(name, "Pricing");
+			name.dispatchEvent(new window.Event("input", { bubbles: true }) as never);
+		});
+		const create = [...window.document.querySelectorAll("button")].find((b) =>
+			b.textContent?.includes("Create team"),
+		) as unknown as HTMLElement;
+		await act(async () => create.click());
+		expect(created).toEqual([
+			{ name: "Pricing", purpose: null, parent_id: "kestrel" },
+		]);
+		await act(async () => root.unmount());
+	});
+
+	test("only a team's admins get the + under it", async () => {
+		await show("ines");
+		expect(labelled("New team inside Kestrel")).toBeNull();
+		await act(async () => root.unmount());
+	});
+
 	test("ways in and out sit beside the team, calendars mark the bots, and the switch folds the rails", async () => {
 		const plain = org;
 		org = {
@@ -305,6 +347,46 @@ describe("org chart", () => {
 		org = plain;
 	});
 
+	test("a team shows its room's picture, and its people change it from the inspector", async () => {
+		const plain = org;
+		const picture = "https://img.test/kestrel.png";
+		org = {
+			...plain,
+			teams: plain.teams.map((team) => ({ ...team, image_url: picture })),
+		};
+		await show();
+		expect(container.querySelector(`img[src="${picture}"]`)).toBeTruthy();
+
+		await act(async () => button("Kestrel").click());
+		const change = labelled("Change team icon");
+		expect(change).toBeTruthy();
+		await act(async () => {
+			change.dispatchEvent(
+				new window.KeyboardEvent("keydown", {
+					key: "Enter",
+					bubbles: true,
+				}) as never,
+			);
+		});
+		const reset = [
+			...window.document.querySelectorAll('[role="menuitem"]'),
+		].find((item) => item.textContent?.includes("Use default icon"));
+		await act(async () => (reset as unknown as HTMLElement).click());
+		expect(calls).toContain(
+			`setTeamIcon:${JSON.stringify({ teamId: "kestrel", roomId: "room-1", image: null })}`,
+		);
+		await act(async () => root.unmount());
+		org = plain;
+	});
+
+	test("people outside a team see its icon but can't change it", async () => {
+		await show("ines");
+		await act(async () => button("Kestrel").click());
+		expect(container.textContent).toContain("Top-level team");
+		expect(labelled("Change team icon")).toBeNull();
+		await act(async () => root.unmount());
+	});
+
 	test("an empty org offers the first team", async () => {
 		const full = org;
 		org = { teams: [], bots: [], invitations: [] };
@@ -312,6 +394,191 @@ describe("org chart", () => {
 		expect(button("Create your first team")).toBeTruthy();
 		await act(async () => root.unmount());
 		org = full;
+	});
+
+	describe("apps", () => {
+		const closeApp: IOrgApp = {
+			id: "close",
+			name: "Month-end close",
+			app_type: "DataPipeline",
+			can_open: true,
+			can_request: false,
+			reader_admin: true,
+			owner_id: "mara",
+			updated_at: "2026-11-20T10:00:00Z",
+			stats: {
+				runs: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+				failed: [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+				last_run_at: null,
+				triggers: ["cron"],
+				schedule: "0 2 * * *",
+				pages: 0,
+			},
+		};
+		const deskApp: IOrgApp = {
+			id: "desk",
+			name: "Triage desk",
+			description: "Where open cases live",
+			app_type: "CustomInterface",
+			can_open: false,
+			can_request: true,
+			reader_admin: false,
+			owner_id: "jonas",
+			updated_at: "2026-11-20T10:00:00Z",
+			stats: null,
+		};
+		const appsOrg = (status: "active" | "pending" = "active"): IOrgView => ({
+			...org,
+			teams: org.teams.map((team) => ({
+				...team,
+				people: [
+					{ user_id: "mara", role: "admin", status: "active" },
+					{ user_id: "ines", role: "member", status: "active" },
+					{ user_id: "olu", role: "member", status: "pending" },
+				],
+				apps: [
+					{
+						app_id: "close",
+						status,
+						pinned_by: "ines",
+						pinned_at: "2026-11-20T10:00:00Z",
+					},
+				],
+			})),
+			bots: org.bots.map((bot) =>
+				bot.id === "scout" ? { ...bot, app_ids: ["close", "desk"] } : bot,
+			),
+			apps: [closeApp, deskApp],
+		});
+		const exact = (label: string) =>
+			[...window.document.querySelectorAll("button")].find(
+				(b) => b.textContent?.trim() === label,
+			) as unknown as HTMLElement;
+		const withApps = async (
+			run: () => Promise<void>,
+			status?: "active" | "pending",
+		) => {
+			const plain = org;
+			org = appsOrg(status);
+			try {
+				await run();
+			} finally {
+				await act(async () => root.unmount());
+				org = plain;
+			}
+		};
+
+		test("a team's apps hang under it, drawn by their type", () =>
+			withApps(async () => {
+				await show();
+				const close = button("Month-end close");
+				expect(close.textContent).toContain("Automation");
+				expect(close.textContent).toContain("Daily at 02:00");
+				expect(close.textContent).toContain("7 runs this week");
+				const desk = button("Triage desk");
+				expect(desk.textContent).toContain("via Scout");
+				expect(desk.textContent).toContain("Request access");
+				expect(labelled("Uses Month-end close, Triage desk")).toBeTruthy();
+			}));
+
+		test("selecting an app lights its bots and opens it from the inspector", () =>
+			withApps(async () => {
+				opened.length = 0;
+				await show();
+				await act(async () => button("Month-end close").click());
+				expect(container.textContent).toContain("Runs, last 14 days");
+				expect(container.textContent).toContain("13 ok, 1 failed");
+				const scoutRow = [
+					...labelled("Kestrel").querySelectorAll("button"),
+				].find((b) => b.textContent?.startsWith("Scout"));
+				expect(scoutRow?.className).toContain("bg-primary/10");
+				await act(async () => exact("Open app").click());
+				expect(opened).toContain("app:app:close");
+			}));
+
+		test("an app the reader can't open shows what it is and offers access", () =>
+			withApps(async () => {
+				opened.length = 0;
+				await show();
+				await act(async () => button("Triage desk").click());
+				expect(container.textContent).toContain("Where open cases live");
+				expect(container.textContent).not.toContain("Activity, last 14 days");
+				await act(async () => exact("Request access").click());
+				expect(opened).toContain("app:store:desk");
+			}));
+
+		test("the Apps switch and the filter hide the cards", () =>
+			withApps(async () => {
+				await show();
+				await act(async () => exact("Agents").click());
+				expect(button("Month-end close")).toBeUndefined();
+				await act(async () => exact("Automations").click());
+				expect(button("Month-end close")).toBeTruthy();
+				await act(async () =>
+					(container.querySelector("#org-apps") as HTMLElement).click(),
+				);
+				expect(button("Month-end close")).toBeUndefined();
+			}));
+
+		test("Pin app lists the reader's apps and an admin pins at once", () =>
+			withApps(async () => {
+				calls.length = 0;
+				pinnable = [
+					{
+						id: "ledger",
+						name: "Ledger DB",
+						app_type: "DataFocus",
+						reader_admin: true,
+						pinned: null,
+						pinned_elsewhere: [],
+					},
+					{
+						id: "expenses",
+						name: "Expenses",
+						app_type: "Form",
+						reader_admin: false,
+						owner_id: "priya",
+						pinned: null,
+						pinned_elsewhere: [],
+					},
+				];
+				await show();
+				await act(async () => exact("Pin app").click());
+				const body = window.document.body.textContent ?? "";
+				expect(body).toContain("Pin an app to Kestrel");
+				expect(body).toContain("Apps you administer");
+				expect(body).toContain("Only its admins can pin it");
+				await act(async () => exact("Pin").click());
+				expect(calls).toContain(
+					`pinApp:${JSON.stringify({ teamId: "kestrel", appId: "ledger" })}`,
+				);
+				pinnable = [];
+			}));
+
+		test("a member's pin waits and a team admin approves it", () =>
+			withApps(async () => {
+				calls.length = 0;
+				await show("mara");
+				const close = button("Month-end close");
+				expect(close.textContent).toContain("Waiting for approval");
+				await act(async () => close.click());
+				await act(async () => exact("Approve for Kestrel").click());
+				expect(calls).toContain(
+					`approveAppPin:${JSON.stringify({ teamId: "kestrel", appId: "close" })}`,
+				);
+			}, "pending"));
+
+		test("the team header stacks its people and lists them on tap", () =>
+			withApps(async () => {
+				await show("mara");
+				const stack = labelled("People in Kestrel: 2");
+				expect(stack).toBeTruthy();
+				await act(async () => stack.click());
+				const body = window.document.body.textContent ?? "";
+				expect(body).toContain("2 people");
+				expect(body).toContain("1 invited, not joined yet");
+				expect(exact("Add people")).toBeTruthy();
+			}));
 	});
 
 	describe("reach", () => {
@@ -442,7 +709,7 @@ describe("org chart", () => {
 			await act(async () => button("Ask to chat").click());
 			const note = window.document.querySelector(
 				"textarea",
-			) as HTMLTextAreaElement;
+			) as unknown as HTMLTextAreaElement;
 			expect(window.document.body.textContent).toContain("0/280");
 			const setter = Object.getOwnPropertyDescriptor(
 				window.HTMLTextAreaElement.prototype,
@@ -456,7 +723,7 @@ describe("org chart", () => {
 			});
 			const send = [...window.document.querySelectorAll("button")].find((b) =>
 				b.textContent?.includes("Send request"),
-			) as HTMLElement;
+			) as unknown as HTMLElement;
 			await act(async () => send.click());
 			expect(calls).toContain(
 				'requestChat:{"botId":"scout","note":"Need a hand"}',

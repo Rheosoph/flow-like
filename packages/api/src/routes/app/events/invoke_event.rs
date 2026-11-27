@@ -290,6 +290,26 @@ pub(super) async fn store_input_payload(
     Ok(Some(stored.key))
 }
 
+/// A refused invocation records no run, so nothing holds the key of the payload stored for it.
+async fn discard_unrecorded_payload(
+    state: &AppState,
+    app_id: &str,
+    run_id: &str,
+    stored: &Result<Option<String>, ApiError>,
+) {
+    if !matches!(stored, Ok(Some(_))) {
+        return;
+    }
+    let discard = async {
+        let store = state.master_credentials().await?.to_store(false).await?;
+        payload_storage::discard_payload(store.as_generic(), app_id, run_id).await?;
+        Ok::<_, flow_like_types::Error>(())
+    };
+    if let Err(error) = discard.await {
+        tracing::warn!(app_id, run_id, %error, "Failed to remove the payload of a refused invocation");
+    }
+}
+
 /// POST /apps/{app_id}/events/{event_id}/invoke
 ///
 /// Invoke event execution. Use `?local=true` to track locally without dispatch.
@@ -777,10 +797,11 @@ async fn invoke_event_impl(
         )
         .await?;
     }
-    let resolved_page_trigger = match (event.default_page_id.as_ref(), params.page_trigger.as_ref())
-    {
-        (Some(_), Some(trigger)) => Some(
-            super::page_trigger::resolve_authorized_page_trigger(
+    let run_id = create_id();
+    let remote = !query.local;
+    let page_trigger = async {
+        match (event.default_page_id.as_ref(), params.page_trigger.as_ref()) {
+            (Some(_), Some(trigger)) => super::page_trigger::resolve_authorized_page_trigger(
                 &state,
                 &app_id,
                 &event,
@@ -789,21 +810,75 @@ async fn invoke_event_impl(
                 &sub,
                 technical_user_id.as_deref(),
             )
-            .await?,
-        ),
-        (Some(_), None) => {
-            return Err(ApiError::bad_request(
+            .await
+            .map(Some),
+            (Some(_), None) => Err(ApiError::bad_request(
                 "Invoking a Page Event requires page_trigger",
-            ));
-        }
-        (None, Some(_)) => {
-            return Err(ApiError::bad_request(
+            )),
+            (None, Some(_)) => Err(ApiError::bad_request(
                 "page_trigger is valid only for an Event that owns a Page",
-            ));
+            )),
+            (None, None) => Ok(None),
         }
-        (None, None) => None,
     };
-    let run_id = create_id();
+    let sink_profile = hosted_invocation
+        .as_ref()
+        .is_some_and(|hosted| uses_sink_credentials(&hosted.subject));
+    // A remote run's dispatch inputs need only the app and the caller, so they
+    // resolve while the Page contract does. Each result is consumed where it
+    // was awaited before, which keeps the order in which failures surface. A
+    // local tracking run only resolves the WASM package set; a visit on the
+    // sink's credentials takes the sink's profile once it pinned what it runs.
+    let (resolved_page_trigger, wasm_packages, input_payload_key, credentials, caller_profile) = flow_like_types::tokio::join!(
+        page_trigger,
+        try_resolve_wasm_packages(&state, &app_id).instrument(invoke_span!("invoke.wasm_packages")),
+        store_input_payload(
+            &state,
+            &app_id,
+            &run_id,
+            params.payload.as_ref().filter(|_| remote),
+        )
+        .instrument(invoke_span!("invoke.store_payload")),
+        async {
+            if remote {
+                let (credential_sub, mode) = crate::bot_flow::credential_target(
+                    bot_run.as_ref(),
+                    &sub,
+                    get_credentials_access(),
+                );
+                Some(
+                    state
+                        .scoped_credentials(&credential_sub, &app_id, mode)
+                        .await,
+                )
+            } else {
+                None
+            }
+        }
+        .instrument(invoke_span!("invoke.scoped_credentials")),
+        async {
+            if remote && !sink_profile {
+                caller_dispatch_profile(
+                    &state,
+                    &user,
+                    &sub,
+                    params.profile_id.as_deref(),
+                    &app_id,
+                )
+                .await
+            } else {
+                (None, None)
+            }
+        }
+        .instrument(invoke_span!("invoke.profile")),
+    );
+    let resolved_page_trigger = match resolved_page_trigger {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            discard_unrecorded_payload(&state, &app_id, &run_id, &input_payload_key).await;
+            return Err(error);
+        }
+    };
     // Live-variant split, resolved before the run row and the executor JWT so
     // both carry the same board as the dispatch payload. A page trigger already
     // bound its target (the bootstrap-served variant or the primary, WP6b) and
@@ -890,57 +965,13 @@ async fn invoke_event_impl(
     }
     .map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
 
-    // A remote run's dispatch inputs do not depend on each other, so they
-    // resolve together. Each result is consumed where it was awaited before,
-    // which keeps the order in which failures surface. A local tracking run
-    // only resolves the WASM package set.
-    let remote = !query.local;
-    let (wasm_packages, input_payload_key, credentials, (profile, custom_bit_owner)) = flow_like_types::tokio::join!(
-        try_resolve_wasm_packages(&state, &app_id).instrument(invoke_span!("invoke.wasm_packages")),
-        store_input_payload(
-            &state,
-            &app_id,
-            &run_id,
-            params.payload.as_ref().filter(|_| remote),
-        )
-        .instrument(invoke_span!("invoke.store_payload")),
-        async {
-            if remote {
-                let (credential_sub, mode) = crate::bot_flow::credential_target(
-                    bot_run.as_ref(),
-                    &sub,
-                    get_credentials_access(),
-                );
-                Some(
-                    state
-                        .scoped_credentials(&credential_sub, &app_id, mode)
-                        .await,
-                )
-            } else {
-                None
-            }
+    let (profile, custom_bit_owner) = match &hosted_invocation {
+        Some(hosted) if uses_sink_credentials(&hosted.subject) => {
+            (hosted_profile.clone(), hosted.profile_owner.clone())
         }
-        .instrument(invoke_span!("invoke.scoped_credentials")),
-        async {
-            match &hosted_invocation {
-                Some(hosted) if uses_sink_credentials(&hosted.subject) => {
-                    (hosted_profile.clone(), hosted.profile_owner.clone())
-                }
-                _ if remote => {
-                    caller_dispatch_profile(
-                        &state,
-                        &user,
-                        &sub,
-                        params.profile_id.as_deref(),
-                        &app_id,
-                    )
-                    .await
-                }
-                _ => (None, None),
-            }
-        }
-        .instrument(invoke_span!("invoke.profile")),
-    );
+        _ if remote => caller_profile,
+        _ => (None, None),
+    };
     let wasm_packages = wasm_packages?;
     let wasm_authority_revision =
         flow_like_types::dispatch::wasm_package_set_revision(wasm_packages.as_ref());
@@ -1980,14 +2011,17 @@ mod tests {
             invoke,
             "invoke_event_impl",
             &[
-                "Some(hosted) if uses_sink_credentials(&hosted.subject) => {",
-                "(hosted_profile.clone(), hosted.profile_owner.clone())",
-                "_ if remote => {",
+                ".is_some_and(|hosted| uses_sink_credentials(&hosted.subject));",
+                "if remote && !sink_profile {",
                 "caller_dispatch_profile(",
                 "&sub,",
+                "Some(hosted) if uses_sink_credentials(&hosted.subject) => {",
+                "(hosted_profile.clone(), hosted.profile_owner.clone())",
+                "_ if remote => caller_profile,",
                 "_ => (None, None),",
             ],
         );
+        assert_eq!(invoke.matches("caller_dispatch_profile(").count(), 1);
     }
 
     fn in_order(body: &str, name: &str, steps: &[&str]) {
@@ -2053,6 +2087,30 @@ mod tests {
         );
         assert!(invoke.contains("        board_etag,\n"));
         assert!(!invoke.contains("board_etag: None"));
+    }
+
+    /// The dispatch inputs resolve while the Page contract does, and a refused trigger removes the
+    /// payload stored for it: no run row will ever hold that payload's key.
+    #[test]
+    fn dispatch_inputs_resolve_with_the_page_contract() {
+        let invoke = function_body(production_source(), "\nasync fn invoke_event_impl(");
+        in_order(
+            invoke,
+            "invoke_event_impl",
+            &[
+                "let page_trigger = async {",
+                "resolve_authorized_page_trigger(",
+                "flow_like_types::tokio::join!(",
+                "page_trigger,",
+                "try_resolve_wasm_packages(",
+                "store_input_payload(",
+                "let resolved_page_trigger = match resolved_page_trigger {",
+                "discard_unrecorded_payload(&state, &app_id, &run_id, &input_payload_key).await;",
+                "return Err(error);",
+                "resolve_invoke_target(",
+            ],
+        );
+        assert_eq!(invoke.matches("store_input_payload(").count(), 1);
     }
 
     /// A Page trigger bound to a draft runs only when that draft is the one the visit pinned, the

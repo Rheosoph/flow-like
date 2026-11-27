@@ -57,9 +57,24 @@ With **Ins & outs** on, the org chart shows how work reaches each team from outs
 
 A mail address shows only while the bot's **Email** ability is on, webhooks only while its **Webhook** ability is on, and calendar marks only while its **Calendar** ability is on. Switched-off webhooks don't show. Everyone in the org sees webhook names, never their URLs or secrets, and sees which calendar services a bot reads, never the accounts. Select a team to list all its ways in, or a bot to copy its mail address.
 
+### Apps
+
+With **Apps** on, each team's apps hang under it in the org chart, one card per app. A card's outline shows the app's type, and what it shows depends on that type: an automation its schedule and 14 days of runs with failures in red, an agent where it answers and its chats this week, an interface its thumbnail and pages, a form its entries, a dashboard its trend. Filter the chart to **Agents**, **Apps**, **Data** or **Automations**.
+
+A team's apps are the apps pinned to it and the apps its bots use:
+
+- **Pinning:** choose **Pin app** under a team or in its details. You can pin an app you own or administer. A team admin's pin shows at once; a member's pin waits until a team admin approves it.
+- **Apps its bots use:** the apps you gave a bot show under its team with a dashed outline and "via" the bot, and small marks on the bot's row. A bot's own workspace never shows.
+
+Everyone in the org sees an app's name, icon, thumbnail, description and type, even without access to it. Its live numbers show only to its members. Select an app to see which bots use it and which teams it's pinned to, to open it, or to ask for access. Team admins, whoever pinned an app, and the app's admins can unpin it.
+
+Each team header also shows a few of its people's faces. Hover or tap them to see everyone in the team and their role.
+
 ## The team room
 
 Every team has a room with its people and bots. The lead reads along and answers what's addressed to the team. The other bots answer when someone mentions them, so a question to the team doesn't wake every bot in it. Once you've mentioned a bot and it answered, your follow-ups go to it without another mention, until you turn to someone else. In a team without a lead, a message that mentions nobody and follows up on no exchange wakes no bot. Use the room for work that concerns the whole team, and open a bot's own chat for everything else.
+
+The room's picture is also the team's icon, in the org chart and wherever you pick a team. Anyone in the team can change it: click the icon in the team's details in the org chart, or edit the room. Without a picture, the team keeps the icon the org chart picks for it.
 
 Deleting a team keeps its room as a plain group chat, so nobody loses the history.
 
@@ -128,8 +143,12 @@ Classification rules apply to direct asks as well.
 
 ## What a bot reads
 
-The bot's details in the org chart show **What it reads**: the exact text the bot gets about its team before every turn. It lists the team and its purpose, the lead and reporting line, the teammates and whether they can be asked directly, and an outline of the org with each team's lead.
+The bot's details in the org chart show **What it reads**: the exact text the bot gets about its team before every turn. It lists the team and its purpose, the lead and reporting line, the teammates and whether they can be asked directly, and the organization: its name, what it does (the top-level team's purpose), how many teams and bots it has, and the teams near the bot's own with their lead and purpose. A large org isn't listed in full. The bot sees the teams above, inside and beside its own and the org's first level, up to 15 teams.
 
-A bot reads this only in conversations where everyone is in its org. In a room with people from outside the org, it reads nothing about the org and can ask only its owner's other bots, so the org's layout never reaches outsiders through it.
+The bot answers questions about its own organization from this before it searches the web. For everything the brief leaves out, it uses **Org lookup**: it searches the org's teams, bots and people by name, `#Team` tag, or words from a team's purpose or a bot's job, and gets what you see in the org chart: a team's purpose, lead, bots, people and the teams inside it, a bot's owner, team and job, and the teams a person is in with their role. Org lookup never shows anyone's classification.
+
+In a conversation with people other than its owner, the bot also reads who is there: each person's teams and their role in each, and the lowest classification among them. It never gets anyone's own classification, so it can't give one away. It keeps its answer within that lowest level and uses people's teams and roles to judge what someone may see or ask for. **What it reads** in the org chart leaves this part out, since it depends on the conversation.
+
+A bot reads this only in conversations where everyone is in its org. In a room with people from outside the org, it reads nothing about the org, can't use Org lookup, and can ask only its owner's other bots, so the org's layout never reaches outsiders through it.
 
 Bots outside every team read none of it and see only their owner's other bots, as before.

@@ -77,6 +77,12 @@ pub struct AcceptBotRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct PinAppRequest {
+    /// An app you own or administer.
+    pub app_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct DirectAgreementRequest {
     pub agreed: bool,
 }

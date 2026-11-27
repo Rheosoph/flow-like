@@ -139,7 +139,7 @@ pub async fn add_people(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
 pub(crate) async fn join_in<C: ConnectionTrait>(
@@ -196,7 +196,7 @@ pub async fn join_team(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
 pub(crate) async fn decline_in<C: ConnectionTrait>(
@@ -328,7 +328,7 @@ pub async fn set_role(
             })
         })
         .await?;
-    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
 /// Removes a person from the team: an admin removes anyone, everyone may leave. Their bots in the

@@ -3,9 +3,9 @@
 
 use super::hub::Hub;
 use super::store::DiscordSettings;
+use flow_like_bots::BotSpec;
 use flow_like_bots::discord::{ClientEnd, DiscordReply, facts_of, notice, startable};
 use flow_like_bots::reply::{Answer, ReplySink, SendError};
-use flow_like_bots::BotSpec;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -247,14 +247,7 @@ impl EventHandler for Handler {
         let title = title_of(&ctx, &msg);
         let body = post_body(&msg, bot, title);
         let shared = self.0.clone();
-        tokio::spawn(relay(
-            shared,
-            http,
-            msg.channel_id,
-            msg.id,
-            body,
-            permit,
-        ));
+        tokio::spawn(relay(shared, http, msg.channel_id, msg.id, body, permit));
     }
 }
 
@@ -310,7 +303,12 @@ fn title_of(ctx: &Context, msg: &Message) -> String {
             let channel = guild
                 .channels
                 .get(&msg.channel_id)
-                .or_else(|| guild.threads.iter().find(|thread| thread.id == msg.channel_id))
+                .or_else(|| {
+                    guild
+                        .threads
+                        .iter()
+                        .find(|thread| thread.id == msg.channel_id)
+                })
                 .map(|channel| channel.name.clone());
             (channel, Some(guild.name.clone()))
         })
@@ -535,21 +533,36 @@ mod tests {
 
     #[test]
     fn titles_name_the_channel_or_the_person() {
-        assert_eq!(chat_title(Some("general"), Some("Acme"), None), "#general (Acme)");
+        assert_eq!(
+            chat_title(Some("general"), Some("Acme"), None),
+            "#general (Acme)"
+        );
         assert_eq!(chat_title(None, None, Some("Ann")), "DM with Ann");
         assert_eq!(chat_title(None, Some("Acme"), None), "Discord (Acme)");
         assert_eq!(chat_title(None, None, None), "Discord chat");
         let long = "x".repeat(300);
-        assert_eq!(chat_title(Some(&long), Some("G"), None).chars().count(), 100);
+        assert_eq!(
+            chat_title(Some(&long), Some("G"), None).chars().count(),
+            100
+        );
     }
 
     #[test]
     fn a_turn_settles_by_status_and_reply() {
-        assert_eq!(settle(&turn("done", Some(" hi "), None)), Settled::Reply("hi".into()));
+        assert_eq!(
+            settle(&turn("done", Some(" hi "), None)),
+            Settled::Reply("hi".into())
+        );
         assert_eq!(settle(&turn("done", None, None)), Settled::Silent);
         assert_eq!(settle(&turn("done", Some("  "), None)), Settled::Silent);
-        assert_eq!(settle(&turn("failed", None, Some("X"))), Settled::Notice(FAILED_NOTICE));
-        assert_eq!(settle(&turn("cancelled", None, Some("BATCHED"))), Settled::Silent);
+        assert_eq!(
+            settle(&turn("failed", None, Some("X"))),
+            Settled::Notice(FAILED_NOTICE)
+        );
+        assert_eq!(
+            settle(&turn("cancelled", None, Some("BATCHED"))),
+            Settled::Silent
+        );
         assert_eq!(
             settle(&turn("cancelled", None, None)),
             Settled::Notice(CANCELLED_NOTICE)
@@ -565,7 +578,9 @@ mod tests {
         assert_eq!(bits, 1024 + 2048 + 32768 + 65536 + (1u64 << 38));
         assert_eq!(
             invite_url(7),
-            format!("https://discord.com/oauth2/authorize?client_id=7&scope=bot&permissions={bits}")
+            format!(
+                "https://discord.com/oauth2/authorize?client_id=7&scope=bot&permissions={bits}"
+            )
         );
     }
 

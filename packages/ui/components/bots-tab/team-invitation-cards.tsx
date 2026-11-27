@@ -24,7 +24,8 @@ const DISMISSED_KEY = "flow-like:bots:dismissed-direct-asks";
 const LEAD_TURNS_PER_PERSON_PER_DAY = 20;
 
 export function teamInvitationKey(invitation: ITeamInvitation): string {
-	return `${invitation.kind}:${invitation.team_id}:${invitation.bot_id ?? ""}:${invitation.user_id ?? ""}`;
+	const key = `${invitation.kind}:${invitation.team_id}:${invitation.bot_id ?? ""}:${invitation.user_id ?? ""}`;
+	return invitation.app_id ? `${key}:${invitation.app_id}` : key;
 }
 
 function readDismissed(): string[] {
@@ -102,13 +103,20 @@ function TeamInvitationCard({
 		actions.acceptLead.isPending ||
 		actions.declineLead.isPending ||
 		actions.acceptChat.isPending ||
-		actions.declineChat.isPending;
+		actions.declineChat.isPending ||
+		actions.approveAppPin.isPending ||
+		actions.declineAppPin.isPending;
+	const appId = invitation.app_id ?? "";
+	const appName =
+		org.apps?.find((app) => app.id === appId)?.name ??
+		t("teams.needs.anApp", "an app");
 	const [limitsOpen, setLimitsOpen] = useState(false);
 	const requesterId = invitation.user_id ?? "";
 	const requester = requesterId
 		? directory(requesterId).name
 		: t("teams.chats.invite.someone", "Someone");
-	const askerId = kind === "chat_request" ? requesterId : inviterId;
+	const askerId =
+		kind === "chat_request" || kind === "app_pin" ? requesterId : inviterId;
 
 	const run = (task: Promise<unknown>) =>
 		task.catch((error: unknown) => {
@@ -123,6 +131,8 @@ function TeamInvitationCard({
 			);
 		});
 	const accept = (limits?: IBotRoomLimits | null) => {
+		if (kind === "app_pin")
+			return run(actions.approveAppPin.mutateAsync({ teamId, appId }));
 		if (kind === "lead")
 			return run(actions.acceptLead.mutateAsync({ teamId, botId }));
 		if (kind === "chat_request")
@@ -140,6 +150,8 @@ function TeamInvitationCard({
 		);
 	};
 	const decline = () => {
+		if (kind === "app_pin")
+			return run(actions.declineAppPin.mutateAsync({ teamId, appId }));
 		if (kind === "lead")
 			return run(actions.declineLead.mutateAsync({ teamId, botId }));
 		if (kind === "chat_request")
@@ -178,6 +190,17 @@ function TeamInvitationCard({
 			"teams.needs.leadMeta",
 			"Everyone in {{org}} can then talk to it, and its turns are on you (up to {{limit}} per person a day).",
 			{ org: orgName, limit: LEAD_TURNS_PER_PERSON_PER_DAY },
+		);
+	} else if (kind === "app_pin") {
+		title = t(
+			"teams.needs.appPinTitle",
+			"{{name}} wants to pin {{app}} to {{team}}",
+			{ name: requester, app: appName, team },
+		);
+		meta = t(
+			"teams.needs.appPinMeta",
+			"Everyone in {{org}} will see its name, icon, description and type.",
+			{ org: orgName },
 		);
 	} else if (kind === "chat_request") {
 		title = t("teams.needs.chatTitle", "{{name}} wants to talk with {{bot}}", {
@@ -223,7 +246,9 @@ function TeamInvitationCard({
 						</span>
 					)
 				}
-				name={kind === "chat_request" ? requester : inviter}
+				name={
+					kind === "chat_request" || kind === "app_pin" ? requester : inviter
+				}
 				where={t("teams.chats.invite.where", "{{team}} · {{org}}", {
 					team,
 					org: orgName,
@@ -243,7 +268,7 @@ function TeamInvitationCard({
 						>
 							{kind === "direct_asks"
 								? t("teams.chats.invite.allow", "Allow")
-								: kind === "chat_request"
+								: kind === "chat_request" || kind === "app_pin"
 									? t("teams.needs.approve", "Approve")
 									: t("teams.chats.invite.accept", "Accept")}
 						</Button>

@@ -38,14 +38,92 @@ export interface ITeam {
 	direct_asks: boolean;
 	/** The team room: a group conversation of the team's active people and bots. */
 	conversation_id?: string | null;
+	/** The team room's picture, which is also the team's icon. Missing while the room has none. */
+	image_url?: string | null;
 	/** The bot an admin asked to lead the team, until its owner answers; only admins and that owner see it. */
 	lead_offer_bot_id?: string | null;
 	/** Bots that take no turn in the team room while someone in it is classified below them. */
 	gated_bots?: string[];
 	people: ITeamPerson[];
 	bots: ITeamBot[];
+	/** Apps pinned to the team; a pending pin shows only to the team's admins and its pinner. Older hubs leave it out. */
+	apps?: ITeamApp[];
 	created_at: string;
 	updated_at: string;
+}
+
+/** Apps one team may have pinned, active and pending. */
+export const MAX_TEAM_APPS = 24;
+/** Days of activity `IOrgAppStats` covers. */
+export const ORG_APP_DAYS = 14;
+
+/** An app pinned to a team. A team admin's pin is active at once; a member's waits for an admin. */
+export interface ITeamApp {
+	app_id: string;
+	status: TeamMemberStatus;
+	pinned_by: string;
+	approved_by?: string | null;
+	pinned_at: string;
+}
+
+/** `IAppType` values; null while the owner has not picked one. */
+export type OrgAppType =
+	| "Agent"
+	| "CustomInterface"
+	| "DataFocus"
+	| "DataPipeline"
+	| "Analytics"
+	| "Form";
+
+/** What an app did lately; only readers who can open the app get it. */
+export interface IOrgAppStats {
+	/** Runs per day over the last `ORG_APP_DAYS` days, oldest first, today last. */
+	runs: number[];
+	/** Failed runs per day, the same days. */
+	failed: number[];
+	last_run_at?: string | null;
+	/** Kinds of its switched-on events (`cron`, `simple_chat`, `email`, `api`, `generic_form`, …). */
+	triggers: string[];
+	/** The cron expression of its first switched-on schedule. */
+	schedule?: string | null;
+	pages: number;
+}
+
+/** An app as everyone in its org sees it: metadata and type, never its boards, tables or events. */
+export interface IOrgApp {
+	id: string;
+	name: string;
+	description?: string | null;
+	/** Signed link. */
+	icon?: string | null;
+	/** Signed link. */
+	thumbnail?: string | null;
+	app_type?: OrgAppType | null;
+	/** The reader is a member of the app. */
+	can_open: boolean;
+	/** Not a member, and the app lets people join or ask to join. */
+	can_request: boolean;
+	/** The reader owns or administers the app: may pin it, and unpin it from any team. */
+	reader_admin: boolean;
+	owner_id?: string | null;
+	updated_at: string;
+	stats?: IOrgAppStats | null;
+}
+
+/** An app the reader is a member of, offered in a team's pin dialog. */
+export interface IPinnableApp {
+	id: string;
+	name: string;
+	description?: string | null;
+	icon?: string | null;
+	app_type?: OrgAppType | null;
+	/** Only apps the reader owns or administers can be pinned. */
+	reader_admin: boolean;
+	owner_id?: string | null;
+	/** Its pin in this team, if any. */
+	pinned?: TeamMemberStatus | null;
+	/** Other teams of the org it is actively pinned to. */
+	pinned_elsewhere: string[];
 }
 
 /** A bot as every member of its org sees it: who it is and what it does, never its settings. */
@@ -63,6 +141,8 @@ export interface IOrgBot {
 	classification?: string | null;
 	/** What starts its work from outside the chats, and what it sends out. Older hubs leave it out. */
 	inputs?: IOrgBotInputs;
+	/** The org apps (`IOrgView.apps`) it may use; never its workspace app. */
+	app_ids?: string[];
 }
 
 /** Days `IOrgBotMail` counts mail over. */
@@ -98,13 +178,15 @@ export interface IOrgBotInputs {
 /**
  * `lead`: an admin asks the reader's bot to lead the team (everyone in the org can then talk to it).
  * `chat_request`: someone in the org (`user_id`) asks to talk with the reader's bot.
+ * `app_pin`: a member of a team the reader administers (`user_id`) pinned an app (`app_id`).
  */
 export type TeamInvitationKind =
 	| "person"
 	| "bot"
 	| "direct_asks"
 	| "lead"
-	| "chat_request";
+	| "chat_request"
+	| "app_pin";
 
 /** One answer the reader owes a team. */
 export interface ITeamInvitation {
@@ -120,6 +202,8 @@ export interface ITeamInvitation {
 	user_id?: string | null;
 	/** For `chat_request`: why they ask. */
 	note?: string | null;
+	/** For `app_pin`: the pinned app, also in `IOrgView.apps`. */
+	app_id?: string | null;
 	created_at: string;
 }
 
@@ -193,6 +277,8 @@ export interface IOrgView {
 	chats?: IBotChat[];
 	/** The reader's own classification per org, and everyone's in orgs whose top-level team they administer. Missing: internal. */
 	classifications?: IPersonClassification[];
+	/** Every app the chart shows: active pins, pending pins the reader may see, and the apps of the org's active bots. */
+	apps?: IOrgApp[];
 }
 
 /** A person's thread with a team: their `#Team` requests land there and the team's lead answers. */
@@ -309,4 +395,14 @@ export interface IBotTeamState {
 		userId: string,
 		classification: DataClassification | null,
 	): Promise<void>;
+	/** Apps the reader is a member of, for the team's pin dialog; only `reader_admin` ones can be pinned. */
+	listPinnableApps(teamId: string): Promise<IPinnableApp[]>;
+	/** Pins an app the reader administers: live at once for a team admin, pending for a member. */
+	pinApp(teamId: string, appId: string): Promise<ITeam>;
+	/** A team admin approves a member's pending pin. */
+	approveAppPin(teamId: string, appId: string): Promise<ITeam>;
+	/** A team admin turns down a member's pending pin. */
+	declineAppPin(teamId: string, appId: string): Promise<void>;
+	/** A team admin, the pinner or an admin of the app takes the pin off (or withdraws a pending one). */
+	unpinApp(teamId: string, appId: string): Promise<void>;
 }

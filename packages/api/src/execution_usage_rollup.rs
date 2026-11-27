@@ -462,7 +462,7 @@ async fn add_rows<C: ConnectionTrait>(
     Ok(())
 }
 
-async fn rolled_days<C: ConnectionTrait>(
+pub(crate) async fn rolled_days<C: ConnectionTrait>(
     conn: &C,
     from: NaiveDate,
     through: NaiveDate,

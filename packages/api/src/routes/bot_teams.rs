@@ -14,6 +14,7 @@ use axum::{
 };
 use sea_orm::{ColumnTrait, DatabaseTransaction, DbErr, EntityTrait, QueryFilter};
 
+pub mod apps;
 pub(crate) mod access;
 pub mod bots;
 pub mod chats;
@@ -23,6 +24,7 @@ mod inputs;
 pub mod lead;
 pub(crate) mod levels;
 pub mod model;
+pub(crate) mod org_apps;
 pub mod people;
 pub(crate) mod reach;
 pub(crate) mod room;
@@ -30,6 +32,10 @@ pub mod teams;
 pub(crate) mod threads;
 pub(crate) mod view;
 
+#[cfg(test)]
+mod apps_tests;
+#[cfg(test)]
+mod brief_tests;
 #[cfg(test)]
 mod chats_tests;
 #[cfg(test)]
@@ -153,6 +159,11 @@ pub fn routes() -> Router<AppState> {
         .route("/{team_id}/decline", post(people::decline_team))
         .route("/{team_id}/people/{user_id}/role", put(people::set_role))
         .route("/{team_id}/people/{user_id}", delete(people::remove_person))
+        .route("/{team_id}/apps/pinnable", get(apps::list_pinnable))
+        .route("/{team_id}/apps", post(apps::pin_app))
+        .route("/{team_id}/apps/{app_id}", delete(apps::unpin_app))
+        .route("/{team_id}/apps/{app_id}/approve", post(apps::approve_pin))
+        .route("/{team_id}/apps/{app_id}/decline", post(apps::decline_pin))
         .route("/{team_id}/bots", post(bots::add_bot))
         .route("/{team_id}/bots/{bot_id}", delete(bots::remove_bot))
         .route("/{team_id}/bots/{bot_id}/accept", post(bots::accept_bot))

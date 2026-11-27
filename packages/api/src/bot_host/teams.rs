@@ -439,23 +439,26 @@ impl OrgTables {
 struct Present {
     user_id: String,
     teams: Vec<BriefMembership>,
-    classification: DataClassification,
 }
 
-/// The people of a conversation with their teams in `org` and their classification there, when
-/// someone besides `owner_id` is among them.
+/// The people of a conversation with their teams in `org`, and the lowest classification among
+/// them, when someone besides `owner_id` is there. Nobody's own level leaves this function.
 async fn present_in<C: ConnectionTrait>(
     db: &C,
     org: &OrgTables,
     owner_id: &str,
     people: &[String],
-) -> Result<Vec<Present>, DbErr> {
+) -> Result<(Vec<Present>, Option<DataClassification>), DbErr> {
     if people.iter().all(|person| person == owner_id) {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
     let rows = org.people(db, Some(people)).await?;
-    let levels = person_levels(db, &org.root.id, people).await?;
-    Ok(people
+    let lowest = person_levels(db, &org.root.id, people)
+        .await?
+        .into_values()
+        .min()
+        .or(Some(UNCLASSIFIED_PERSON));
+    let present = people
         .iter()
         .map(|user_id| Present {
             user_id: user_id.clone(),
@@ -472,9 +475,9 @@ async fn present_in<C: ConnectionTrait>(
                     })
                 })
                 .collect(),
-            classification: levels.get(user_id).copied().unwrap_or(UNCLASSIFIED_PERSON),
         })
-        .collect())
+        .collect();
+    Ok((present, lowest))
 }
 
 /// The brief `bot_id` reads in its owner's own chat.
@@ -486,15 +489,23 @@ pub(crate) async fn team_brief_for(
 }
 
 /// The brief `bot_id` reads about its team, its org and the people of `conversation_id` before
-/// every turn there; `None` while it is in no team, is gone, or the conversation holds people
-/// outside the org. It names the bots of its own team and every team's lead, never all of a large
-/// org's bots: `org_lookup` finds the rest.
+/// every turn there; see [`team_brief_on`].
 pub(crate) async fn team_brief_in(
     state: &AppState,
     bot_id: &str,
     conversation_id: Option<&str>,
 ) -> Result<Option<TeamBrief>, DbErr> {
-    let db = &state.db;
+    team_brief_on(&state.db, bot_id, conversation_id).await
+}
+
+/// `None` while `bot_id` is in no team, is gone, or the conversation holds people outside the org.
+/// It names the bots of its own team and every team's lead, never all of a large org's bots:
+/// `org_lookup` finds the rest.
+pub(crate) async fn team_brief_on<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    conversation_id: Option<&str>,
+) -> Result<Option<TeamBrief>, DbErr> {
     let Some(team) = active_team_of(db, bot_id).await? else {
         return Ok(None);
     };
@@ -518,7 +529,7 @@ pub(crate) async fn team_brief_in(
     let Some(me) = bots.get(bot_id) else {
         return Ok(None);
     };
-    let present = present_in(db, &org, &me.owner_id, &people).await?;
+    let (present, present_level) = present_in(db, &org, &me.owner_id, &people).await?;
     let names = names_of(
         db,
         bots.values()
@@ -579,7 +590,6 @@ pub(crate) async fn team_brief_in(
             name: names.get(&person.user_id).cloned().unwrap_or_default(),
             owner: person.user_id == me.owner_id,
             teams: person.teams,
-            classification: person.classification,
         })
         .collect();
     present.sort_by(|a, b| a.owner.cmp(&b.owner).then_with(|| a.name.cmp(&b.name)));
@@ -600,18 +610,28 @@ pub(crate) async fn team_brief_in(
         room: team.conversation_id.as_ref().map(|_| team_tag(&team.name)),
         org: org.outline(&bots),
         present,
+        present_level,
     }))
 }
 
-/// What `bot_id`'s `org_lookup` finds for `query` in its org: what every member of the org sees
-/// in the org chart, never anyone's classification. `None` where its brief would be `None`.
+/// What `bot_id`'s `org_lookup` finds for `query` in its org; see [`org_lookup_on`].
 pub(crate) async fn org_lookup_in(
     state: &AppState,
     bot_id: &str,
     conversation_id: Option<&str>,
     query: &str,
 ) -> Result<Option<OrgLookup>, DbErr> {
-    let db = &state.db;
+    org_lookup_on(&state.db, bot_id, conversation_id, query).await
+}
+
+/// What every member of the org sees in the org chart, never anyone's classification. `None`
+/// where the bot's brief would be `None`.
+pub(crate) async fn org_lookup_on<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    conversation_id: Option<&str>,
+    query: &str,
+) -> Result<Option<OrgLookup>, DbErr> {
     let Some(team) = active_team_of(db, bot_id).await? else {
         return Ok(None);
     };

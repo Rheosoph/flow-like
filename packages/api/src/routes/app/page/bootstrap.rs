@@ -22,6 +22,7 @@ use crate::{
             is_listed_event_type, is_user_facing_event, redact_page_event_board_metadata,
         },
         events::page_trigger::{ResolvedPageContract, resolve_page_contract_for_bootstrap},
+        events::prerun_event::{PrerunEventResponse, page_prerun_response},
         page::get_page::{if_none_match_matches, page_etag},
     },
     state::AppState,
@@ -55,7 +56,14 @@ pub struct BootstrapQuery {
     /// Pin a page Event to `stable` or a named live variant instead of the weighted split.
     #[serde(default, rename = "__variant")]
     pub variant: Option<String>,
+    /// How many cloud executors to start for the runs this page open is about to send (its
+    /// onLoad and widget startup actions). Sent by web clients; capped server-side.
+    #[serde(default)]
+    pub warm: Option<usize>,
 }
+
+/// Upper bound for `BootstrapQuery::warm`: one page open's onLoad plus its first widget runs.
+const MAX_WARM_EXECUTORS: usize = 4;
 
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +98,11 @@ pub struct BootstrapResponse {
     /// static actions through the `execution_revision` they echo back, dynamic actions
     /// through the sealed page-execution claims in their capability.
     pub served_variant: Option<String>,
+    /// What `POST …/events/{event_id}/prerun` answers for this page's onLoad at
+    /// `execution_revision`, so the page can start its onLoad without that round trip.
+    /// `null` when the page has no onLoad or the caller could not run it.
+    #[schema(value_type = Option<Object>)]
+    pub on_load_prerun: Option<PrerunEventResponse>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,6 +236,7 @@ fn bootstrap_response(
     app_custom_css: Option<String>,
     execution_revision: Option<String>,
     element_demand: Option<ElementDemand>,
+    on_load_prerun: Option<PrerunEventResponse>,
     served_variant: Option<String>,
     canonical_route: Option<String>,
     route_miss: bool,
@@ -248,6 +262,7 @@ fn bootstrap_response(
         execution_revision,
         element_demand,
         served_variant,
+        on_load_prerun,
     })
     .map_err(|error| ApiError::internal_error(anyhow!("failed to encode bootstrap: {error}")))?;
     // The HTTP validator covers the entire sanitized document. A permission-safe Event change,
@@ -325,6 +340,7 @@ pub async fn bootstrap(
         caller_subject: permission.effective_user_id().ok(),
         can_use_direct_board: permission.has_permission(RolePermissions::ReadBoards)
             && permission.has_permission(RolePermissions::ExecuteBoards),
+        can_prerun_page: permission.person_user_id().is_ok(),
     };
 
     // The app manifest only feeds the stylesheet and the bucket fallback of an absent event
@@ -342,7 +358,19 @@ pub async fn bootstrap(
             None => Ok::<_, ApiError>(None),
         }
     };
-    let (app, served) = flow_like_types::tokio::join!(load_app, serve_mirrored);
+    // The page's runs follow this response within a second; executors started now are past
+    // their cold start by then. Runs dispatch under the same user, so the same tenant.
+    let warm = async {
+        if let Some(count) = params.warm.filter(|count| *count > 0)
+            && let Ok(user_id) = permission.run_user_id()
+        {
+            state
+                .dispatcher
+                .warm_executors(&user_id, count.min(MAX_WARM_EXECUTORS))
+                .await;
+        }
+    };
+    let (app, served, ()) = flow_like_types::tokio::join!(load_app, serve_mirrored, warm);
     let app = app?;
     let (served, route_miss) = match served? {
         Some(served) => served,
@@ -361,6 +389,7 @@ pub async fn bootstrap(
             .and_then(|frontend| frontend.custom_css.clone()),
         served.execution_revision,
         served.element_demand,
+        served.on_load_prerun,
         served.served_variant,
         served.canonical_route,
         route_miss,
@@ -441,6 +470,8 @@ struct ServeContext<'a> {
     pin: Option<String>,
     caller_subject: Option<String>,
     can_use_direct_board: bool,
+    /// The page prerun route answers only callers linked to a person.
+    can_prerun_page: bool,
 }
 
 struct ServedEvent {
@@ -448,6 +479,7 @@ struct ServedEvent {
     page: Option<Page>,
     execution_revision: Option<String>,
     element_demand: Option<ElementDemand>,
+    on_load_prerun: Option<PrerunEventResponse>,
     served_variant: Option<String>,
     canonical_route: Option<String>,
 }
@@ -482,17 +514,20 @@ impl ServeContext<'_> {
         // An Event without `default_page_id` is still a valid bootstrap target for generic forms,
         // chats, and other runnable surfaces. When it declares a custom page, however, that page
         // is part of the contract and a missing version-bound artifact remains a uniform 404.
-        let (page, execution_revision, element_demand) = if event.default_page_id.is_some() {
-            let contract =
-                resolve_page_contract_for_bootstrap(self.state, self.app_id, &event).await?;
-            (
-                Some(self.project_page(&contract)?),
-                Some(contract.manifest_revision),
-                Some(contract.element_demand),
-            )
-        } else {
-            (None, None, None)
-        };
+        let (page, execution_revision, element_demand, on_load_prerun) =
+            if event.default_page_id.is_some() {
+                let contract =
+                    resolve_page_contract_for_bootstrap(self.state, self.app_id, &event).await?;
+                let on_load_prerun = self.on_load_prerun(&event, &contract);
+                (
+                    Some(self.project_page(&contract)?),
+                    Some(contract.manifest_revision),
+                    Some(contract.element_demand),
+                    on_load_prerun,
+                )
+            } else {
+                (None, None, None, None)
+            };
         let mut event = bootstrap_event(event);
         if !self.can_use_direct_board && event.default_page_id.is_some() {
             event = redact_page_event_board_metadata(event);
@@ -502,9 +537,33 @@ impl ServeContext<'_> {
             page,
             execution_revision,
             element_demand,
+            on_load_prerun,
             served_variant,
             canonical_route,
         })
+    }
+
+    /// The prerun the page requests right before its onLoad, answered from the contract this
+    /// bootstrap already resolved. `None` when the page has no onLoad or the route would refuse.
+    fn on_load_prerun(
+        &self,
+        event: &Event,
+        contract: &ResolvedPageContract,
+    ) -> Option<PrerunEventResponse> {
+        if !self.can_prerun_page
+            || contract.page_execution.special_events.load.is_none()
+            || crate::routes::app::events::ensure_source_execution_allowed(event).is_err()
+        {
+            return None;
+        }
+        Some(page_prerun_response(
+            event.board_id.clone(),
+            contract.prerun.clone(),
+            event.execution_mode,
+            self.can_use_direct_board,
+            contract.page.id.clone(),
+            contract.manifest_revision.clone(),
+        ))
     }
 }
 
@@ -576,6 +635,7 @@ mod tests {
             route: route.map(ToString::to_string),
             event_id: event_id.map(ToString::to_string),
             variant: None,
+            warm: None,
         }
     }
 
@@ -645,6 +705,7 @@ mod tests {
             Some("per1_test".to_string()),
             None,
             None,
+            None,
             Some("/".to_string()),
             false,
             &headers,
@@ -669,6 +730,7 @@ mod tests {
             Some("per1_test".to_string()),
             None,
             None,
+            None,
             Some("/".to_string()),
             false,
             &conditional,
@@ -681,6 +743,7 @@ mod tests {
             Some(page),
             None,
             Some("per1_test".to_string()),
+            None,
             None,
             None,
             Some("/".to_string()),
@@ -758,6 +821,7 @@ mod tests {
                     selectors: vec!["page/title".to_string(), "type:switch".to_string()],
                     dynamic: true,
                 }),
+                None,
                 None,
                 Some("/".to_string()),
                 false,
@@ -872,6 +936,7 @@ mod tests {
             execution_revision: None,
             element_demand: None,
             served_variant: None,
+            on_load_prerun: None,
         };
         let value = flow_like_types::json::to_value(response).unwrap();
         assert!(value["event"].is_object());

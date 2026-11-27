@@ -9,7 +9,13 @@ import type { IBot } from "../../../state/backend-state/bot-state";
 import { Button } from "../../ui/button";
 import { Label } from "../../ui/label";
 import { Switch } from "../../ui/switch";
-import { OrgChartProvider, useOrgChart } from "./org-chart-context";
+import { AppFilterPicker } from "./app-card";
+import type { AppFilter } from "./org-chart-apps";
+import {
+	type AppDestination,
+	OrgChartProvider,
+	useOrgChart,
+} from "./org-chart-context";
 import { OrgChartDialogs } from "./org-chart-dialogs";
 import { DockedInspector, SheetInspector } from "./org-chart-inspector";
 import { OrgOutline } from "./org-chart-outline";
@@ -27,6 +33,14 @@ export interface OrgChartViewProps {
 	bots: IBot[] | undefined;
 	onOpenChat: (botId: string) => void;
 	onOpenConversation: (conversationId: string) => void;
+	onOpenApp: (appId: string, where: AppDestination) => void;
+}
+
+interface AppToggles {
+	showApps: boolean;
+	onShowApps: (value: boolean) => void;
+	appFilter: AppFilter;
+	onAppFilter: (value: AppFilter) => void;
 }
 
 const NARROW_PX = 760;
@@ -110,12 +124,14 @@ function Toolbar({
 	onShowAsk,
 	showIo,
 	onShowIo,
+	apps,
 	controls,
 }: Readonly<{
 	showAsk: boolean;
 	onShowAsk: (value: boolean) => void;
 	showIo: boolean;
 	onShowIo: (value: boolean) => void;
+	apps: AppToggles;
 	controls: ZoomControlsProps | null;
 }>) {
 	const { t } = useTranslation("bots");
@@ -131,6 +147,23 @@ function Toolbar({
 					{t("teams.org.io.toggle", "Ins & outs")}
 				</Label>
 			</div>
+			<div className="flex items-center gap-2">
+				<Switch
+					id="org-apps"
+					checked={apps.showApps}
+					onCheckedChange={apps.onShowApps}
+				/>
+				<Label htmlFor="org-apps" className="text-xs">
+					{t("teams.org.apps.toggle", "Apps")}
+				</Label>
+			</div>
+			{apps.showApps && (
+				<AppFilterPicker
+					value={apps.appFilter}
+					onChange={apps.onAppFilter}
+					look="segmented"
+				/>
+			)}
 			<div className="flex items-center gap-2">
 				<Switch
 					id="org-who-can-ask"
@@ -238,6 +271,7 @@ function OrgChartBody({
 	onShowAsk,
 	showIo,
 	onShowIo,
+	apps,
 }: Readonly<{
 	available: boolean;
 	hasTeams: boolean;
@@ -245,6 +279,7 @@ function OrgChartBody({
 	onShowAsk: (value: boolean) => void;
 	showIo: boolean;
 	onShowIo: (value: boolean) => void;
+	apps: AppToggles;
 }>) {
 	const { ref, width } = useWidth();
 	const { dragBotId } = useOrgChart();
@@ -261,6 +296,7 @@ function OrgChartBody({
 						onShowAsk={onShowAsk}
 						showIo={showIo}
 						onShowIo={onShowIo}
+						apps={apps}
 						controls={narrow ? null : controls}
 					/>
 					<div className="flex min-h-0 flex-1">
@@ -290,10 +326,13 @@ export function OrgChartView({
 	bots,
 	onOpenChat,
 	onOpenConversation,
+	onOpenApp,
 }: Readonly<OrgChartViewProps>) {
 	const { org, available } = useOrg();
 	const [showAsk, setShowAsk] = useState(false);
 	const [showIo, setShowIo] = useState(true);
+	const [showApps, setShowApps] = useState(true);
+	const [appFilter, setAppFilter] = useState<AppFilter>("all");
 	return (
 		<OrgChartProvider
 			org={org}
@@ -301,8 +340,11 @@ export function OrgChartView({
 			bots={bots ?? []}
 			showAsk={showAsk}
 			showIo={showIo}
+			showApps={showApps}
+			appFilter={appFilter}
 			onOpenChat={onOpenChat}
 			onOpenConversation={onOpenConversation}
+			onOpenApp={onOpenApp}
 		>
 			<OrgChartBody
 				available={available}
@@ -311,6 +353,12 @@ export function OrgChartView({
 				onShowAsk={setShowAsk}
 				showIo={showIo}
 				onShowIo={setShowIo}
+				apps={{
+					showApps,
+					onShowApps: setShowApps,
+					appFilter,
+					onAppFilter: setAppFilter,
+				}}
 			/>
 		</OrgChartProvider>
 	);

@@ -380,6 +380,7 @@ pub(crate) async fn sender_names<C: ConnectionTrait>(
             names.insert(id, name);
         }
     }
+    names.extend(crate::bot_channels::outside_names(db, ids).await?);
     Ok(names)
 }
 

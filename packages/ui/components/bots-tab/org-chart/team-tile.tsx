@@ -11,6 +11,7 @@ import {
 	UsersIcon,
 	WrenchIcon,
 } from "lucide-react";
+import { useState } from "react";
 import { cn } from "../../../lib/utils";
 import { type TeamIconKey, type TeamTone, teamTile } from "./org-chart-model";
 
@@ -33,14 +34,36 @@ const ICONS: Record<TeamIconKey, LucideIcon> = {
 	wrench: WrenchIcon,
 };
 
-/** A team's colored square with its icon, the same one wherever the team shows. */
+/**
+ * A team's square, the same wherever the team shows: its room's picture, or a colored square
+ * with an icon while the room has none or the picture fails to load.
+ */
 export function TeamTile({
 	teamId,
 	name,
+	imageUrl,
 	size = 28,
-}: Readonly<{ teamId: string; name?: string; size?: number }>) {
+}: Readonly<{
+	teamId: string;
+	name?: string;
+	imageUrl?: string | null;
+	size?: number;
+}>) {
+	const [failedUrl, setFailedUrl] = useState<string | null>(null);
 	const { tone, icon } = teamTile(teamId, name);
 	const Icon = ICONS[icon];
+	if (imageUrl && imageUrl !== failedUrl)
+		return (
+			<img
+				src={imageUrl}
+				alt=""
+				aria-hidden
+				draggable={false}
+				onError={() => setFailedUrl(imageUrl)}
+				className="shrink-0 rounded-lg object-cover"
+				style={{ width: size, height: size }}
+			/>
+		);
 	return (
 		<span
 			aria-hidden

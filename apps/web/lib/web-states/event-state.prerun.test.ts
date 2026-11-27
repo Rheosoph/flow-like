@@ -54,6 +54,7 @@ vi.mock("../oauth-service", () => ({
 
 import type { WebBackendRef } from "./api-utils";
 import { WebEventState } from "./event-state";
+import { pagePrerunScope, seedPagePrerun } from "./page-prerun-seed";
 
 const LOAD: PageTrigger = {
 	kind: "special",
@@ -224,6 +225,30 @@ describe("event dispatch Hub configuration", () => {
 });
 
 describe("web Page prerun handoff", () => {
+	test("the onLoad prerun a bootstrap carried answers once, without a request, and ages from the bootstrap", async () => {
+		const backend = backendRef() as unknown as WebBackendRef;
+		const state = new WebEventState(backend);
+		const seeded = prerun("bootstrap-revision");
+		const scope = pagePrerunScope(backend, "app-1", "event-1", undefined, LOAD);
+		seedPagePrerun(scope, seeded, Date.now() - 10_000);
+
+		const prepared = await state.prerunEvent(
+			"app-1",
+			"event-1",
+			undefined,
+			LOAD,
+		);
+		expect(prepared).toBe(seeded);
+		expect(mocks.apiPost).not.toHaveBeenCalled();
+
+		now += 6_000;
+		await execute(state, prepared);
+		expect(mocks.apiPost).toHaveBeenCalledTimes(1);
+		expect(invocationBody()).toMatchObject({
+			page_trigger: { manifest_revision: "current-revision" },
+		});
+	});
+
 	test("reuses its dispatch's response once while preserving revision, OAuth and invocation credentials", async () => {
 		const backend = backendRef();
 		const state = new WebEventState(backend as unknown as WebBackendRef);

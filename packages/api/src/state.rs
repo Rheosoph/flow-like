@@ -353,6 +353,32 @@ impl CachedPageContractFacts {
     }
 }
 
+/// Bytes of decoded draft pages one instance keeps, estimated from their stored size.
+const DRAFT_PAGE_CACHE_WEIGHT: u64 = 64 * 1024 * 1024;
+/// Decoded page bytes per stored (compressed) byte, for the cache weight.
+const DRAFT_PAGE_DECODED_FACTOR: u64 = 10;
+
+/// A draft Page as storage served it under `e_tag`. Draft pages are saved independently of the
+/// board's ETag, so every use confirms the entry with one conditional read.
+pub struct CachedDraftPage {
+    pub e_tag: String,
+    pub page: flow_like::a2ui::Page,
+    weight: u32,
+}
+
+impl CachedDraftPage {
+    pub fn new(e_tag: String, page: flow_like::a2ui::Page, stored_bytes: u64) -> Self {
+        let weight = stored_bytes
+            .saturating_mul(DRAFT_PAGE_DECODED_FACTOR)
+            .min(u64::from(u32::MAX)) as u32;
+        Self {
+            e_tag,
+            page,
+            weight,
+        }
+    }
+}
+
 /// Run a board load to completion even when the request awaiting it is cancelled.
 ///
 /// Hydrating a large board can outlast a request's deadline. Dropping the load with the request
@@ -816,6 +842,9 @@ pub struct State {
     /// Page contract facts keyed like `prerun_manifest_cache` (same `{app_id}:{board_id}:`
     /// prefix), content-addressed by draft ETag or immutable version.
     pub page_contract_facts: moka::sync::Cache<String, Arc<CachedPageContractFacts>>,
+    /// Draft pages keyed `{app_id}:{board_id}:{page_id}`, each confirmed by its storage ETag
+    /// before use.
+    pub draft_pages: moka::sync::Cache<String, Arc<CachedDraftPage>>,
     pub response_cache: moka::sync::Cache<String, Value>,
     pub(crate) execution_usage_cache: crate::routes::usage::cache::UsageCache,
     /// WASM package permission cache: "wasm:{user_id}:{package_id}" -> the
@@ -1694,6 +1723,11 @@ impl State {
                 .max_capacity(4_096)
                 .time_to_idle(Duration::from_secs(24 * 60 * 60))
                 .support_invalidation_closures()
+                .build(),
+            draft_pages: moka::sync::Cache::builder()
+                .weigher(|_key: &String, entry: &Arc<CachedDraftPage>| entry.weight)
+                .max_capacity(DRAFT_PAGE_CACHE_WEIGHT)
+                .time_to_idle(Duration::from_secs(30 * 60))
                 .build(),
             board_sync_cache: moka::sync::Cache::builder()
                 .max_capacity(BOARD_CACHE_MAX_ENTRIES)

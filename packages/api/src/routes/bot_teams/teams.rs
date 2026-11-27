@@ -8,12 +8,13 @@ use super::{
     effects::{Effects, settle},
     lock_org_scope, lock_scope,
     model::{CreateTeamRequest, PatchTeamRequest},
+    org_apps::sign_org_apps,
     room::sync_room,
     threads::{release_team_threads, sync_team_threads},
-    view::{org_view, team_view},
+    view::{org_view, sign_team_images, team_view},
 };
 use crate::{
-    entity::{bot, bot_team, bot_team_bot, bot_team_person},
+    entity::{bot, bot_team, bot_team_app, bot_team_bot, bot_team_person},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::inbox::{now_millis, team_room},
@@ -156,7 +157,7 @@ pub async fn create_team(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
 #[utoipa::path(
@@ -175,7 +176,10 @@ pub async fn list_org(
     Extension(user): Extension<AppUser>,
 ) -> Result<Json<OrgView>, ApiError> {
     let sub = user.sub()?;
-    Ok(Json(org_view(&state.db, &sub).await?))
+    let mut view = org_view(&state.db, &sub).await?;
+    sign_team_images(&state, &mut view.teams).await?;
+    sign_org_apps(&state, &mut view.apps).await;
+    Ok(Json(view))
 }
 
 async fn set_parent<C: ConnectionTrait>(
@@ -399,7 +403,7 @@ pub async fn patch_team(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
 /// Deletes the team's rows; its child teams move up to its parent.
@@ -428,6 +432,10 @@ pub(crate) async fn remove_team_rows<C: ConnectionTrait>(
         .await?;
     bot_team_bot::Entity::delete_many()
         .filter(bot_team_bot::Column::TeamId.eq(&team.id))
+        .exec(db)
+        .await?;
+    bot_team_app::Entity::delete_many()
+        .filter(bot_team_app::Column::TeamId.eq(&team.id))
         .exec(db)
         .await?;
     bot_team_person::Entity::delete_many()

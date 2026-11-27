@@ -24,3 +24,16 @@ model BotChannelLink {
   @@index([ownerId])
   @@index([conversationId])
 }
+
+/// The name an outside person last wrote to a bot under, by the requester id their turns carry
+/// (`ext:<provider>:<hash>`), so prompts and approval cards name them.
+model BotChannelSender {
+  id        String
+  botId     String
+  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  name      String
+  updatedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([botId, id])
+  @@index([id])
+}

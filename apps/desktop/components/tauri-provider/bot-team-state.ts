@@ -4,6 +4,7 @@ import type {
 	IBotTeamState,
 	ICreateTeamRequest,
 	IOrgView,
+	IPinnableApp,
 	ITeam,
 	ITeamBriefing,
 	ITeamThread,
@@ -32,6 +33,10 @@ function personPath(teamId: string, userId: string): string {
 
 function botPath(teamId: string, botId: string): string {
 	return `${teamPath(teamId)}/bots/${encodeURIComponent(botId)}`;
+}
+
+function appPinPath(teamId: string, appId: string): string {
+	return `${teamPath(teamId)}/apps/${encodeURIComponent(appId)}`;
 }
 
 function chatPath(botId: string, userId: string): string {
@@ -87,6 +92,7 @@ export class BotTeamState implements IBotTeamState {
 				reach: [],
 				chats: [],
 				classifications: [],
+				apps: [],
 			};
 		}
 		const response = await get<Partial<IOrgView>>(
@@ -102,6 +108,7 @@ export class BotTeamState implements IBotTeamState {
 			reach: list(response?.reach),
 			chats: list(response?.chats),
 			classifications: list(response?.classifications),
+			apps: list(response?.apps),
 		};
 	}
 
@@ -358,5 +365,56 @@ export class BotTeamState implements IBotTeamState {
 			{ classification },
 			auth,
 		);
+	}
+
+	async listPinnableApps(teamId: string): Promise<IPinnableApp[]> {
+		const { profile, auth } = this.session();
+		const response = await get<IPinnableApp[]>(
+			profile,
+			`${teamPath(teamId)}/apps/pinnable`,
+			auth,
+		);
+		return list(response);
+	}
+
+	async pinApp(teamId: string, appId: string): Promise<ITeam> {
+		const { profile, auth } = this.session();
+		return expectTeam(
+			await post<ITeam>(
+				profile,
+				`${teamPath(teamId)}/apps`,
+				{ app_id: appId },
+				auth,
+			),
+			`pin app ${appId} to team ${teamId}`,
+		);
+	}
+
+	async approveAppPin(teamId: string, appId: string): Promise<ITeam> {
+		const { profile, auth } = this.session();
+		return expectTeam(
+			await post<ITeam>(
+				profile,
+				`${appPinPath(teamId, appId)}/approve`,
+				undefined,
+				auth,
+			),
+			`approve app ${appId} for team ${teamId}`,
+		);
+	}
+
+	async declineAppPin(teamId: string, appId: string): Promise<void> {
+		const { profile, auth } = this.session();
+		await post(
+			profile,
+			`${appPinPath(teamId, appId)}/decline`,
+			undefined,
+			auth,
+		);
+	}
+
+	async unpinApp(teamId: string, appId: string): Promise<void> {
+		const { profile, auth } = this.session();
+		await del(profile, appPinPath(teamId, appId), undefined, auth);
 	}
 }

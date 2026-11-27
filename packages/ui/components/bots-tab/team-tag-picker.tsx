@@ -51,7 +51,12 @@ function TeamTagMenu({
 						option.lockedLevel && "cursor-not-allowed opacity-60",
 					)}
 				>
-					<TeamTile teamId={option.id} name={option.name} size={22} />
+					<TeamTile
+						teamId={option.id}
+						name={option.name}
+						imageUrl={option.imageUrl}
+						size={22}
+					/>
 					<span className="min-w-0 flex-1 truncate">{option.name}</span>
 					<span
 						className={cn(

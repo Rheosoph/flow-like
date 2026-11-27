@@ -7,7 +7,9 @@ import type {
 	IPage,
 	PageListItem,
 } from "@flow-like/flow-like-ui/state/backend-state/page-state";
+import { executorWarmCount } from "../executor-warm";
 import { type WebBackendRef, apiDelete, apiGet, apiPut } from "./api-utils";
+import { pagePrerunScope, seedPagePrerun } from "./page-prerun-seed";
 
 export class WebPageState implements IPageState {
 	constructor(private readonly backend: WebBackendRef) {}
@@ -101,11 +103,24 @@ export class WebPageState implements IPageState {
 		const params = new URLSearchParams();
 		if (route !== undefined) params.set("route", route);
 		if (eventId !== undefined) params.set("eventId", eventId);
+		const warm = executorWarmCount();
+		if (warm !== undefined) params.set("warm", String(warm));
 		const query = params.size > 0 ? `?${params.toString()}` : "";
-		return apiGet<IPageBootstrap>(
+		const bootstrap = await apiGet<IPageBootstrap>(
 			`apps/${appId}/pages/bootstrap${query}`,
 			this.backend.auth,
 		);
+		if (bootstrap?.onLoadPrerun && bootstrap.executionRevision) {
+			seedPagePrerun(
+				pagePrerunScope(this.backend, appId, bootstrap.event.id, undefined, {
+					kind: "special",
+					specialEvent: "load",
+					manifestRevision: bootstrap.executionRevision,
+				}),
+				bootstrap.onLoadPrerun,
+			);
+		}
+		return bootstrap;
 	}
 
 	async createPage(

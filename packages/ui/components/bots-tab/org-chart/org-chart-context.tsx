@@ -19,6 +19,7 @@ import type {
 	IOrgView,
 	ITeam,
 } from "../../../state/backend-state/bot-team-state";
+import { type AppFilter, appLinks } from "./org-chart-apps";
 import {
 	type Highlight,
 	dropAction,
@@ -29,12 +30,14 @@ import {
 export type Selection =
 	| { kind: "bot"; id: string }
 	| { kind: "team"; id: string }
+	| { kind: "app"; id: string }
 	| null;
 
 export type DialogState =
 	| { kind: "newTeam"; parentId: string | null }
 	| { kind: "addPeople"; teamId: string }
 	| { kind: "addBot"; teamId: string }
+	| { kind: "pinApp"; teamId: string }
 	| null;
 
 export interface OrgChartContextValue {
@@ -50,6 +53,9 @@ export interface OrgChartContextValue {
 	showAsk: boolean;
 	/** Mail addresses, webhooks and sent mail beside the teams. */
 	showIo: boolean;
+	/** Each team's apps under it. */
+	showApps: boolean;
+	appFilter: AppFilter;
 	dragBotId: string | null;
 	setDragBotId: (id: string | null) => void;
 	dialog: DialogState;
@@ -58,7 +64,11 @@ export interface OrgChartContextValue {
 	placeBot: (team: ITeam, bot: IOrgBot) => void;
 	onOpenChat: (botId: string) => void;
 	onOpenConversation: (conversationId: string) => void;
+	onOpenApp: (appId: string, where: AppDestination) => void;
 }
+
+/** `app` opens the app; `store` its store page, where people join or ask to. */
+export type AppDestination = "app" | "store";
 
 const OrgChartContext = createContext<OrgChartContextValue | null>(null);
 
@@ -74,8 +84,11 @@ export function OrgChartProvider({
 	bots,
 	showAsk,
 	showIo,
+	showApps,
+	appFilter,
 	onOpenChat,
 	onOpenConversation,
+	onOpenApp,
 	children,
 }: Readonly<{
 	org: IOrgView;
@@ -83,8 +96,11 @@ export function OrgChartProvider({
 	bots: readonly IBot[];
 	showAsk: boolean;
 	showIo: boolean;
+	showApps: boolean;
+	appFilter: AppFilter;
 	onOpenChat: (botId: string) => void;
 	onOpenConversation: (conversationId: string) => void;
+	onOpenApp: (appId: string, where: AppDestination) => void;
 	children: ReactNode;
 }>) {
 	const { t } = useTranslation("bots");
@@ -114,9 +130,13 @@ export function OrgChartProvider({
 		[labels, t],
 	);
 	const selectedBotId = selection?.kind === "bot" ? selection.id : null;
+	const selectedAppId = selection?.kind === "app" ? selection.id : null;
 	const highlight = useMemo(
-		() => highlightFor(org, selectedBotId),
-		[org, selectedBotId],
+		() =>
+			selectedAppId
+				? { ...appLinks(org, selectedAppId), appIds: new Set([selectedAppId]) }
+				: highlightFor(org, selectedBotId),
+		[org, selectedBotId, selectedAppId],
 	);
 
 	const placeBot = useCallback(
@@ -159,6 +179,8 @@ export function OrgChartProvider({
 			highlight,
 			showAsk,
 			showIo,
+			showApps,
+			appFilter,
 			dragBotId,
 			setDragBotId,
 			dialog,
@@ -167,6 +189,7 @@ export function OrgChartProvider({
 			placeBot,
 			onOpenChat,
 			onOpenConversation,
+			onOpenApp,
 		}),
 		[
 			org,
@@ -179,12 +202,15 @@ export function OrgChartProvider({
 			highlight,
 			showAsk,
 			showIo,
+			showApps,
+			appFilter,
 			dragBotId,
 			dialog,
 			actions,
 			placeBot,
 			onOpenChat,
 			onOpenConversation,
+			onOpenApp,
 		],
 	);
 

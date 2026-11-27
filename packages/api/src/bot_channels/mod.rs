@@ -8,13 +8,15 @@
 //! waits for the turn.
 
 pub(crate) mod routes;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use routes::routes;
 
 use crate::{
     bot_host,
     bot_notify::{Reply, bot_limit_guard},
-    entity::{bot, bot_channel_link, bot_turn},
+    entity::{bot, bot_channel_link, bot_channel_sender, bot_turn},
     error::ApiError,
     routes::inbox::{
         channel_rooms::{ChannelChat, open_channel_room_in, post_channel_trigger_in},
@@ -26,13 +28,15 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Duration, FixedOffset};
 use flow_like_types::{
     bot::BotSystemKind,
-    bot_turn::{STORED_QUEUED, turn_id},
+    bot_turn::turn_id,
     inbox::{TRIGGER_TEXT_MAX_CHARS, TRIGGER_TITLE_MAX_CHARS, TriggerBody, TriggerSource},
 };
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter, sea_query::Expr,
+    ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, sea_query::OnConflict,
 };
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 /// Trigger message ids of chat messages start with this.
 pub(crate) const CHANNEL_MESSAGE_PREFIX: &str = "ch-";
@@ -151,8 +155,6 @@ pub(crate) struct Posted {
 /// A bot's reply that goes back to an outside chat.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ChannelReply<'a> {
-    pub turn_id: &'a str,
-    pub bot_id: &'a str,
     pub trigger_message_id: &'a str,
     pub message_id: &'a str,
     pub text: &'a str,
@@ -175,7 +177,12 @@ pub(crate) fn link_id(bot_id: &str, provider: ChannelProvider, chat_key: &str) -
     format!("chl_{}", digest(&[bot_id, provider.stored(), chat_key]))
 }
 
-pub(crate) fn trigger_message_id(bot_id: &str, provider: ChannelProvider, chat_key: &str, message_id: &str) -> String {
+pub(crate) fn trigger_message_id(
+    bot_id: &str,
+    provider: ChannelProvider,
+    chat_key: &str,
+    message_id: &str,
+) -> String {
     format!(
         "{CHANNEL_MESSAGE_PREFIX}{}",
         digest(&[bot_id, provider.stored(), chat_key, message_id])
@@ -237,11 +244,9 @@ pub(crate) fn validate(message: &OutsideMessage) -> Result<(), ApiError> {
             "A chat message carries at most {MAX_ATTACHMENTS} attachments"
         )));
     }
-    if let Some(bad) = message
-        .attachments
-        .iter()
-        .find(|attachment| !attachment.url.starts_with("https://") || attachment.url.chars().count() > 2_048)
-    {
+    if let Some(bad) = message.attachments.iter().find(|attachment| {
+        !attachment.url.starts_with("https://") || attachment.url.chars().count() > 2_048
+    }) {
         return Err(ApiError::bad_request(format!(
             "Attachment '{}' needs an https link of at most 2048 characters",
             clip(&bad.name, 80)
@@ -258,7 +263,7 @@ pub(crate) fn validate(message: &OutsideMessage) -> Result<(), ApiError> {
 fn sender_name(message: &OutsideMessage) -> String {
     let name = clip(&message.sender.name, MAX_SENDER_NAME_CHARS);
     if name.is_empty() {
-        format!("Someone on {}", message.provider.label())
+        "Someone".to_string()
     } else {
         name
     }
@@ -278,7 +283,10 @@ fn chat_title(message: &OutsideMessage) -> String {
 pub(crate) fn trigger_body(bot_id: &str, link_id: &str, message: &OutsideMessage) -> TriggerBody {
     let sender = sender_name(message);
     let provider = message.provider.label();
-    let mut text = format!("{sender} ({provider}): {}", clip(&message.text, MAX_MESSAGE_CHARS));
+    let mut text = format!(
+        "{sender} ({provider}): {}",
+        clip(&message.text, MAX_MESSAGE_CHARS)
+    );
     for attachment in &message.attachments {
         text.push_str(&format!(
             "\n[attachment: {}]({})",
@@ -341,7 +349,8 @@ async fn chat_turns<C: ConnectionTrait>(
 }
 
 const PERSON_LIMIT_NOTICE: &str = "I can only answer so many messages a day from one person, and that limit is used up. Please try again tomorrow.";
-const CHAT_LIMIT_NOTICE: &str = "This chat has sent me a lot of messages in the last hour. Please try again in a little while.";
+const CHAT_LIMIT_NOTICE: &str =
+    "This chat has sent me a lot of messages in the last hour. Please try again in a little while.";
 const NOT_QUEUED_NOTICE: &str = "I can't take this message right now. Please try again later.";
 
 /// Writes the chat message into the chat's guest room, opening it on first use, and queues the
@@ -360,9 +369,14 @@ pub(crate) async fn post_outside_message(
     let turn = turn_id(&bot.id, &trigger);
     let requester = outside_requester(provider, &message.sender.id);
     let _serial = bot_limit_guard("channel", &bot.id).await;
-    let existing = bot_channel_link::Entity::find_by_id(&link).one(&state.db).await?;
+    let existing = bot_channel_link::Entity::find_by_id(&link)
+        .one(&state.db)
+        .await?;
     if let Some(existing) = &existing
-        && bot_turn::Entity::find_by_id(&turn).one(&state.db).await?.is_some()
+        && bot_turn::Entity::find_by_id(&turn)
+            .one(&state.db)
+            .await?
+            .is_some()
     {
         return Ok(Posted {
             link_id: link,
@@ -378,16 +392,23 @@ pub(crate) async fn post_outside_message(
     {
         Some(PERSON_LIMIT_NOTICE)
     } else if let Some(existing) = &existing
-        && chat_turns(&state.db, &bot.id, &existing.conversation_id, now).await? >= LINK_HOURLY_TURNS
+        && chat_turns(&state.db, &bot.id, &existing.conversation_id, now).await?
+            >= LINK_HOURLY_TURNS
     {
         Some(CHAT_LIMIT_NOTICE)
     } else {
         None
     };
     if let Some(notice) = limited {
-        tracing::info!(bot_id = bot.id, link_id = link, "A chat message was refused for a channel limit");
+        tracing::info!(
+            bot_id = bot.id,
+            link_id = link,
+            "A chat message was refused for a channel limit"
+        );
         return Ok(Posted {
-            conversation_id: existing.map(|link| link.conversation_id).unwrap_or_default(),
+            conversation_id: existing
+                .map(|link| link.conversation_id)
+                .unwrap_or_default(),
             link_id: link,
             trigger_message_id: trigger,
             turn_id: None,
@@ -396,6 +417,7 @@ pub(crate) async fn post_outside_message(
         });
     }
     let body = trigger_body(&bot.id, &link, message);
+    let sender = sender_name(message);
     let room_title = format!("{} · {}", provider.room_prefix(), chat_title(message));
     let chat = chat_title(message);
     let meta = message.meta.to_string();
@@ -412,19 +434,27 @@ pub(crate) async fn post_outside_message(
                 chat_title: chat.clone(),
                 meta: meta.clone(),
             };
-            let (trigger, turn, requester, body) =
-                (trigger.clone(), turn.clone(), requester.clone(), body.clone());
+            let (trigger, requester, body, name) = (
+                trigger.clone(),
+                requester.clone(),
+                body.clone(),
+                sender.clone(),
+            );
             Box::pin(async move {
                 let row = open_channel_room_in(txn, &chat, now).await?;
-                let sent = post_channel_trigger_in(txn, &row, &trigger, &body, now).await?;
-                hand_to_requester_in(txn, &turn, &requester).await?;
+                remember_sender_in(txn, &row.bot_id, &requester, &name, now).await?;
+                let sent =
+                    post_channel_trigger_in(txn, &row, &trigger, &body, &requester, now).await?;
                 Ok::<_, ApiError>((row, sent))
             })
         })
         .await?;
     wake(state, sent.wake).await;
     bot_host::dispatch(state, &sent.bots).await;
-    let queued = bot_turn::Entity::find_by_id(&turn).one(&state.db).await?.is_some();
+    let queued = bot_turn::Entity::find_by_id(&turn)
+        .one(&state.db)
+        .await?
+        .is_some();
     Ok(Posted {
         link_id: row.id,
         conversation_id: row.conversation_id,
@@ -439,22 +469,75 @@ pub(crate) async fn post_outside_message(
     })
 }
 
-/// The turn a chat message queued answers the outside person who wrote it. Its trigger comes
-/// from the owner, the only person in the room, so the ledger queued it with the owner as
-/// requester; this moves it to the outside person before any host can claim it.
-async fn hand_to_requester_in<C: ConnectionTrait>(
+async fn remember_sender_in<C: ConnectionTrait>(
     txn: &C,
-    turn: &str,
+    bot_id: &str,
     requester: &str,
+    name: &str,
+    now: DateTime<FixedOffset>,
 ) -> Result<(), ApiError> {
-    bot_turn::Entity::update_many()
-        .col_expr(bot_turn::Column::RequesterId, Expr::value(requester))
-        .col_expr(bot_turn::Column::OriginId, Expr::value(requester))
-        .filter(bot_turn::Column::Id.eq(turn))
-        .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
-        .exec(txn)
-        .await?;
+    bot_channel_sender::Entity::insert(bot_channel_sender::ActiveModel {
+        bot_id: Set(bot_id.to_string()),
+        id: Set(requester.to_string()),
+        name: Set(name.to_string()),
+        updated_at: Set(now),
+    })
+    .on_conflict(
+        OnConflict::columns([
+            bot_channel_sender::Column::BotId,
+            bot_channel_sender::Column::Id,
+        ])
+        .update_columns([
+            bot_channel_sender::Column::Name,
+            bot_channel_sender::Column::UpdatedAt,
+        ])
+        .to_owned(),
+    )
+    .exec_without_returning(txn)
+    .await?;
     Ok(())
+}
+
+/// How prompts and approval cards name outside people: the name they last wrote under, with
+/// where they wrote, e.g. "Ann (Microsoft Teams)". Ids that aren't outside people are skipped.
+pub(crate) async fn outside_names<C: ConnectionTrait>(
+    db: &C,
+    ids: &[&str],
+) -> Result<HashMap<String, String>, DbErr> {
+    let outside: Vec<&str> = ids
+        .iter()
+        .copied()
+        .filter(|id| id.starts_with(OUTSIDE_REQUESTER_PREFIX))
+        .collect();
+    if outside.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(String, String)> = bot_channel_sender::Entity::find()
+        .select_only()
+        .columns([
+            bot_channel_sender::Column::Id,
+            bot_channel_sender::Column::Name,
+        ])
+        .filter(bot_channel_sender::Column::Id.is_in(outside))
+        .order_by_asc(bot_channel_sender::Column::UpdatedAt)
+        .into_tuple()
+        .all(db)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name)| {
+            let provider = id
+                .strip_prefix(OUTSIDE_REQUESTER_PREFIX)
+                .and_then(|rest| rest.split(':').next())
+                .and_then(ChannelProvider::parse)
+                .map(ChannelProvider::label);
+            let label = match provider {
+                Some(provider) => format!("{name} ({provider})"),
+                None => name,
+            };
+            (id, label)
+        })
+        .collect())
 }
 
 /// The link whose room holds `conversation_id`.
@@ -482,7 +565,10 @@ pub(crate) async fn after_reply(state: &AppState, reply: &Reply<'_>) -> bool {
 }
 
 async fn deliver(state: &AppState, reply: &Reply<'_>) -> Result<bool, ApiError> {
-    let Some(turn) = bot_turn::Entity::find_by_id(reply.turn_id).one(&state.db).await? else {
+    let Some(turn) = bot_turn::Entity::find_by_id(reply.turn_id)
+        .one(&state.db)
+        .await?
+    else {
         return Ok(false);
     };
     if turn.bot_id != reply.bot_id {
@@ -495,8 +581,6 @@ async fn deliver(state: &AppState, reply: &Reply<'_>) -> Result<bool, ApiError> 
         return Ok(false);
     }
     let channel_reply = ChannelReply {
-        turn_id: reply.turn_id,
-        bot_id: reply.bot_id,
         trigger_message_id: &turn.trigger_message_id,
         message_id: reply.message_id,
         text: reply.text,

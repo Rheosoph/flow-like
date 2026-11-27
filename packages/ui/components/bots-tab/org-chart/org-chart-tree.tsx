@@ -1,10 +1,15 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { PlusIcon } from "lucide-react";
 import { Fragment, useState } from "react";
-import type { OrgTeamNode } from "../../../lib/bot-teams/org-model";
+import {
+	type OrgTeamNode,
+	isTeamAdmin,
+} from "../../../lib/bot-teams/org-model";
 import { cn } from "../../../lib/utils";
 import type { ITeam } from "../../../state/backend-state/bot-team-state";
+import { AppDeck } from "./app-deck";
 import { useOrgChart } from "./org-chart-context";
 import { teamHasPorts } from "./org-chart-io";
 import {
@@ -15,8 +20,15 @@ import {
 } from "./org-chart-model";
 import { OrgBotAvatar, TeamTile } from "./org-chart-parts";
 import { InputRail, OutputRail, RailHeads } from "./org-chart-ports";
-import { AddBotRow, BotRow, TeamRows, teamEntries } from "./org-chart-rows";
+import {
+	AddBotRow,
+	BotRow,
+	NewTeamRow,
+	TeamRows,
+	teamEntries,
+} from "./org-chart-rows";
 import { TeamReachLine } from "./reach-parts";
+import { TeamPeopleStack } from "./team-people";
 
 export function TeamHeader({ team }: Readonly<{ team: ITeam }>) {
 	const { t } = useTranslation("bots");
@@ -24,35 +36,38 @@ export function TeamHeader({ team }: Readonly<{ team: ITeam }>) {
 	const selected = selection?.kind === "team" && selection.id === team.id;
 	const waiting = isWaitingForConsent(team);
 	return (
-		<button
-			type="button"
-			onClick={() => select({ kind: "team", id: team.id })}
-			aria-pressed={selected}
-			className={cn(
-				"flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
-				selected && "bg-primary/10 ring-2 ring-primary ring-inset",
-				!selected && highlight.teamIds.has(team.id) && "bg-primary/10",
-			)}
-		>
-			<TeamTile teamId={team.id} name={team.name} />
-			<span className="min-w-0 flex-1 truncate text-sm font-semibold">
-				{team.name}
-			</span>
-			{team.direct_asks && (
-				<span
-					className={cn(
-						"shrink-0 rounded-full border px-1.5 text-[10px] leading-4 font-medium",
-						waiting
-							? "border-warning-line bg-warning-bg text-warning"
-							: "border-good-line bg-good-bg text-good",
-					)}
-				>
-					{waiting
-						? t("teams.org.waiting", "Waiting")
-						: t("teams.org.direct", "Direct")}
+		<div className="flex w-full items-center gap-1">
+			<button
+				type="button"
+				onClick={() => select({ kind: "team", id: team.id })}
+				aria-pressed={selected}
+				className={cn(
+					"flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+					selected && "bg-primary/10 ring-2 ring-primary ring-inset",
+					!selected && highlight.teamIds.has(team.id) && "bg-primary/10",
+				)}
+			>
+				<TeamTile teamId={team.id} name={team.name} imageUrl={team.image_url} />
+				<span className="min-w-0 flex-1 truncate text-sm font-semibold">
+					{team.name}
 				</span>
-			)}
-		</button>
+				{team.direct_asks && (
+					<span
+						className={cn(
+							"shrink-0 rounded-full border px-1.5 text-[10px] leading-4 font-medium",
+							waiting
+								? "border-warning-line bg-warning-bg text-warning"
+								: "border-good-line bg-good-bg text-good",
+						)}
+					>
+						{waiting
+							? t("teams.org.waiting", "Waiting")
+							: t("teams.org.direct", "Direct")}
+					</span>
+				)}
+			</button>
+			<TeamPeopleStack team={team} />
+		</div>
 	);
 }
 
@@ -82,6 +97,34 @@ export function useTeamDrop(team: ITeam) {
 	};
 }
 
+/**
+ * A "+" on the box's bottom edge, where the line to its sub-teams starts, that opens New team with
+ * this team as its parent. Shown on hover, focus or selection, and always on touch screens.
+ */
+function NewSubteamHandle({ team }: Readonly<{ team: ITeam }>) {
+	const { t } = useTranslation("bots");
+	const { me, selection, setDialog } = useOrgChart();
+	if (!isTeamAdmin(team, me)) return null;
+	const selected = selection?.kind === "team" && selection.id === team.id;
+	const label = t("teams.org.newTeamInsideNamed", "New team inside {{team}}", {
+		team: team.name,
+	});
+	return (
+		<button
+			type="button"
+			aria-label={label}
+			title={label}
+			onClick={() => setDialog({ kind: "newTeam", parentId: team.id })}
+			className={cn(
+				"absolute bottom-0 left-1/2 flex size-6 -translate-x-1/2 translate-y-1/2 items-center justify-center rounded-full border border-dashed bg-card text-muted-foreground opacity-0 shadow-xs transition-opacity outline-none group-hover/team:opacity-100 hover:border-solid hover:border-primary hover:text-primary focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:opacity-100",
+				selected && "opacity-100",
+			)}
+		>
+			<PlusIcon className="size-3.5" aria-hidden />
+		</button>
+	);
+}
+
 function boxTone(highlighted: boolean, over: boolean) {
 	return cn(
 		"rounded-xl border bg-card shadow-xs transition-colors",
@@ -104,7 +147,7 @@ function RailedTeamBox({ team }: Readonly<{ team: ITeam }>) {
 		<section
 			aria-label={team.name}
 			{...handlers}
-			className="grid shrink-0 grid-cols-[13rem_16rem_13rem] gap-y-0.5"
+			className="group/team relative grid shrink-0 grid-cols-[13rem_16rem_13rem] gap-y-0.5"
 		>
 			<div
 				aria-hidden
@@ -148,6 +191,7 @@ function RailedTeamBox({ team }: Readonly<{ team: ITeam }>) {
 			<div className="col-start-2 px-2 pb-2" style={{ gridRow: lastRow }}>
 				<AddBotRow team={team} branch />
 			</div>
+			<NewSubteamHandle team={team} />
 		</section>
 	);
 }
@@ -172,7 +216,7 @@ export function TeamBox({
 			aria-label={team.name}
 			{...handlers}
 			className={cn(
-				"p-2",
+				"group/team relative p-2",
 				boxTone(highlight.teamIds.has(team.id), over),
 				className,
 			)}
@@ -180,8 +224,11 @@ export function TeamBox({
 			<TeamHeader team={team} />
 			<TeamReachLine team={team} />
 			<div className="mt-1">
-				<TeamRows team={team} inlinePorts={showIo && layout === "inline"} />
+				<TeamRows team={team} inlinePorts={showIo && layout === "inline"}>
+					{layout === "inline" && <NewTeamRow team={team} />}
+				</TeamRows>
 			</div>
+			{layout === "rails" && <NewSubteamHandle team={team} />}
 		</section>
 	);
 }
@@ -214,6 +261,7 @@ export function OrgTree({ node }: Readonly<{ node: OrgTeamNode }>) {
 	return (
 		<div className="flex flex-col items-center">
 			<TeamBox team={node.team} />
+			<AppDeck team={node.team} trunk={node.children.length > 0} />
 			{node.children.length > 0 && (
 				<>
 					<span

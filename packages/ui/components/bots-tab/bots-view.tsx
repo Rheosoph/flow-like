@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import {
 	type ReactNode,
 	useCallback,
@@ -55,6 +56,7 @@ import { MoveLocalBotsDialog } from "./move-local-bots-dialog";
 import { NewMessageDialog } from "./new-message-dialog";
 import { NewRoomDialog } from "./new-room-dialog";
 import { OrgChartView } from "./org-chart";
+import type { AppDestination } from "./org-chart/org-chart-context";
 import { TeamChatList } from "./team-chat-list";
 import { teamRooms } from "./team-chat-list-model";
 import { useBotsView } from "./use-bots-view";
@@ -151,6 +153,7 @@ function useMoveReview(available: boolean) {
 function CrewLayout(data: Readonly<CrewData>) {
 	const { t } = useTranslation("bots");
 	const queryClient = useQueryClient();
+	const router = useRouter();
 	const { me, mode, bots, conversations } = data;
 	const signedIn = mode === "account";
 	const hasCrew = mode !== "guest";
@@ -360,6 +363,13 @@ function CrewLayout(data: Readonly<CrewData>) {
 		},
 		[bots, select],
 	);
+	const openApp = useCallback(
+		(appId: string, where: AppDestination) => {
+			const id = encodeURIComponent(appId);
+			router.push(where === "app" ? `/use?id=${id}` : `/store?id=${id}`);
+		},
+		[router],
+	);
 	const editBot = useCallback(
 		(botId: string) => setEditor({ open: true, botId }),
 		[],
@@ -469,6 +479,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 							bots={bots}
 							onOpenChat={openChatOf}
 							onOpenConversation={openConversation}
+							onOpenApp={openApp}
 						/>
 					</div>
 				</div>

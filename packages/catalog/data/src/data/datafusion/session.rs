@@ -173,11 +173,14 @@ impl NodeLogic for CreateDataFusionSessionNode {
 
             let cached = CachedDataFusionSession::new(ctx);
             let cacheable: Arc<dyn Cacheable> = Arc::new(cached);
+            // Parallel branches may create the same session at once. The first one stays, so
+            // every branch registers its tables into the session its later queries load.
             context
                 .cache
                 .write()
                 .await
-                .insert(cache_key.clone(), cacheable);
+                .entry(cache_key.clone())
+                .or_insert(cacheable);
         }
 
         let session = DataFusionSession { cache_key };

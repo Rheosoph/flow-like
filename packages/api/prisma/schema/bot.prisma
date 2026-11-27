@@ -68,6 +68,7 @@ model Bot {
   leadOffers      BotTeam[]             @relation("BotTeamLeadOffer")
   teamChats       BotTeamChat[]
   channelLinks    BotChannelLink[]
+  channelSenders  BotChannelSender[]
 
   @@unique([ownerId, systemKey])
   @@unique([ownerId, importKey])

@@ -472,6 +472,7 @@ async fn bootstrap(
                 .as_ref()
                 .and_then(|frontend| frontend.custom_css.clone()),
             served_variant,
+            on_load_prerun: None,
         },
     }))
 }

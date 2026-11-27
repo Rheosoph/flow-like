@@ -69,7 +69,21 @@ pub fn executor_router(state: ExecutorState) -> Router {
         .route("/execute/sse", post(execute_sse))
         .route("/tool", post(execute_tool))
         .route("/health", get(health_check))
+        .route("/warm", post(warm))
         .with_state(Arc::new(state))
+}
+
+/// Ready this environment for the run the API is about to route to it: a fresh one is still
+/// building its node registry after init, and the first run would wait for the rest. Holds no
+/// run state and takes no permit, so it never displaces a run.
+async fn warm() -> StatusCode {
+    match tokio::task::spawn_blocking(crate::execute::prepare_runtime).await {
+        Ok(()) => StatusCode::NO_CONTENT,
+        Err(error) => {
+            tracing::warn!(error = %error, "Executor warm-up could not prepare the node registry");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
 }
 
 /// Health check endpoint

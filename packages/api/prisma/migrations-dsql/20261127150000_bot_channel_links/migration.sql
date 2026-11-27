@@ -13,12 +13,23 @@ CREATE TABLE "BotChannelLink" (
     CONSTRAINT "BotChannelLink_pkey" PRIMARY KEY ("id")
 );
 
+CREATE TABLE "BotChannelSender" (
+    "id" TEXT NOT NULL,
+    "botId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "BotChannelSender_pkey" PRIMARY KEY ("botId", "id")
+);
+
 CREATE UNIQUE INDEX ASYNC "BotChannelLink_botId_provider_chatKey_key" ON "BotChannelLink"("botId", "provider", "chatKey");
 CREATE INDEX ASYNC "BotChannelLink_ownerId_idx" ON "BotChannelLink"("ownerId");
 CREATE INDEX ASYNC "BotChannelLink_conversationId_idx" ON "BotChannelLink"("conversationId");
+CREATE INDEX ASYNC "BotChannelSender_id_idx" ON "BotChannelSender"("id");
 
 ALTER TABLE "BotChannelLink" ADD CONSTRAINT "BotChannelLink_botId_fkey" FOREIGN KEY ("botId") REFERENCES "Bot"("id") ON DELETE CASCADE ON UPDATE CASCADE NOT VALID;
 ALTER TABLE "BotChannelLink" ADD CONSTRAINT "BotChannelLink_conversationId_fkey" FOREIGN KEY ("conversationId") REFERENCES "Conversation"("id") ON DELETE CASCADE ON UPDATE CASCADE NOT VALID;
+ALTER TABLE "BotChannelSender" ADD CONSTRAINT "BotChannelSender_botId_fkey" FOREIGN KEY ("botId") REFERENCES "Bot"("id") ON DELETE CASCADE ON UPDATE CASCADE NOT VALID;
 
 ALTER TABLE ASYNC "BotChannelLink" VALIDATE CONSTRAINT "BotChannelLink_botId_fkey";
 ALTER TABLE ASYNC "BotChannelLink" VALIDATE CONSTRAINT "BotChannelLink_conversationId_fkey";
+ALTER TABLE ASYNC "BotChannelSender" VALIDATE CONSTRAINT "BotChannelSender_botId_fkey";

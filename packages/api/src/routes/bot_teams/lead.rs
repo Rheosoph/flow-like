@@ -172,7 +172,7 @@ pub async fn accept_lead(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
 #[utoipa::path(
@@ -248,5 +248,5 @@ pub async fn resign_lead(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }

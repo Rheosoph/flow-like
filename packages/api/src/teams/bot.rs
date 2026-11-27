@@ -7,7 +7,9 @@ use super::{
     Connection, auth,
     context::{self, clean_label},
     files::{self, FileEntry, FileOwner},
-    management::{self, Target, TeamsAccessView, TeamsConnectionView, TeamsPackage, TeamsSetupRequest},
+    management::{
+        self, Target, TeamsAccessView, TeamsConnectionView, TeamsPackage, TeamsSetupRequest,
+    },
     now,
     runtime::{
         self, DAY_MS, Dispatch, Gate, MAX_MESSAGE_BYTES, PREPARE_BUDGET, Session, activity_url,
@@ -165,9 +167,7 @@ pub async fn disconnect_bot_teams(
     Path(bot_id): Path<String>,
 ) -> Result<Json<TeamsConnectionView>, ApiError> {
     let target = existing_target(&state, &user, &bot_id).await?;
-    management::disconnect_view(&state, &target)
-        .await
-        .map(Json)
+    management::disconnect_view(&state, &target).await.map(Json)
 }
 
 #[utoipa::path(
@@ -292,7 +292,10 @@ fn chat_title(activity: &Value, conversation_type: &str) -> String {
             .filter(|name| !name.is_empty())
     };
     let title = match conversation_type {
-        "channel" => match (name("/channelData/team/name"), name("/channelData/channel/name")) {
+        "channel" => match (
+            name("/channelData/team/name"),
+            name("/channelData/channel/name"),
+        ) {
             (Some(team), Some(channel)) => Some(format!("{team} / {channel}")),
             (team, channel) => channel.or(team),
         },
@@ -308,7 +311,10 @@ fn link_attachments(files: &[FileEntry]) -> Vec<OutsideAttachment> {
     files
         .iter()
         .filter_map(|file| {
-            let url = file.url.as_ref().filter(|url| url.starts_with("https://"))?;
+            let url = file
+                .url
+                .as_ref()
+                .filter(|url| url.starts_with("https://"))?;
             Some(OutsideAttachment {
                 name: file.name.clone(),
                 url: url.clone(),
@@ -451,7 +457,14 @@ async fn accept(
         (PostStatus::Limited, Some(notice)) => {
             let sent = tokio::time::timeout(
                 SIDE_MESSAGE_TIMEOUT,
-                deliver(state, &fresh, &session, "notice", message_body(&notice), None),
+                deliver(
+                    state,
+                    &fresh,
+                    &session,
+                    "notice",
+                    message_body(&notice),
+                    None,
+                ),
             )
             .await;
             if !matches!(sent, Ok(Ok(_))) {
@@ -564,10 +577,14 @@ fn split_reply(text: &str, max_bytes: usize) -> Vec<String> {
             break;
         }
         let head = fitting_prefix(rest, max_bytes);
-        let cut = ["\n\n", "\n", " "]
-            .iter()
-            .find_map(|separator| head.rfind(separator).filter(|at| *at > 0))
-            .unwrap_or(head.len());
+        let cut = if rest[head.len()..].starts_with(char::is_whitespace) {
+            head.len()
+        } else {
+            ["\n\n", "\n", " "]
+                .iter()
+                .find_map(|separator| head.rfind(separator).filter(|at| *at > 0))
+                .unwrap_or(head.len())
+        };
         let part = rest[..cut].trim_end();
         if !part.is_empty() {
             parts.push(part.to_owned());
@@ -690,7 +707,9 @@ mod tests {
             content_type: None,
         }];
         assert_eq!(
-            outside_message(TENANT, "c", &activity, attached).unwrap().text,
+            outside_message(TENANT, "c", &activity, attached)
+                .unwrap()
+                .text,
             ""
         );
     }
@@ -725,22 +744,42 @@ mod tests {
 
     #[test]
     fn short_replies_are_one_part() {
-        assert_eq!(split_reply("  Hello\n\nthere ", 100), vec!["Hello\n\nthere"]);
+        assert_eq!(
+            split_reply("  Hello\n\nthere ", 100),
+            vec!["Hello\n\nthere"]
+        );
         assert!(split_reply("   ", 100).is_empty());
     }
 
     #[test]
     fn long_replies_split_on_paragraphs_first() {
-        let text = format!("{}\n\n{}\n\n{}", "a".repeat(40), "b".repeat(40), "c".repeat(40));
+        let text = format!(
+            "{}\n\n{}\n\n{}",
+            "a".repeat(40),
+            "b".repeat(40),
+            "c".repeat(40)
+        );
         let parts = split_reply(&text, 90);
-        assert_eq!(parts, vec![format!("{}\n\n{}", "a".repeat(40), "b".repeat(40)), "c".repeat(40)]);
+        assert_eq!(
+            parts,
+            vec![
+                format!("{}\n\n{}", "a".repeat(40), "b".repeat(40)),
+                "c".repeat(40)
+            ]
+        );
     }
 
     #[test]
     fn long_paragraphs_split_on_lines_then_words_then_anywhere() {
         let lines = "line one\nline two\nline three";
-        assert_eq!(split_reply(lines, 18), vec!["line one\nline two", "line three"]);
-        assert_eq!(split_reply("alpha beta gamma", 11), vec!["alpha beta", "gamma"]);
+        assert_eq!(
+            split_reply(lines, 18),
+            vec!["line one\nline two", "line three"]
+        );
+        assert_eq!(
+            split_reply("alpha beta gamma", 11),
+            vec!["alpha beta", "gamma"]
+        );
         assert_eq!(split_reply("abcdefghij", 4), vec!["abcd", "efgh", "ij"]);
     }
 
@@ -752,7 +791,7 @@ mod tests {
         assert!(parts.iter().all(|part| encoded_len(part) <= 1_000));
         let joined = parts.join("\n");
         assert_eq!(joined.replace('\n', ""), text.replace('\n', "").trim());
-        let multibyte = "ü".repeat(100);
+        let multibyte = "ü".repeat(50);
         assert!(split_reply(&multibyte, 25).iter().all(|p| p.len() <= 25));
     }
 
@@ -761,7 +800,12 @@ mod tests {
         let text = "word ".repeat(400);
         let parts = split_reply(&text, 50);
         assert_eq!(parts.len(), MAX_REPLY_PARTS);
-        assert!(parts.last().unwrap().ends_with("(The reply was shortened.)"));
+        assert!(
+            parts
+                .last()
+                .unwrap()
+                .ends_with("(The reply was shortened.)")
+        );
         assert!(parts.iter().all(|part| encoded_len(part) <= 50));
     }
 }

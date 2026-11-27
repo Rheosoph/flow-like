@@ -34,23 +34,6 @@ const PIN_REMOTE_DATABASE: &str = "_flow_remote_database";
 pub struct OpenRemoteDatabaseNode {}
 
 #[cfg(feature = "execute")]
-#[derive(Clone)]
-struct RemoteDatabaseInitializationSlot {
-    lock: Arc<flow_like_types::tokio::sync::Mutex<()>>,
-}
-
-#[cfg(feature = "execute")]
-impl Cacheable for RemoteDatabaseInitializationSlot {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-}
-
-#[cfg(feature = "execute")]
 struct RemoteDatabaseRefresher {
     cache_key: String,
     remote_app_id: String,
@@ -238,42 +221,8 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         // with the local Open Database keys (db_{table} / db_user_{table}).
         let base_key = format!("db::remote::{}::{}::{}", remote_app_id, access_mode, table);
         let cache_key = super::references::selection_cache_key(&base_key, &selector)?;
-        let initialization_key = format!("{cache_key}::initialize");
-        let initialization_slot = {
-            let existing = context.cache.read().await.get(&initialization_key).cloned();
-            if let Some(existing) = existing {
-                existing
-                    .as_any()
-                    .downcast_ref::<RemoteDatabaseInitializationSlot>()
-                    .ok_or_else(|| {
-                        flow_like_types::anyhow!(
-                            "Remote database initialization cache has an unexpected type"
-                        )
-                    })?
-                    .clone()
-            } else {
-                let mut cache = context.cache.write().await;
-                if let Some(existing) = cache.get(&initialization_key) {
-                    existing
-                        .as_any()
-                        .downcast_ref::<RemoteDatabaseInitializationSlot>()
-                        .ok_or_else(|| {
-                            flow_like_types::anyhow!(
-                                "Remote database initialization cache has an unexpected type"
-                            )
-                        })?
-                        .clone()
-                } else {
-                    let slot = RemoteDatabaseInitializationSlot {
-                        lock: Arc::new(flow_like_types::tokio::sync::Mutex::new(())),
-                    };
-                    cache.insert(initialization_key, Arc::new(slot.clone()));
-                    slot
-                }
-            }
-        };
-
-        let _initializing = initialization_slot.lock.lock().await;
+        let initialization = super::connection::initialization_slot(context, &cache_key).await?;
+        let _initializing = initialization.lock().await;
         if !context.cache.read().await.contains_key(&cache_key) {
             // Reuse a run-scoped raw connection across every table opened
             // from this connected project.

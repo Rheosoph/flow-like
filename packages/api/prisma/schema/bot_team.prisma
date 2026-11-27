@@ -27,6 +27,7 @@ model BotTeam {
   updatedAt      DateTime        @default(now()) @db.Timestamptz(3)
   people         BotTeamPerson[]
   bots           BotTeamBot[]
+  apps           BotTeamApp[]
   threads        BotTeamThread[]
   /// People's classifications in the org this team is the top-level team of.
   classifications BotOrgClassification[]
@@ -71,6 +72,26 @@ model BotTeamBot {
 
   @@id([teamId, botId])
   @@index([botId])
+}
+
+/// An app pinned to a team, shown in its org chart. Whoever pins it owns or administers the app.
+/// A team admin's pin is ACTIVE at once; a member's pin is PENDING until a team admin approves it.
+model BotTeamApp {
+  teamId     String
+  team       BotTeam   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  appId      String
+  app        App       @relation(fields: [appId], references: [id], onDelete: Cascade)
+  /// PENDING | ACTIVE
+  status     String    @default("PENDING")
+  /// The person who pinned the app, by value: their pins go when they leave the org.
+  pinnedBy   String
+  /// The team admin who approved a member's pin.
+  approvedBy String?
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  approvedAt DateTime? @db.Timestamptz(3)
+
+  @@id([teamId, appId])
+  @@index([appId])
 }
 
 /// A person's thread with a team: their `#Team` requests land here and the team's lead answers.

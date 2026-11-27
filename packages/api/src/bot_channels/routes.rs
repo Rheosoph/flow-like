@@ -2,8 +2,8 @@
 //! turns those messages queued, and the list of linked chats.
 
 use super::{
-    ChannelProvider, OutsideAttachment, OutsideMessage, OutsideSender, Posted, link_of_conversation,
-    post_outside_message,
+    ChannelProvider, OutsideAttachment, OutsideMessage, OutsideSender, Posted,
+    link_of_conversation, post_outside_message,
 };
 use crate::{
     entity::{bot_channel_link, bot_turn},
@@ -39,10 +39,7 @@ pub(crate) fn routes() -> Router<AppState> {
             "/{bot_id}/channels/discord/messages",
             post(post_discord_message).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
         )
-        .route(
-            "/{bot_id}/channels/turns/{turn_id}",
-            get(get_channel_turn),
-        )
+        .route("/{bot_id}/channels/turns/{turn_id}", get(get_channel_turn))
 }
 
 /// Who wrote the Discord message.
@@ -83,13 +80,18 @@ pub struct DiscordMessageRequest {
 
 impl DiscordMessageRequest {
     fn chat_key(&self) -> String {
-        match self.guild_id.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
+        match self
+            .guild_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
             Some(guild) => format!("{guild}:{}", self.chat_id.trim()),
             None => format!("dm:{}", self.chat_id.trim()),
         }
     }
 
-    fn into_message(self) -> OutsideMessage {
+    pub(super) fn into_message(self) -> OutsideMessage {
         OutsideMessage {
             provider: ChannelProvider::Discord,
             chat_key: self.chat_key(),
@@ -160,7 +162,10 @@ impl From<Posted> for ChannelPostedView {
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "POST /bots/{bot_id}/channels/discord/messages", skip(state, user, body))]
+#[tracing::instrument(
+    name = "POST /bots/{bot_id}/channels/discord/messages",
+    skip(state, user, body)
+)]
 pub async fn post_discord_message(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -197,7 +202,10 @@ pub struct ChannelTurnQuery {
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "GET /bots/{bot_id}/channels/turns/{turn_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /bots/{bot_id}/channels/turns/{turn_id}",
+    skip(state, user)
+)]
 pub async fn get_channel_turn(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -211,7 +219,10 @@ pub async fn get_channel_turn(
         .filter(bot_turn::Column::OwnerId.eq(&sub))
         .one(&state.db)
         .await?
-        .filter(|turn| turn.trigger_message_id.starts_with(super::CHANNEL_MESSAGE_PREFIX))
+        .filter(|turn| {
+            turn.trigger_message_id
+                .starts_with(super::CHANNEL_MESSAGE_PREFIX)
+        })
         .ok_or_else(|| ApiError::not_found(format!("Turn '{turn_id}' not found")))?;
     if link_of_conversation(&state.db, &turn.conversation_id)
         .await?

@@ -126,6 +126,10 @@ pub struct Team {
     /// The team room.
     #[serde(default)]
     pub conversation_id: Option<String>,
+    /// A signed link to the team room's picture, which is also the team's icon; `None` while the
+    /// room has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
     /// The bot an admin asked to lead the team, until its owner answers. Only the team's admins
     /// and that bot's owner see it.
     #[serde(default)]
@@ -135,9 +139,108 @@ pub struct Team {
     pub gated_bots: Vec<String>,
     pub people: Vec<TeamPerson>,
     pub bots: Vec<TeamBot>,
+    /// Apps pinned to the team. A pending pin shows only to the team's admins and its pinner.
+    #[serde(default)]
+    pub apps: Vec<TeamApp>,
     /// RFC 3339.
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// Apps one team may have pinned, active and pending.
+pub const MAX_TEAM_APPS: usize = 24;
+/// Days of activity an [`OrgAppStats`] covers.
+pub const ORG_APP_DAYS: usize = 14;
+
+/// An app pinned to a team. Whoever pins it administers the app. A team admin's pin is active at
+/// once; a member's pin waits until a team admin approves it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TeamApp {
+    pub app_id: String,
+    pub status: TeamMemberStatus,
+    pub pinned_by: String,
+    /// The team admin who approved a member's pin.
+    #[serde(default)]
+    pub approved_by: Option<String>,
+    /// RFC 3339.
+    pub pinned_at: String,
+}
+
+/// An app as everyone in its org sees it in the org chart: its metadata and type, never its
+/// boards, tables or events. `stats` only reaches readers who can open the app.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct OrgApp {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Signed link to its icon.
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// Signed link to its thumbnail.
+    #[serde(default)]
+    pub thumbnail: Option<String>,
+    /// `Agent`, `CustomInterface`, `DataFocus`, `DataPipeline`, `Analytics` or `Form`; `None`
+    /// while its owner has not picked one.
+    #[serde(default)]
+    pub app_type: Option<String>,
+    /// The reader is a member of the app.
+    pub can_open: bool,
+    /// The reader is not a member, and the app lets people join or ask to join.
+    pub can_request: bool,
+    /// The reader owns or administers the app: they may pin it, and unpin it from any team.
+    pub reader_admin: bool,
+    /// The app's owner.
+    #[serde(default)]
+    pub owner_id: Option<String>,
+    /// RFC 3339.
+    pub updated_at: String,
+    #[serde(default)]
+    pub stats: Option<OrgAppStats>,
+}
+
+/// What an app did lately, for readers who can open it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+pub struct OrgAppStats {
+    /// Runs per day over the last [`ORG_APP_DAYS`] days, oldest first, today last.
+    pub runs: Vec<u32>,
+    /// Failed runs per day, the same days.
+    pub failed: Vec<u32>,
+    /// RFC 3339 time of its latest run; `None` without one in [`ORG_APP_DAYS`] days.
+    #[serde(default)]
+    pub last_run_at: Option<String>,
+    /// The kinds of its switched-on events (`cron`, `simple_chat`, `email`, `api`,
+    /// `generic_form`, …), each once.
+    #[serde(default)]
+    pub triggers: Vec<String>,
+    /// The cron expression of its first switched-on schedule, as its owner wrote it.
+    #[serde(default)]
+    pub schedule: Option<String>,
+    pub pages: u32,
+}
+
+/// An app the reader is a member of, offered in the pin dialog of a team.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PinnableApp {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Signed link to its icon.
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub app_type: Option<String>,
+    /// Only apps the reader owns or administers can be pinned.
+    pub reader_admin: bool,
+    #[serde(default)]
+    pub owner_id: Option<String>,
+    /// Its pin in this team, if any.
+    #[serde(default)]
+    pub pinned: Option<TeamMemberStatus>,
+    /// Other teams of the org it is actively pinned to.
+    #[serde(default)]
+    pub pinned_elsewhere: Vec<String>,
 }
 
 /// A bot as every member of its org sees it: who it is and what it does, never its settings.
@@ -164,6 +267,10 @@ pub struct OrgBot {
     /// What starts its work from outside the chats, and what it sends out.
     #[serde(default)]
     pub inputs: OrgBotInputs,
+    /// The org apps (see [`OrgView::apps`]) it may use, from its selected apps; never its
+    /// workspace app. Empty for a bot that is not active in a team.
+    #[serde(default)]
+    pub app_ids: Vec<String>,
 }
 
 /// How work reaches a bot from outside its chats, as its org sees it: ways in and their recent
@@ -222,6 +329,9 @@ pub enum TeamInvitationKind {
     Lead,
     /// Someone in the org (`user_id`) asks to talk with one of the reader's bots.
     ChatRequest,
+    /// A member of a team the reader administers (`user_id`) pinned an app (`app_id`) that waits
+    /// for an admin's approval.
+    AppPin,
 }
 
 /// One answer the reader owes a team.
@@ -243,6 +353,9 @@ pub struct TeamInvitation {
     /// For `chat_request`: why they ask.
     #[serde(default)]
     pub note: Option<String>,
+    /// For `app_pin`: the pinned app, which is also in [`OrgView::apps`].
+    #[serde(default)]
+    pub app_id: Option<String>,
     /// RFC 3339.
     pub created_at: String,
 }
@@ -267,6 +380,10 @@ pub struct OrgView {
     /// top-level team the reader is an admin of. A person without one counts as internal.
     #[serde(default)]
     pub classifications: Vec<PersonClassification>,
+    /// Every app the chart shows: the active pins of the org's teams, the pending pins the reader
+    /// may see, and the apps of the org's active bots.
+    #[serde(default)]
+    pub apps: Vec<OrgApp>,
 }
 
 /// A person's thread with a team: their `#Team` requests land here and the team's lead answers.
@@ -327,7 +444,8 @@ pub struct BriefMembership {
     pub role: TeamRole,
 }
 
-/// A person in the conversation a turn runs in.
+/// A person in the conversation a turn runs in. Their own classification stays out: people see
+/// only their own, so a bot never holds anyone's to give away.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BriefPerson {
     pub name: String,
@@ -337,8 +455,6 @@ pub struct BriefPerson {
     /// The org's teams they are active in.
     #[serde(default)]
     pub teams: Vec<BriefMembership>,
-    /// Their classification in the org; [`UNCLASSIFIED_PERSON`] without one.
-    pub classification: DataClassification,
 }
 
 /// What a bot in a team knows about its team and its org. A host builds it from the team tables
@@ -381,6 +497,10 @@ pub struct TeamBrief {
     /// The people in the conversation the turn runs in; empty in the owner's own chat.
     #[serde(default)]
     pub present: Vec<BriefPerson>,
+    /// The lowest classification among `present`, everyone without one counting as
+    /// [`UNCLASSIFIED_PERSON`]: the most the bot's answer there may carry.
+    #[serde(default)]
+    pub present_level: Option<DataClassification>,
 }
 
 /// The tag a team is addressed by in chats: its name without spaces after `#`.
@@ -705,14 +825,9 @@ fn present_section(brief: &TeamBrief) -> Option<String> {
     if brief.present.iter().all(|person| person.owner) {
         return None;
     }
-    let lowest = brief
-        .present
-        .iter()
-        .map(|person| person.classification)
-        .min()?;
     let mut lines = vec![
         "## IN THIS CONVERSATION".to_string(),
-        "The people here, their teams and their classification:".to_string(),
+        "The people here and the teams they are in:".to_string(),
     ];
     for person in &brief.present {
         let owner = if person.owner { " (your owner)" } else { "" };
@@ -726,13 +841,11 @@ fn present_section(brief: &TeamBrief) -> Option<String> {
         } else {
             teams.join(", ")
         };
-        lines.push(format!(
-            "- {}{owner}: {teams}; classified {}",
-            person.name, person.classification
-        ));
+        lines.push(format!("- {}{owner}: {teams}", person.name));
     }
+    let lowest = brief.present_level.unwrap_or(UNCLASSIFIED_PERSON);
     lines.push(format!(
-        "Everyone here reads your answer, so nothing classified above {lowest} belongs in it. Use people's teams and roles when you judge what someone may see or ask you to do."
+        "Everyone here reads your answer, and the lowest classification among them is {lowest}: nothing classified above {lowest} belongs in your answer. Don't mention this level in your answers. Use people's teams and roles when you judge what someone may see or ask you to do."
     ));
     Some(lines.join("\n"))
 }
@@ -1222,6 +1335,7 @@ mod tests {
                 brief_team("finance", Some("kestrel"), 1, "Ledger", 2),
             ],
             present: Vec::new(),
+            present_level: None,
         }
     }
 
@@ -1245,12 +1359,7 @@ mod tests {
         }
     }
 
-    fn person(
-        name: &str,
-        owner: bool,
-        teams: &[(&str, TeamRole)],
-        level: DataClassification,
-    ) -> BriefPerson {
+    fn person(name: &str, owner: bool, teams: &[(&str, TeamRole)]) -> BriefPerson {
         BriefPerson {
             name: name.into(),
             owner,
@@ -1261,7 +1370,6 @@ mod tests {
                     role: *role,
                 })
                 .collect(),
-            classification: level,
         }
     }
 
@@ -1338,26 +1446,31 @@ mod tests {
     }
 
     #[test]
-    fn the_brief_names_the_people_in_the_conversation() {
-        use DataClassification::*;
+    fn the_brief_names_the_people_in_the_conversation_and_only_their_lowest_level() {
         let mut brief = security_brief(false);
         brief.present = vec![
             person(
                 "Anna",
                 false,
                 &[("Finance", TeamRole::Admin), ("Security", TeamRole::Member)],
-                Confidential,
             ),
-            person("Jonas", true, &[("Security", TeamRole::Member)], Internal),
+            person("Jonas", true, &[("Security", TeamRole::Member)]),
         ];
+        brief.present_level = Some(DataClassification::Confidential);
         let text = team_brief_text(&brief);
         assert!(text.contains("## IN THIS CONVERSATION"));
-        assert!(
-            text.contains("- Anna: Finance (admin), Security (member); classified confidential")
-        );
-        assert!(text.contains("- Jonas (your owner): Security (member); classified internal"));
-        assert!(text.contains("nothing classified above internal belongs in it"));
+        assert!(text.contains("- Anna: Finance (admin), Security (member)\n"));
+        assert!(text.contains("- Jonas (your owner): Security (member)\n"));
+        assert!(text.contains(
+            "the lowest classification among them is confidential: nothing classified above confidential belongs in your answer."
+        ));
+        assert!(!text.contains("classified confidential"));
         assert!(text.find("## IN THIS CONVERSATION") < text.find("## OTHER TEAMS"));
+
+        brief.present_level = None;
+        assert!(
+            team_brief_text(&brief).contains("the lowest classification among them is internal")
+        );
 
         brief.present.remove(0);
         assert!(!team_brief_text(&brief).contains("## IN THIS CONVERSATION"));

@@ -87,8 +87,7 @@ export const botKeys = {
 	avatar: (botId: string, look: string) =>
 		[...botKeys.all, "avatar", botId, look] as const,
 	teams: (botId: string) => [...botKeys.all, "teams", botId] as const,
-	teamsAccess: (botId: string) =>
-		[...botKeys.teams(botId), "access"] as const,
+	teamsAccess: (botId: string) => [...botKeys.teams(botId), "access"] as const,
 	channelLinks: (botId: string) =>
 		[...botKeys.all, "channel-links", botId] as const,
 	discord: (botId: string) => [...botKeys.all, "discord", botId] as const,
@@ -1075,8 +1074,7 @@ export function useSaveBotDiscord() {
 		}: {
 			botId: string;
 			input: IBotDiscordInput;
-		}): Promise<IBotDiscordView> =>
-			discord?.set(botId, input) ?? unsupported(),
+		}): Promise<IBotDiscordView> => discord?.set(botId, input) ?? unsupported(),
 		onSuccess: (view, { botId }) =>
 			queryClient.setQueryData(botKeys.discord(botId), view),
 	});

@@ -130,6 +130,7 @@ function saveTeamsPackage(result: TeamsBotPackage) {
 
 export interface TeamsAdapter {
 	scope: string;
+	target?: "event" | "bot";
 	setup?: (input: TeamsBotSetup) => Promise<TeamsBotConnection>;
 	disconnect?: () => Promise<TeamsBotConnection>;
 	package?: () => Promise<TeamsBotPackage>;
@@ -313,23 +314,34 @@ function teamsConnectionGate(
 function teamsFailureSummary(
 	t: Translate,
 	failure: TeamsFailure,
+	bot = false,
 ): string | undefined {
 	switch (failure) {
 		case "forbidden":
-			return t(
-				"teamsFailureForbidden",
-				"Teams bots are turned off on this server, or your role cannot change this event. Ask your administrator.",
-			);
+			return bot
+				? t(
+						"teamsFailureForbiddenBot",
+						"Teams bots are turned off on this server, or you are not the owner of this bot. Ask your administrator.",
+					)
+				: t(
+						"teamsFailureForbidden",
+						"Teams bots are turned off on this server, or your role cannot change this event. Ask your administrator.",
+					);
 		case "busy":
 			return t(
 				"teamsFailureBusy",
 				"Another operation on this bot is still running. Refresh the status, then try again.",
 			);
 		case "managed_limit":
-			return t(
-				"teamsFailureManagedLimit",
-				"This app has reached its limit of Flow-Like managed bots. Disconnect a managed bot on another event, or connect your own bot instead.",
-			);
+			return bot
+				? t(
+						"teamsFailureManagedLimitBot",
+						"This account has reached its limit of Flow-Like managed Teams bots. Disconnect the managed connection of another bot, or connect your own bot instead.",
+					)
+				: t(
+						"teamsFailureManagedLimit",
+						"This app has reached its limit of Flow-Like managed bots. Disconnect a managed bot on another event, or connect your own bot instead.",
+					);
 		case "rate_limited":
 			return t(
 				"teamsFailureRateLimited",
@@ -372,6 +384,7 @@ export function TeamsSetupForm({
 }>) {
 	const { t } = useTranslation("interfaces");
 	const prefix = useId();
+	const forBot = adapter.target === "bot";
 	const [form, setForm] = useState<TeamsBotSetup>(EMPTY_SETUP);
 	const [approvers, setApprovers] = useState("");
 	const [busy, setBusy] = useState<TeamsOperation | null>(null);
@@ -442,6 +455,7 @@ export function TeamsSetupForm({
 			const summary = teamsFailureSummary(
 				t,
 				teamsFailure(cause, operation, form.mode),
+				forBot,
 			);
 			setError(summary ? { summary, detail } : { summary: detail });
 		} finally {
@@ -574,7 +588,7 @@ export function TeamsSetupForm({
 				<TeamsField
 					id={`${prefix}-tenant`}
 					label={t("teamsOrganizationTenantId", "Teams organization tenant ID")}
-					hint={<TenantIdHelp />}
+					hint={<TenantIdHelp bot={forBot} />}
 					error={
 						invalid("customer_tenant_id")
 							? t(
@@ -626,6 +640,7 @@ export function TeamsSetupForm({
 			</TeamsField>
 			{custom && (
 				<TeamsCustomerRegistration
+					bot={forBot}
 					form={form}
 					endpoint={endpoint}
 					editable={editable}
@@ -701,6 +716,7 @@ export function TeamsSetupForm({
 			<TeamsStatus connection={saved} />
 			{saved.configured && (
 				<TeamsInstall
+					bot={forBot}
 					connection={saved}
 					downloading={busy === "download"}
 					disabled={!!busy || !adapter.package}
@@ -760,10 +776,15 @@ export function TeamsSetupForm({
 										"teamsDisconnectManagedDescription",
 										"Disconnecting removes the managed Microsoft registration and stops this bot. Remove the app from Teams separately.",
 									)
-								: t(
-										"teamsDisconnectCustomerDescription",
-										"Disconnecting stops this event's bot access. Your Microsoft registration remains in your account.",
-									)}
+								: forBot
+									? t(
+											"teamsDisconnectCustomerDescriptionBot",
+											"Disconnecting stops this bot's Teams access. Your Microsoft registration remains in your account.",
+										)
+									: t(
+											"teamsDisconnectCustomerDescription",
+											"Disconnecting stops this event's bot access. Your Microsoft registration remains in your account.",
+										)}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
@@ -1055,14 +1076,19 @@ function TeamsAuthPathRow({
 	);
 }
 
-function TenantIdHelp() {
+function TenantIdHelp({ bot }: Readonly<{ bot: boolean }>) {
 	const { t } = useTranslation("interfaces");
 	return (
 		<span>
-			{t(
-				"teamsTenantIdHelp",
-				"Only this organization's Teams conversations can run the event. Find the ID in the Microsoft Entra admin center under Overview → Tenant ID, or ask your Microsoft 365 admin.",
-			)}{" "}
+			{bot
+				? t(
+						"teamsTenantIdHelpBot",
+						"Only this organization's Teams conversations can reach the bot. Find the ID in the Microsoft Entra admin center under Overview → Tenant ID, or ask your Microsoft 365 admin.",
+					)
+				: t(
+						"teamsTenantIdHelp",
+						"Only this organization's Teams conversations can run the event. Find the ID in the Microsoft Entra admin center under Overview → Tenant ID, or ask your Microsoft 365 admin.",
+					)}{" "}
 			<ExternalLinkText href={TENANT_HELP_URL}>
 				{t("teamsHowToFindYourTenantId", "How to find your tenant ID")}
 			</ExternalLinkText>
@@ -1088,6 +1114,7 @@ function ExternalLinkText({
 }
 
 function TeamsCustomerRegistration({
+	bot,
 	form,
 	endpoint,
 	editable,
@@ -1096,6 +1123,7 @@ function TeamsCustomerRegistration({
 	onEdit,
 	onCopyEndpoint,
 }: Readonly<{
+	bot: boolean;
 	form: TeamsBotSetup;
 	endpoint: string;
 	editable: boolean;
@@ -1247,10 +1275,17 @@ function TeamsCustomerRegistration({
 			<TeamsField
 				id={`${prefix}-secret`}
 				label={t("teamsClientSecretValue", "Client secret value")}
-				hint={t(
-					"teamsSecretStorageHint",
-					"Stored encrypted on the server. Excluded from the event configuration and the downloaded ZIP.",
-				)}
+				hint={
+					bot
+						? t(
+								"teamsSecretStorageHintBot",
+								"Stored encrypted on the server. Excluded from the downloaded ZIP.",
+							)
+						: t(
+								"teamsSecretStorageHint",
+								"Stored encrypted on the server. Excluded from the event configuration and the downloaded ZIP.",
+							)
+				}
 				error={
 					invalid("client_secret")
 						? t(
@@ -1813,11 +1848,13 @@ function TeamsStatus({
 }
 
 function TeamsInstall({
+	bot,
 	connection,
 	downloading,
 	disabled,
 	onDownload,
 }: Readonly<{
+	bot: boolean;
 	connection: TeamsBotConnection;
 	downloading: boolean;
 	disabled: boolean;
@@ -1836,16 +1873,26 @@ function TeamsInstall({
 							"Last Teams activity received {{date}}.",
 							{ date: new Date(connection.last_activity_at).toLocaleString() },
 						)
-					: t(
-							"teamsSendATestMessageAfterInstallation",
-							"Send a test message after installation, then refresh status to confirm Teams can reach this event.",
-						)}
+					: bot
+						? t(
+								"teamsSendATestMessageAfterInstallationBot",
+								"Send a test message after installation, then refresh status to confirm Teams can reach this bot.",
+							)
+						: t(
+								"teamsSendATestMessageAfterInstallation",
+								"Send a test message after installation, then refresh status to confirm Teams can reach this event.",
+							)}
 			</p>
 			<p className="text-sm text-muted-foreground">
-				{t(
-					"teamsInstallSteps",
-					"Download the app, then in Teams choose Apps → Manage your apps → Upload an app. If uploads are disabled, send the ZIP to your Teams admin. Activate this event before sending a message to the bot.",
-				)}
+				{bot
+					? t(
+							"teamsInstallStepsBot",
+							"Download the app, then in Teams choose Apps → Manage your apps → Upload an app. If uploads are disabled, send the ZIP to your Teams admin. Once the connection is ready, the server answers every message to the bot.",
+						)
+					: t(
+							"teamsInstallSteps",
+							"Download the app, then in Teams choose Apps → Manage your apps → Upload an app. If uploads are disabled, send the ZIP to your Teams admin. Activate this event before sending a message to the bot.",
+						)}
 			</p>
 			<p className="text-sm text-muted-foreground">
 				{t(

@@ -51,6 +51,7 @@ import {
 } from "../../ui/select";
 import { Switch } from "../../ui/switch";
 import { Textarea } from "../../ui/textarea";
+import { TeamAppsSection } from "./app-deck";
 import { InspectorSection } from "./inspector-parts";
 import { TeamIoSection } from "./io-inspector";
 import { useOrgChart } from "./org-chart-context";
@@ -60,12 +61,8 @@ import {
 	partOfOptions,
 	teamCounts,
 } from "./org-chart-model";
-import {
-	OrgBotAvatar,
-	PersonFace,
-	PersonName,
-	TeamTile,
-} from "./org-chart-parts";
+import { OrgBotAvatar, PersonFace, PersonName } from "./org-chart-parts";
+import { TeamIcon } from "./team-icon-picker";
 
 const NONE = "__none__";
 
@@ -687,7 +684,7 @@ export function TeamInspector({ team }: Readonly<{ team: ITeam }>) {
 	return (
 		<div className="flex flex-col gap-5">
 			<header className="flex items-center gap-3">
-				<TeamTile teamId={team.id} name={team.name} size={44} />
+				<TeamIcon team={team} />
 				<div className="flex min-w-0 flex-1 flex-col">
 					<h2 className="truncate text-base font-semibold">{team.name}</h2>
 					<p className="truncate text-xs text-muted-foreground">
@@ -725,6 +722,7 @@ export function TeamInspector({ team }: Readonly<{ team: ITeam }>) {
 			<Placement team={team} admin={admin} />
 			<People team={team} admin={admin} />
 			<TeamBots team={team} admin={admin} />
+			<TeamAppsSection team={team} />
 			<TeamIoSection team={team} />
 			<DirectAsks team={team} admin={admin} />
 			{admin && (
