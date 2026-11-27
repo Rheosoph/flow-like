@@ -192,6 +192,19 @@ pub(super) fn token_of(stored: &str) -> Result<String> {
         .context("The bot token is missing from the system credential store")
 }
 
+/// Saves a secret under a fixed `account` of this keychain service.
+pub(crate) fn put_account(account: &str, secret: &str) -> Result<()> {
+    vault().set(account, secret)
+}
+
+pub(crate) fn get_account(account: &str) -> Result<Option<String>> {
+    vault().get(account)
+}
+
+pub(crate) fn drop_account(account: &str) -> Result<()> {
+    vault().delete(account)
+}
+
 /// The key a bot is known by while it runs: its reference, whichever way it is stored.
 pub(super) fn key_of(provider: Provider, stored: &str) -> String {
     if is_reference(stored) {

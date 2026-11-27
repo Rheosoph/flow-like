@@ -158,9 +158,7 @@ pub(crate) async fn seed_board_revision(
     let cached = state.seed_board_cache(app_id, board_id, board, put)?;
     let (snapshot, ()) = flow_like_types::tokio::join!(
         snapshot_for_cached(state, app_id, board_id, &cached, None),
-        crate::routes::app::prerun_shared::prewarm_draft_revision(
-            state, app_id, board_id, &cached
-        ),
+        crate::routes::app::prerun_shared::prewarm_draft_revision(state, app_id, board_id, &cached),
     );
     if let Err(error) = snapshot {
         tracing::warn!(

@@ -154,7 +154,10 @@ mod tests {
     #[test]
     fn a_bot_is_refused_while_someone_other_than_its_owner_ranks_below_it() {
         let room = people(&[("owner", Public), ("anna", Internal)]);
-        assert_eq!(refused_level(Some(Confidential), "owner", &room), Some(Confidential));
+        assert_eq!(
+            refused_level(Some(Confidential), "owner", &room),
+            Some(Confidential)
+        );
         assert_eq!(refused_level(Some(Internal), "owner", &room), None);
         assert_eq!(refused_level(None, "owner", &room), None);
     }

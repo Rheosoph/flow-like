@@ -454,7 +454,12 @@ fn build() -> FkGraph {
             "Conversation",
             FkAction::SetNull,
         ),
-        ("BotOrgClassification", "orgId", "BotTeam", FkAction::Cascade),
+        (
+            "BotOrgClassification",
+            "orgId",
+            "BotTeam",
+            FkAction::Cascade,
+        ),
         ("BotOrgClassification", "userId", "User", FkAction::Cascade),
         ("BotTeam", "parentId", "BotTeam", FkAction::SetNull),
         ("BotTeam", "leadBotId", "Bot", FkAction::SetNull),

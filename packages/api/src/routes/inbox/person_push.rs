@@ -374,16 +374,29 @@ mod tests {
     #[tokio::test]
     async fn the_list_flags_the_readers_watching_seat_and_a_mute_keeps_it() {
         let db = database().await;
-        group(&db, "room", "user-a", &[user("user-b")], ConversationEncryption::Plain).await;
+        group(
+            &db,
+            "room",
+            "user-a",
+            &[user("user-b")],
+            ConversationEncryption::Plain,
+        )
+        .await;
         assert!(mark_watching(&db, "room", "user-b").await.unwrap());
         assert!(!mark_watching(&db, "room", "user-b").await.unwrap());
         set_muted_in(&db, "room", "user-b", true).await.unwrap();
-        let theirs = conversations_for(&db, &Reader::own("user-b"), None).await.unwrap();
+        let theirs = conversations_for(&db, &Reader::own("user-b"), None)
+            .await
+            .unwrap();
         assert!(theirs[0].watching && theirs[0].muted);
         set_muted_in(&db, "room", "user-b", false).await.unwrap();
-        let theirs = conversations_for(&db, &Reader::own("user-b"), None).await.unwrap();
+        let theirs = conversations_for(&db, &Reader::own("user-b"), None)
+            .await
+            .unwrap();
         assert!(theirs[0].watching && !theirs[0].muted);
-        let mine = conversations_for(&db, &Reader::own("user-a"), None).await.unwrap();
+        let mine = conversations_for(&db, &Reader::own("user-a"), None)
+            .await
+            .unwrap();
         assert!(!mine[0].watching);
     }
 

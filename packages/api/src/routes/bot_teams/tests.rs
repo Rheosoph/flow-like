@@ -3,10 +3,10 @@ use super::{
     bots::{
         accept_bot_in, add_bot_in, decline_bot_in, may_read_briefing, remove_bot_in, set_direct_in,
     },
+    lead::accept_lead_in,
     model::{
         AcceptBotRequest, AddBotRequest, AddPeopleRequest, CreateTeamRequest, PatchTeamRequest,
     },
-    lead::accept_lead_in,
     people::{add_people_in, decline_in, join_in, remove_person_in, set_role_in},
     teams::{create_team_in, delete_team_in, patch_team_in},
     view::org_view,

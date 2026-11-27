@@ -139,7 +139,10 @@ pub fn routes() -> Router<AppState> {
         .route("/chats", post(chats::request_chat))
         .route("/chats/{bot_id}/{user_id}", delete(chats::end_chat))
         .route("/chats/{bot_id}/{user_id}/accept", post(chats::accept_chat))
-        .route("/chats/{bot_id}/{user_id}/decline", post(chats::decline_chat))
+        .route(
+            "/chats/{bot_id}/{user_id}/decline",
+            post(chats::decline_chat),
+        )
         .route(
             "/{team_id}",
             axum::routing::patch(teams::patch_team).delete(teams::delete_team),
@@ -155,9 +158,18 @@ pub fn routes() -> Router<AppState> {
         .route("/{team_id}/bots/{bot_id}/accept", post(bots::accept_bot))
         .route("/{team_id}/bots/{bot_id}/decline", post(bots::decline_bot))
         .route("/{team_id}/bots/{bot_id}/direct", put(bots::set_direct))
-        .route("/{team_id}/bots/{bot_id}/lead/accept", post(lead::accept_lead))
-        .route("/{team_id}/bots/{bot_id}/lead/decline", post(lead::decline_lead))
-        .route("/{team_id}/bots/{bot_id}/lead/resign", post(lead::resign_lead))
+        .route(
+            "/{team_id}/bots/{bot_id}/lead/accept",
+            post(lead::accept_lead),
+        )
+        .route(
+            "/{team_id}/bots/{bot_id}/lead/decline",
+            post(lead::decline_lead),
+        )
+        .route(
+            "/{team_id}/bots/{bot_id}/lead/resign",
+            post(lead::resign_lead),
+        )
         .route(
             "/{team_id}/classifications/{user_id}",
             put(classification::set_classification),

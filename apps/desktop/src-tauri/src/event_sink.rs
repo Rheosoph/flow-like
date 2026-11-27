@@ -25,7 +25,7 @@ use crate::event_sink::telegram::TelegramSink;
 use crate::event_sink::web_watcher::WebWatcherSink;
 use crate::event_sink::webhook::WebhookSink;
 
-mod bot_vault;
+pub(crate) mod bot_vault;
 pub mod cron;
 pub mod daemon;
 pub mod deeplink;

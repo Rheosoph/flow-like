@@ -1,4 +1,5 @@
 "use client";
+import type { IBotDiscordState } from "@flow-like/flow-like-ui/state/backend-state/bot-channels-state";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -114,6 +115,7 @@ import { AppState } from "./tauri-provider/app-state";
 import { AudioState } from "./tauri-provider/audio-state";
 import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
+import { BotDiscordState } from "./tauri-provider/bot-discord-state";
 import { BotState } from "./tauri-provider/bot-state";
 import { BotTeamState } from "./tauri-provider/bot-team-state";
 import type { CommandSyncRemoteIdentity } from "./tauri-provider/command-sync";
@@ -205,6 +207,7 @@ export class TauriBackend implements IBackendState {
 	salesState: ISalesState;
 	botState: IBotState;
 	botTeamState: IBotTeamState;
+	botDiscordState: IBotDiscordState;
 	inboxState: IInboxState;
 	meetingClient: MeetingClient;
 	usageState: IUsageState;
@@ -262,6 +265,7 @@ export class TauriBackend implements IBackendState {
 		this.salesState = new SalesState(this);
 		this.botState = new BotState(this);
 		this.botTeamState = new BotTeamState(this);
+		this.botDiscordState = new BotDiscordState(this);
 		this.inboxState = withEndToEnd(
 			new InboxState(this),
 			tauriInboxCrypto,

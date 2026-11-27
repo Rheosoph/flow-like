@@ -1,7 +1,11 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import type { UseQueryResult } from "@tanstack/react-query";
+import {
+	type UseQueryResult,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import {
 	CheckCircle2,
@@ -19,6 +23,7 @@ import {
 	type ReactNode,
 	useEffect,
 	useId,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -123,6 +128,63 @@ function saveTeamsPackage(result: TeamsBotPackage) {
 	setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+export interface TeamsAdapter {
+	scope: string;
+	setup?: (input: TeamsBotSetup) => Promise<TeamsBotConnection>;
+	disconnect?: () => Promise<TeamsBotConnection>;
+	package?: () => Promise<TeamsBotPackage>;
+	rotate?: () => Promise<TeamsBotConnection>;
+	access?: () => Promise<TeamsBotAccess>;
+	accessKey: readonly unknown[];
+	refreshConnection: () => Promise<void>;
+	refreshAccess: () => Promise<void>;
+}
+
+function useEventTeamsAdapter(appId: string, eventId: string): TeamsAdapter {
+	const events = useBackend().eventState;
+	const queryClient = useQueryClient();
+	const invalidate = useInvalidateInvoke();
+	const get = events.getTeamsBot;
+	const accessKey = useMemo(
+		() => ["teams-event-access", appId, eventId] as const,
+		[appId, eventId],
+	);
+	const setupFn = events.setupTeamsBot?.bind(events);
+	const disconnectFn = events.disconnectTeamsBot?.bind(events);
+	const packageFn = events.getTeamsBotPackage?.bind(events);
+	const rotateFn = events.rotateTeamsBotSecret?.bind(events);
+	const accessFn = events.getTeamsBotAccess?.bind(events);
+	return useMemo(
+		() => ({
+			scope: `${appId}/${eventId}`,
+			setup: setupFn && ((input) => setupFn(appId, eventId, input)),
+			disconnect: disconnectFn && (() => disconnectFn(appId, eventId)),
+			package: packageFn && (() => packageFn(appId, eventId)),
+			rotate: rotateFn && (() => rotateFn(appId, eventId)),
+			access: accessFn && (() => accessFn(appId, eventId)),
+			accessKey,
+			refreshConnection: async () => {
+				if (get) await invalidate(get, [appId, eventId]);
+			},
+			refreshAccess: () =>
+				queryClient.invalidateQueries({ queryKey: accessKey }),
+		}),
+		[
+			appId,
+			eventId,
+			setupFn,
+			disconnectFn,
+			packageFn,
+			rotateFn,
+			accessFn,
+			get,
+			invalidate,
+			queryClient,
+			accessKey,
+		],
+	);
+}
+
 export function TeamsConfig({
 	appId,
 	eventId,
@@ -133,6 +195,7 @@ export function TeamsConfig({
 	const events = backend.eventState;
 	const offline = useInvoke(backend.isOffline, backend, [appId], !!appId);
 	const get = events.getTeamsBot;
+	const adapter = useEventTeamsAdapter(appId, eventId ?? "");
 	const connection = useInvoke(
 		get ?? unavailable,
 		events,
@@ -149,8 +212,7 @@ export function TeamsConfig({
 	if (!connection.data || !eventId) return null;
 	return (
 		<TeamsSetupForm
-			appId={appId}
-			eventId={eventId}
+			adapter={adapter}
 			isEditing={isEditing}
 			saved={connection.data}
 			refreshing={connection.isFetching}
@@ -293,28 +355,23 @@ function teamsFailureSummary(
 	}
 }
 
-function TeamsSetupForm({
-	appId,
-	eventId,
+export function TeamsSetupForm({
+	adapter,
+	intro,
 	isEditing,
 	saved,
 	refreshing,
 	onRefresh,
 }: Readonly<{
-	appId: string;
-	eventId: string;
+	adapter: TeamsAdapter;
+	intro?: string;
 	isEditing: boolean;
 	saved: TeamsBotConnection;
 	refreshing: boolean;
 	onRefresh: () => void;
 }>) {
 	const { t } = useTranslation("interfaces");
-	const backend = useBackend();
-	const events = backend.eventState;
-	const get = events.getTeamsBot;
-	const checkAccess = events.getTeamsBotAccess;
 	const prefix = useId();
-	const invalidate = useInvalidateInvoke();
 	const [form, setForm] = useState<TeamsBotSetup>(EMPTY_SETUP);
 	const [approvers, setApprovers] = useState("");
 	const [busy, setBusy] = useState<TeamsOperation | null>(null);
@@ -323,7 +380,7 @@ function TeamsSetupForm({
 	const [pendingSave, setPendingSave] = useState<TeamsBotSetup | null>(null);
 	const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 
-	const scope = `${appId}/${eventId}`;
+	const scope = adapter.scope;
 	const scopeRef = useRef<string | null>(scope);
 	const hydratedScope = useRef<string | null>(null);
 
@@ -388,10 +445,9 @@ function TeamsSetupForm({
 			);
 			setError(summary ? { summary, detail } : { summary: detail });
 		} finally {
-			if (operation !== "download" && get)
-				await invalidate(get, [appId, eventId]);
-			if (operation === "setup" && checkAccess)
-				await invalidate(checkAccess, [appId, eventId]);
+			if (operation !== "download") await adapter.refreshConnection();
+			if (operation === "setup" && adapter.access)
+				await adapter.refreshAccess();
 			if (current()) setBusy(null);
 		}
 	}
@@ -399,7 +455,7 @@ function TeamsSetupForm({
 	async function submit(input: TeamsBotSetup) {
 		setPendingSave(null);
 		await run("setup", async () => {
-			const result = await events.setupTeamsBot?.(appId, eventId, input);
+			const result = await adapter.setup?.(input);
 			if (!result) return undefined;
 			return () => {
 				applyConnection(result);
@@ -409,7 +465,7 @@ function TeamsSetupForm({
 	}
 
 	function save() {
-		if (!events.setupTeamsBot) return;
+		if (!adapter.setup) return;
 		const input = {
 			...form,
 			allowed_responders: parseTeamsApprovers(approvers),
@@ -427,7 +483,7 @@ function TeamsSetupForm({
 
 	function download() {
 		void run("download", async () => {
-			const result = await events.getTeamsBotPackage?.(appId, eventId);
+			const result = await adapter.package?.();
 			if (result) saveTeamsPackage(result);
 			return undefined;
 		});
@@ -435,7 +491,7 @@ function TeamsSetupForm({
 
 	function rotate() {
 		void run("rotate", async () => {
-			await events.rotateTeamsBotSecret?.(appId, eventId);
+			await adapter.rotate?.();
 			return () =>
 				toast.success(t("teamsBotSecretRenewed", "Bot secret renewed"));
 		});
@@ -444,7 +500,7 @@ function TeamsSetupForm({
 	function disconnect() {
 		setConfirmDisconnect(false);
 		void run("disconnect", async () => {
-			const result = await events.disconnectTeamsBot?.(appId, eventId);
+			const result = await adapter.disconnect?.();
 			return () => {
 				if (result) applyConnection(result);
 				toast.success(t("teamsBotDisconnected", "Teams bot disconnected"));
@@ -469,16 +525,17 @@ function TeamsSetupForm({
 	const saveDisabled =
 		!editable ||
 		serverBusy ||
-		!events.setupTeamsBot ||
+		!adapter.setup ||
 		(form.mode === "flow_like_managed" && !saved.managed_available);
 
 	return (
 		<div className="max-w-3xl space-y-6">
 			<p className="text-sm text-muted-foreground">
-				{t(
-					"teamsConnectThisChatEventToTeams",
-					"Connect this Chat Event to Teams. Messages run your flow on the server; your desktop can be closed.",
-				)}
+				{intro ??
+					t(
+						"teamsConnectThisChatEventToTeams",
+						"Connect this Chat Event to Teams. Messages run your flow on the server; your desktop can be closed.",
+					)}
 			</p>
 			<TeamsAuthPathPicker
 				value={form.mode}
@@ -599,11 +656,10 @@ function TeamsSetupForm({
 					)
 				}
 			>
-				{showAccess && checkAccess && (
+				{showAccess && adapter.access && (
 					<TeamsGraphAccess
-						appId={appId}
-						eventId={eventId}
-						check={checkAccess}
+						queryKey={adapter.accessKey}
+						check={adapter.access}
 					/>
 				)}
 			</TeamsPermissions>
@@ -647,7 +703,7 @@ function TeamsSetupForm({
 				<TeamsInstall
 					connection={saved}
 					downloading={busy === "download"}
-					disabled={!!busy || !events.getTeamsBotPackage}
+					disabled={!!busy || !adapter.package}
 					onDownload={download}
 				/>
 			)}
@@ -656,8 +712,8 @@ function TeamsSetupForm({
 					connection={saved}
 					busy={busy}
 					disabled={!editable || serverBusy}
-					canRotate={!!events.rotateTeamsBotSecret}
-					canDisconnect={!!events.disconnectTeamsBot}
+					canRotate={!!adapter.rotate}
+					canDisconnect={!!adapter.disconnect}
 					onRotate={rotate}
 					onDisconnect={() => setConfirmDisconnect(true)}
 				/>
@@ -1583,17 +1639,17 @@ function TeamsAccessIcon({
 }
 
 function TeamsGraphAccess({
-	appId,
-	eventId,
+	queryKey,
 	check,
 }: Readonly<{
-	appId: string;
-	eventId: string;
-	check: (appId: string, eventId: string) => Promise<TeamsBotAccess>;
+	queryKey: readonly unknown[];
+	check: () => Promise<TeamsBotAccess>;
 }>) {
 	const { t } = useTranslation("interfaces");
-	const events = useBackend().eventState;
-	const access = useInvoke(check, events, [appId, eventId]);
+	const access = useQuery<TeamsBotAccess, Error>({
+		queryKey,
+		queryFn: check,
+	});
 	const copy = useTeamsAccessCopy(access);
 	const consentUrl = teamsConsentUrl(access.data);
 	return (

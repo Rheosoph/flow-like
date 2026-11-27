@@ -26,6 +26,7 @@ import {
 import type { GlobalChatBotView } from "../global-chat/use-global-chat-bot";
 import { Button } from "../ui/button";
 import { BotAppAccess } from "./bot-app-restrictions";
+import { BotChannels, offersChannels } from "./bot-channels";
 import { BotEncryption, offersEncryption } from "./bot-encryption";
 import {
 	BOT_LOCATION_ICONS,
@@ -468,6 +469,13 @@ export function BotDetails({
 			{bot && offersTasks(bot) && <BotTasks bot={bot} />}
 			{bot && offersEmail(bot) && <BotEmailAddress botId={bot.id} />}
 			{bot && offersWebhooks(bot) && <BotWebhooks key={bot.id} bot={bot} />}
+			{bot && offersChannels(bot) && (
+				<BotChannels
+					key={bot.id}
+					bot={bot}
+					onOpenConversation={actions.onOpenConversation}
+				/>
+			)}
 			{bot && <BotActions bot={bot} actions={actions} />}
 		</div>
 	);

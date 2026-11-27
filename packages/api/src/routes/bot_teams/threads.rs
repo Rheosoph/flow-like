@@ -43,7 +43,9 @@ pub(crate) fn classified(bot_name: &str, bot_level: Option<DataClassification>) 
     ApiError::coded(
         StatusCode::FORBIDDEN,
         TEAM_CLASSIFIED,
-        format!("'{bot_name}' is classified {level}, above your classification in this organization"),
+        format!(
+            "'{bot_name}' is classified {level}, above your classification in this organization"
+        ),
     )
 }
 
@@ -146,7 +148,16 @@ pub(crate) async fn sync_thread<C: ConnectionTrait>(
             limits: lead.limits,
         });
     }
-    seat_members(db, &thread.conversation_id, seats, &watchers, by, now, effects).await
+    seat_members(
+        db,
+        &thread.conversation_id,
+        seats,
+        &watchers,
+        by,
+        now,
+        effects,
+    )
+    .await
 }
 
 /// [`sync_thread`] for every thread with the team.

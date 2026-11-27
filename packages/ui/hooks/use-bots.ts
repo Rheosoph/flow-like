@@ -19,6 +19,10 @@ import {
 } from "../lib/tool-grant-scopes";
 import { useBackend } from "../state/backend-state";
 import type {
+	IBotDiscordInput,
+	IBotDiscordView,
+} from "../state/backend-state/bot-channels-state";
+import type {
 	BotApprovalDecision,
 	BotSystemKey,
 	IBot,
@@ -82,6 +86,12 @@ export const botKeys = {
 		[...botKeys.all, "mail-thread", botId, threadId] as const,
 	avatar: (botId: string, look: string) =>
 		[...botKeys.all, "avatar", botId, look] as const,
+	teams: (botId: string) => [...botKeys.all, "teams", botId] as const,
+	teamsAccess: (botId: string) =>
+		[...botKeys.teams(botId), "access"] as const,
+	channelLinks: (botId: string) =>
+		[...botKeys.all, "channel-links", botId] as const,
+	discord: (botId: string) => [...botKeys.all, "discord", botId] as const,
 };
 
 const BOT_STALE_TIME = 30_000;
@@ -1005,6 +1015,81 @@ export function useDeleteBotWebhook() {
 			requireBotState(state).deleteWebhook?.(botId, hookId) ?? unsupported(),
 		onSettled: (_, __, { botId }) =>
 			queryClient.invalidateQueries({ queryKey: botKeys.webhooks(botId) }),
+	});
+}
+
+/** The bot's Microsoft Teams connection; only fetched when the backend offers it. */
+export function useBotTeams(botId?: string | null, enabled = true) {
+	const state = useBackend().botState;
+	return useQuery({
+		queryKey: botKeys.teams(botId ?? ""),
+		queryFn: () => requireBotState(state).getTeams?.(botId as string),
+		enabled: Boolean(state?.getTeams && botId && enabled),
+	});
+}
+
+/** Chats outside people reached the bot from. */
+export function useBotChannelLinks(botId?: string | null, enabled = true) {
+	const state = useBackend().botState;
+	return useQuery({
+		queryKey: botKeys.channelLinks(botId ?? ""),
+		queryFn: () =>
+			requireBotState(state).listChannelLinks?.(botId as string) ?? [],
+		enabled: Boolean(state?.listChannelLinks && botId && enabled),
+	});
+}
+
+export function useDeleteBotChannelLink() {
+	const state = useBackend().botState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ botId, linkId }: { botId: string; linkId: string }) =>
+			requireBotState(state).deleteChannelLink?.(botId, linkId) ??
+			unsupported(),
+		onSettled: (_, __, { botId }) =>
+			queryClient.invalidateQueries({ queryKey: botKeys.channelLinks(botId) }),
+	});
+}
+
+const DISCORD_POLL_MS = 2_000;
+
+/** The Discord relay of a bot on this device; desktop only. */
+export function useBotDiscord(botId?: string | null) {
+	const discord = useBackend().botDiscordState;
+	return useQuery({
+		queryKey: botKeys.discord(botId ?? ""),
+		queryFn: () => discord?.get(botId as string) ?? null,
+		enabled: Boolean(discord && botId),
+		refetchInterval: (query) =>
+			query.state.data?.status === "connecting" ? DISCORD_POLL_MS : false,
+	});
+}
+
+export function useSaveBotDiscord() {
+	const discord = useBackend().botDiscordState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			botId,
+			input,
+		}: {
+			botId: string;
+			input: IBotDiscordInput;
+		}): Promise<IBotDiscordView> =>
+			discord?.set(botId, input) ?? unsupported(),
+		onSuccess: (view, { botId }) =>
+			queryClient.setQueryData(botKeys.discord(botId), view),
+	});
+}
+
+export function useRemoveBotDiscord() {
+	const discord = useBackend().botDiscordState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ botId }: { botId: string }) =>
+			discord?.remove(botId) ?? unsupported(),
+		onSettled: (_, __, { botId }) =>
+			queryClient.invalidateQueries({ queryKey: botKeys.discord(botId) }),
 	});
 }
 

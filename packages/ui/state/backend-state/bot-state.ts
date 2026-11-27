@@ -1,6 +1,13 @@
 import type { BotAppearance } from "../../components/bots/types";
 import type { BarcodeDetect } from "../../components/interfaces/chat-default/chatbox/barcode-frames";
 import type { IDataSensitivity } from "../../lib/data-classification";
+import type {
+	TeamsBotAccess,
+	TeamsBotConnection,
+	TeamsBotPackage,
+	TeamsBotSetup,
+} from "../../lib/teams-bot";
+import type { IBotChannelLink } from "./bot-channels-state";
 import type { IInboxApproval } from "./inbox-state";
 
 /** Wire ids, in the order the settings list them. New bots start with `memory`; the rest stays off until switched on. */
@@ -1280,6 +1287,17 @@ export interface IBotState {
 	deleteWebhook?(botId: string, hookId: string): Promise<void>;
 	/** The full URL of a webhook on the hub its bot lives on. */
 	webhookUrl?(botId: string, webhook: IBotWebhook): Promise<string>;
+	/** Microsoft Teams connection of an account bot; absent where the hub has no Teams support. */
+	getTeams?(botId: string): Promise<TeamsBotConnection>;
+	setupTeams?(botId: string, input: TeamsBotSetup): Promise<TeamsBotConnection>;
+	getTeamsPackage?(botId: string): Promise<TeamsBotPackage>;
+	rotateTeamsSecret?(botId: string): Promise<TeamsBotConnection>;
+	disconnectTeams?(botId: string): Promise<TeamsBotConnection>;
+	getTeamsAccess?(botId: string): Promise<TeamsBotAccess>;
+	/** Chats outside people reached the bot from, newest first. */
+	listChannelLinks?(botId: string): Promise<IBotChannelLink[]>;
+	/** Removes the link; its room stays and the next message opens a new one. */
+	deleteChannelLink?(botId: string, linkId: string): Promise<void>;
 	/** Creates the workspace on first use; repeating it returns the same app. Refused for Flux for now. */
 	getWorkspace?(botId: string): Promise<IBotWorkspace>;
 	/** The bot's notes in one conversation, without history; owner only. */

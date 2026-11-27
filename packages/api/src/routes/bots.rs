@@ -368,6 +368,8 @@ pub fn routes() -> Router<AppState> {
             "/{bot_id}/workspace/upload",
             post(workspace::upload_to_bot_workspace),
         )
+        .merge(crate::bot_channels::routes())
+        .merge(crate::teams::bot::routes())
 }
 
 /// The caller's bot `bot_id` if it is not deleted. Someone else's bot reads as 404 too, so the

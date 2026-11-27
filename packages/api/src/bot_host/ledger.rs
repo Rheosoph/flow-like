@@ -344,8 +344,7 @@ pub(crate) async fn enqueue_in<C: ConnectionTrait>(
     {
         waking.retain(|recipient| !on_server(recipient));
     }
-    let waking =
-        super::team_gate::admit(db, delivery.conversation_kind, waking, now).await?;
+    let waking = super::team_gate::admit(db, delivery.conversation_kind, waking, now).await?;
     let waking = super::cap::admit(db, waking, now).await?;
     let waking = waking_of(db, delivery, waking).await?;
     let entry = waking.first().map(|first| {

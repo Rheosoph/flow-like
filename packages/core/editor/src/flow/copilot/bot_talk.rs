@@ -1507,6 +1507,18 @@ mod tests {
             Ok(self.brief.clone())
         }
 
+        async fn org_lookup(
+            &self,
+            _caller: &CrewMember,
+            query: &str,
+        ) -> flow_like_types::Result<Option<OrgLookup>> {
+            Ok(self.brief.as_ref().map(|brief| OrgLookup {
+                org: brief.team_name.clone(),
+                note: Some(format!("searched for {query}")),
+                ..OrgLookup::default()
+            }))
+        }
+
         async fn has_grant(
             &self,
             from: &CrewMember,
@@ -3016,7 +3028,41 @@ mod tests {
     #[tokio::test]
     async fn a_bot_outside_every_team_reads_no_team_section() {
         let host = Arc::new(FakeHost::new(crew(), answering("ok")));
-        let prompt = talk(&host, true).turn().await.prompt.unwrap();
-        assert!(!prompt.contains("## YOUR TEAM"));
+        let turn = talk(&host, true).turn().await;
+        assert!(!turn.prompt.unwrap().contains("## YOUR TEAM"));
+        assert!(!turn.looks_up);
+    }
+
+    #[tokio::test]
+    async fn a_bot_in_a_team_looks_its_org_up_through_the_bridge() {
+        let host = Arc::new(FakeHost::new(crew(), answering("ok")).in_team(brief()));
+        let talk = Arc::new(talk(&host, true));
+        assert!(talk.turn().await.looks_up);
+        let owner = Owner::choosing("allow_once");
+        let bridge = BotTalkBridge::new(talk, owner.clone());
+
+        assert!(matches!(
+            bridge.clearance(ORG_LOOKUP_TOOL, &json!({})).await,
+            Clearance::Clear
+        ));
+        let found = parsed(
+            &bridge
+                .call(ORG_LOOKUP_TOOL, json!({ "query": "  payroll  " }))
+                .await,
+        );
+        assert_eq!(found["status"], "ok");
+        assert_eq!(found["tool"], ORG_LOOKUP_TOOL);
+        assert_eq!(found["org"], "Security");
+        assert_eq!(found["note"], "searched for payroll");
+        assert!(owner.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_lookup_outside_the_org_context_is_refused() {
+        let host = Arc::new(FakeHost::new(crew(), answering("ok")));
+        let result = parsed(&talk(&host, true).look_up(&json!({ "query": "x" })).await);
+        assert_eq!(result["status"], "error");
+        assert!(text(&result["message"]).contains("can't be looked up here"));
+        assert_eq!(org_lookup_tool_spec().name, ORG_LOOKUP_TOOL);
     }
 }

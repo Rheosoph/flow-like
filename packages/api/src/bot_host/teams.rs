@@ -311,9 +311,11 @@ async fn names_of<C: ConnectionTrait>(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    person_names(db, &ids)
-        .await
-        .map_err(|error| DbErr::Custom(format!("Reading the names of a team's people failed: {error}")))
+    person_names(db, &ids).await.map_err(|error| {
+        DbErr::Custom(format!(
+            "Reading the names of a team's people failed: {error}"
+        ))
+    })
 }
 
 /// An org's teams and the bots active in them.
@@ -378,7 +380,11 @@ impl OrgTables {
                     .as_deref()
                     .and_then(|lead| bots.get(lead))
                     .map(display_name),
-                bots: self.bots.iter().filter(|row| row.team_id == node.id).count() as u32,
+                bots: self
+                    .bots
+                    .iter()
+                    .filter(|row| row.team_id == node.id)
+                    .count() as u32,
             });
             let mut children: Vec<&bot_team::Model> = self
                 .teams

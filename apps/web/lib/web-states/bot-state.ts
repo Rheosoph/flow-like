@@ -49,6 +49,13 @@ import { RemoteBotComputerHost } from "@flow-like/flow-like-ui/lib/bot-screens/r
 import { createScreenSealing } from "@flow-like/flow-like-ui/lib/bot-screens/screen-sealing";
 import { browserInboxCrypto } from "@flow-like/flow-like-ui/lib/inbox-e2e-browser";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
+import type {
+	TeamsBotAccess,
+	TeamsBotConnection,
+	TeamsBotPackage,
+	TeamsBotSetup,
+} from "@flow-like/flow-like-ui/lib/teams-bot";
+import type { IBotChannelLink } from "@flow-like/flow-like-ui/state/backend-state/bot-channels-state";
 import {
 	type IBotApprovalItemDecision,
 	type IBotScreenAccess,
@@ -373,6 +380,68 @@ export class WebBotState implements IBotState {
 	): Promise<IBotMailThreadView> {
 		return apiGet<IBotMailThreadView>(
 			`${botPath(botId)}/mail/threads/${encodeURIComponent(threadId)}`,
+			this.backend.auth,
+		);
+	}
+
+	async getTeams(botId: string): Promise<TeamsBotConnection> {
+		return apiGet<TeamsBotConnection>(
+			`${botPath(botId)}/teams`,
+			this.backend.auth,
+		);
+	}
+
+	async setupTeams(
+		botId: string,
+		input: TeamsBotSetup,
+	): Promise<TeamsBotConnection> {
+		return apiPut<TeamsBotConnection>(
+			`${botPath(botId)}/teams`,
+			input,
+			this.backend.auth,
+		);
+	}
+
+	async getTeamsPackage(botId: string): Promise<TeamsBotPackage> {
+		return apiGet<TeamsBotPackage>(
+			`${botPath(botId)}/teams/package`,
+			this.backend.auth,
+		);
+	}
+
+	async rotateTeamsSecret(botId: string): Promise<TeamsBotConnection> {
+		return apiPost<TeamsBotConnection>(
+			`${botPath(botId)}/teams/rotate`,
+			{},
+			this.backend.auth,
+		);
+	}
+
+	async disconnectTeams(botId: string): Promise<TeamsBotConnection> {
+		return apiDelete<TeamsBotConnection>(
+			`${botPath(botId)}/teams`,
+			this.backend.auth,
+		);
+	}
+
+	async getTeamsAccess(botId: string): Promise<TeamsBotAccess> {
+		return apiGet<TeamsBotAccess>(
+			`${botPath(botId)}/teams/access`,
+			this.backend.auth,
+		);
+	}
+
+	async listChannelLinks(botId: string): Promise<IBotChannelLink[]> {
+		const response = await apiGet<{ links?: IBotChannelLink[] }>(
+			`${botPath(botId)}/channels`,
+			this.backend.auth,
+		);
+		return asArray(response?.links);
+	}
+
+	async deleteChannelLink(botId: string, linkId: string): Promise<void> {
+		await apiDelete(
+			`${botPath(botId)}/channels/${encodeURIComponent(linkId)}`,
 			this.backend.auth,
 		);
 	}

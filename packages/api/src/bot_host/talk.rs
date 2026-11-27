@@ -46,7 +46,7 @@ use flow_like::flow::copilot::{
 use flow_like_types::{
     bot::{BotLocation, BotSystemKind},
     bot_message::{ApprovalRequest, MessageBody},
-    bot_team::TeamBrief,
+    bot_team::{OrgLookup, TeamBrief},
     bot_turn::{MAX_HOPS, STORED_QUEUED, turn_id},
     data_classification::{DataClassification, DataSensitivity},
     inbox::{ActivityBody, ConversationKind, TOMBSTONE_FIELD},
@@ -712,6 +712,15 @@ impl BotTalkHost for ServerTalkHost {
     async fn team_brief(&self, caller: &CrewMember) -> flow_like_types::Result<Option<TeamBrief>> {
         let conversation = self.team_scope(caller).await?;
         Ok(teams::team_brief_in(&self.state, &caller.id, conversation.as_deref()).await?)
+    }
+
+    async fn org_lookup(
+        &self,
+        caller: &CrewMember,
+        query: &str,
+    ) -> flow_like_types::Result<Option<OrgLookup>> {
+        let conversation = self.team_scope(caller).await?;
+        Ok(teams::org_lookup_in(&self.state, &caller.id, conversation.as_deref(), query).await?)
     }
 
     async fn has_grant(&self, from: &CrewMember, to: &CrewMember) -> flow_like_types::Result<bool> {

@@ -158,8 +158,7 @@ fn flagged_conversations(
         .iter()
         .filter(|(_, members)| {
             members.iter().any(|member| {
-                member.principal_id == reader.inbox
-                    && flagged(member.limits.as_ref())
+                member.principal_id == reader.inbox && flagged(member.limits.as_ref())
             })
         })
         .map(|(id, _)| id.clone())

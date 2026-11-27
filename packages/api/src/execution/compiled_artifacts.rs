@@ -29,9 +29,7 @@ use flow_like::flow::board::Board;
 use flow_like::flow::compiled;
 use flow_like::state::{FlowNodeRegistry, FlowNodeRegistryInner};
 use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_storage::object_store::{
-    GetOptions, ObjectStore, PutMode, PutOptions, PutPayload,
-};
+use flow_like_storage::object_store::{GetOptions, ObjectStore, PutMode, PutOptions, PutPayload};
 use flow_like_storage::{Path, object_store::Error as StoreError};
 use flow_like_types::anyhow;
 use flow_like_types::dispatch::{ETAG_BOUND_LATEST_VERSION_SENTINEL, WasmPackageRef};
@@ -383,8 +381,12 @@ pub async fn ensure_compiled_artifact(
     if !built_while_queued {
         match take_build_turn(meta_store.as_ref(), &artifact_path).await {
             BuildTurn::Ours(lease) => {
+                let lease = HeldBuildLease {
+                    store: meta_store.clone(),
+                    path: lease,
+                };
                 let built = build_artifact(state, &target).await;
-                release_build_lease(meta_store.as_ref(), lease).await;
+                lease.release().await;
                 built?;
             }
             BuildTurn::Theirs(lease) => {
@@ -534,6 +536,31 @@ async fn wait_for_build(
     .await
 }
 
+/// The lease of a build in progress. Released when the build ends, and also when the request is
+/// dropped mid-build, so other instances do not wait out its TTL for an artifact nobody builds.
+struct HeldBuildLease {
+    store: Arc<dyn ObjectStore>,
+    path: Option<Path>,
+}
+
+impl HeldBuildLease {
+    async fn release(mut self) {
+        release_build_lease(self.store.as_ref(), self.path.take()).await;
+    }
+}
+
+impl Drop for HeldBuildLease {
+    fn drop(&mut self) {
+        let Some(path) = self.path.take() else {
+            return;
+        };
+        if let Ok(runtime) = flow_like_types::tokio::runtime::Handle::try_current() {
+            let store = self.store.clone();
+            runtime.spawn(async move { release_build_lease(store.as_ref(), Some(path)).await });
+        }
+    }
+}
+
 async fn release_build_lease(meta_store: &dyn ObjectStore, lease: Option<Path>) {
     let Some(lease) = lease else {
         return;
@@ -544,7 +571,10 @@ async fn release_build_lease(meta_store: &dyn ObjectStore, lease: Option<Path>) 
 }
 
 /// Load the board the artifact is compiled from, compile it and persist the artifact.
-async fn build_artifact(state: &AppState, target: &ArtifactTarget<'_>) -> flow_like_types::Result<()> {
+async fn build_artifact(
+    state: &AppState,
+    target: &ArtifactTarget<'_>,
+) -> flow_like_types::Result<()> {
     let ArtifactTarget {
         app_id,
         board_id,
@@ -706,8 +736,8 @@ mod tests {
     use super::{
         BUILD_LEASE_TTL, BuildTurn, DRAFT_MIN_RETENTION, LocalOnlyBoard, artifact_trust,
         artifact_trusted, ensure_server_runnable, lease_is_live, refresh_draft_artifact,
-        release_build_lease, require_selected_draft_etag, stored_artifact_written,
-        take_build_turn, wait_for_build,
+        release_build_lease, require_selected_draft_etag, stored_artifact_written, take_build_turn,
+        wait_for_build,
     };
     use crate::execution::wasm_node_stubs::WasmNodeStub;
     use flow_like::flow::board::{Board, Layer, LayerType};
@@ -790,7 +820,10 @@ mod tests {
         let now = SystemTime::now();
         assert!(lease_is_live(now, now));
         assert!(lease_is_live(now + Duration::from_secs(5), now));
-        assert!(lease_is_live(now - BUILD_LEASE_TTL + Duration::from_secs(1), now));
+        assert!(lease_is_live(
+            now - BUILD_LEASE_TTL + Duration::from_secs(1),
+            now
+        ));
         assert!(!lease_is_live(now - BUILD_LEASE_TTL, now));
     }
 

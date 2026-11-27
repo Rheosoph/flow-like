@@ -41,8 +41,8 @@ use flow_like_types::{
     data_classification::DataClassification,
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, DatabaseTransaction,
-    EntityTrait, PaginatorTrait, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait,
+    DatabaseTransaction, EntityTrait, PaginatorTrait, QueryFilter,
 };
 
 pub(crate) const TEAM_CHAT_LEAD: &str = "TEAM_CHAT_LEAD";
@@ -204,7 +204,8 @@ fn earlier(
         )),
         BotChatStatus::Pending => Ok(Earlier::Pending(row)),
         BotChatStatus::Declined => {
-            let retry_at = row.decided_at.unwrap_or(row.requested_at) + Duration::days(CHAT_RETRY_DAYS);
+            let retry_at =
+                row.decided_at.unwrap_or(row.requested_at) + Duration::days(CHAT_RETRY_DAYS);
             if retry_at > now {
                 return Err(ApiError::coded(
                     StatusCode::CONFLICT,
@@ -515,11 +516,7 @@ pub(crate) async fn sync_chats_of<C: ConnectionTrait>(
 
 /// Locks the bot and the conversation of its chat with `user_id`, bot first like every team
 /// change.
-async fn lock_chat(
-    txn: &DatabaseTransaction,
-    bot_id: &str,
-    user_id: &str,
-) -> Result<(), ApiError> {
+async fn lock_chat(txn: &DatabaseTransaction, bot_id: &str, user_id: &str) -> Result<(), ApiError> {
     lock_bot(txn, bot_id).await?;
     if let Some(conversation_id) = chat_row(txn, bot_id, user_id)
         .await?

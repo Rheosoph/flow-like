@@ -269,9 +269,14 @@ export interface ConversationRoomEvent {
 	by: string;
 }
 
-export type TriggerSource = "schedule" | "webhook" | "email" | "event";
+export type TriggerSource =
+	| "schedule"
+	| "webhook"
+	| "email"
+	| "event"
+	| "channel";
 
-/** Work that woke a bot: a schedule firing, a webhook, an email or an event. */
+/** Work that woke a bot: a schedule firing, a webhook, an email, an event or a chat message from outside. */
 export interface ConversationTrigger {
 	type: "trigger";
 	id: string;
@@ -443,6 +448,7 @@ const TRIGGER_SOURCES: readonly string[] = [
 	"webhook",
 	"email",
 	"event",
+	"channel",
 ];
 
 function fileHandle(value: unknown): IInboxFileHandle | undefined {

@@ -7,8 +7,8 @@ use super::{
     effects::Effects,
     model::{AcceptChatRequest, ChatRequestBody},
     people::remove_person_in,
-    threads::{TEAM_CLASSIFIED, TEAM_NO_LEAD, open_thread_in},
     tests::{create, join, own_bot, world},
+    threads::{TEAM_CLASSIFIED, TEAM_NO_LEAD, open_thread_in},
 };
 use crate::{
     entity::{
@@ -273,8 +273,12 @@ async fn accepting_opens_a_conversation_of_the_person_the_bot_and_the_watching_o
         members(&db, &conversation).await,
         set(&["anna", "jonas-bot", "jonas"])
     );
-    assert!(is_watching(member(&db, &conversation, "jonas").await.limits.as_ref()));
-    assert!(!is_watching(member(&db, &conversation, "anna").await.limits.as_ref()));
+    assert!(is_watching(
+        member(&db, &conversation, "jonas").await.limits.as_ref()
+    ));
+    assert!(!is_watching(
+        member(&db, &conversation, "anna").await.limits.as_ref()
+    ));
     let bot_limits: BotRoomLimits = serde_json::from_value(
         member(&db, &conversation, "jonas-bot")
             .await
@@ -362,7 +366,10 @@ async fn a_declined_request_waits_a_week_and_an_ended_chat_can_be_asked_again() 
     )
     .await
     .unwrap();
-    assert_eq!(reopened.conversation_id.as_deref(), Some(conversation.as_str()));
+    assert_eq!(
+        reopened.conversation_id.as_deref(),
+        Some(conversation.as_str())
+    );
     assert_eq!(
         members(&db, &conversation).await,
         set(&["anna", "jonas-bot", "jonas"])
@@ -377,7 +384,9 @@ async fn a_person_has_at_most_ten_requests_waiting() {
         let id = format!("extra-{index}");
         insert_bot(&db, &id, "jonas", "SERVER").await;
         own_bot(&db, "jonas", &kestrel, &id).await;
-        request_chat_in(&db, "anna", &ask(&id), at(10)).await.unwrap();
+        request_chat_in(&db, "anna", &ask(&id), at(10))
+            .await
+            .unwrap();
     }
     let over = request_chat_in(&db, "anna", &ask("jonas-bot"), at(11))
         .await
@@ -463,9 +472,16 @@ async fn a_person_leaving_the_org_ends_their_chat_and_a_bot_staying_keeps_it_sea
     let kestrel = org(&db).await;
     let conversation = open_chat(&db).await;
     let mut effects = Effects::default();
-    sync_chats_of(&db, &["jonas-bot".into()], &[], "mara", at(12), &mut effects)
-        .await
-        .unwrap();
+    sync_chats_of(
+        &db,
+        &["jonas-bot".into()],
+        &[],
+        "mara",
+        at(12),
+        &mut effects,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         members(&db, &conversation).await,
         set(&["anna", "jonas-bot", "jonas"])
@@ -481,7 +497,9 @@ async fn a_person_leaving_the_org_ends_their_chat_and_a_bot_staying_keeps_it_sea
 async fn a_thread_opens_with_the_lead_and_its_watching_owner() {
     let db = world().await;
     let kestrel = org(&db).await;
-    let none = open_thread_in(&db, "anna", &kestrel, at(10)).await.unwrap_err();
+    let none = open_thread_in(&db, "anna", &kestrel, at(10))
+        .await
+        .unwrap_err();
     assert_code(&none, StatusCode::CONFLICT, TEAM_NO_LEAD);
     assert!(none.public_message().unwrap().contains("Kestrel"));
     lead(&db, &kestrel, "jonas-bot").await;
@@ -491,7 +509,9 @@ async fn a_thread_opens_with_the_lead_and_its_watching_owner() {
     assert_code(&hidden, StatusCode::NOT_FOUND, TEAM_NOT_FOUND);
 
     classify_bot(&db, "jonas-bot", "restricted").await;
-    let above = open_thread_in(&db, "anna", &kestrel, at(10)).await.unwrap_err();
+    let above = open_thread_in(&db, "anna", &kestrel, at(10))
+        .await
+        .unwrap_err();
     assert_code(&above, StatusCode::FORBIDDEN, TEAM_CLASSIFIED);
     assert!(above.public_message().unwrap().contains("restricted"));
     classify_person(&db, &kestrel, "anna", "restricted").await;
@@ -502,18 +522,26 @@ async fn a_thread_opens_with_the_lead_and_its_watching_owner() {
         set(&["anna", "jonas-bot", "jonas"])
     );
     assert!(is_watching(
-        member(&db, &thread.conversation_id, "jonas").await.limits.as_ref()
+        member(&db, &thread.conversation_id, "jonas")
+            .await
+            .limits
+            .as_ref()
     ));
     let (again, _) = open_thread_in(&db, "anna", &kestrel, at(12)).await.unwrap();
     assert_eq!(again, thread);
 
-    let (own, _) = open_thread_in(&db, "jonas", &kestrel, at(13)).await.unwrap();
+    let (own, _) = open_thread_in(&db, "jonas", &kestrel, at(13))
+        .await
+        .unwrap();
     assert_eq!(
         members(&db, &own.conversation_id).await,
         set(&["jonas-bot", "jonas"])
     );
     assert!(!is_watching(
-        member(&db, &own.conversation_id, "jonas").await.limits.as_ref()
+        member(&db, &own.conversation_id, "jonas")
+            .await
+            .limits
+            .as_ref()
     ));
 }
 
@@ -557,10 +585,7 @@ async fn a_watching_owner_is_pushed_only_when_named() {
     use crate::{
         bot_notify::NoticeSink,
         push_notifications::DispatchNotificationInput,
-        routes::inbox::{
-            model::InboxEntry,
-            person_push::notify_message,
-        },
+        routes::inbox::{model::InboxEntry, person_push::notify_message},
     };
     use std::sync::Mutex;
 
@@ -569,19 +594,30 @@ async fn a_watching_owner_is_pushed_only_when_named() {
 
     #[async_trait::async_trait]
     impl NoticeSink for Recorder {
-        async fn send(&self, _id: &str, input: DispatchNotificationInput) -> flow_like_types::Result<()> {
+        async fn send(
+            &self,
+            _id: &str,
+            input: DispatchNotificationInput,
+        ) -> flow_like_types::Result<()> {
             self.0.lock().unwrap().push(input.user_id);
             Ok(())
         }
     }
 
-    async fn push(db: &DatabaseConnection, conversation: &str, id: &str, mentions: &[&str]) -> Vec<String> {
+    async fn push(
+        db: &DatabaseConnection,
+        conversation: &str,
+        id: &str,
+        mentions: &[&str],
+    ) -> Vec<String> {
         let outgoing = crate::routes::inbox::fixture::outgoing(
             id,
             flow_like_types::inbox::InboxEntryKind::Message,
             serde_json::json!({ "text": id, "mentions": mentions }),
         );
-        fan_out(db, conversation, "anna", 0, &outgoing, at(20)).await.unwrap();
+        fan_out(db, conversation, "anna", 0, &outgoing, at(20))
+            .await
+            .unwrap();
         let copy = inbox_entry::Entity::find()
             .filter(inbox_entry::Column::InboxId.eq("anna"))
             .filter(inbox_entry::Column::MessageId.eq(id))
@@ -590,7 +626,9 @@ async fn a_watching_owner_is_pushed_only_when_named() {
             .unwrap()
             .unwrap();
         let sink = Recorder::default();
-        notify_message(db, &sink, &InboxEntry::from(copy)).await.unwrap();
+        notify_message(db, &sink, &InboxEntry::from(copy))
+            .await
+            .unwrap();
         let sent = sink.0.lock().unwrap().clone();
         sent
     }
@@ -599,7 +637,10 @@ async fn a_watching_owner_is_pushed_only_when_named() {
     org(&db).await;
     let conversation = open_chat(&db).await;
     assert!(push(&db, &conversation, "quiet", &[]).await.is_empty());
-    assert_eq!(push(&db, &conversation, "named", &["jonas"]).await, vec!["jonas"]);
+    assert_eq!(
+        push(&db, &conversation, "named", &["jonas"]).await,
+        vec!["jonas"]
+    );
 }
 
 #[tokio::test]
@@ -607,12 +648,18 @@ async fn the_gate_silences_a_bot_above_a_person_once_and_lets_it_answer_otherwis
     let db = world().await;
     let kestrel = org(&db).await;
     let conversation = open_chat(&db).await;
-    fan_out(&db, &conversation, "anna", 0, &text("m1"), at(20)).await.unwrap();
+    fan_out(&db, &conversation, "anna", 0, &text("m1"), at(20))
+        .await
+        .unwrap();
     assert_eq!(turns(&db).await.len(), 1);
 
     classify_person(&db, &kestrel, "anna", "public").await;
-    fan_out(&db, &conversation, "anna", 0, &text("m2"), at(21)).await.unwrap();
-    fan_out(&db, &conversation, "anna", 0, &text("m3"), at(22)).await.unwrap();
+    fan_out(&db, &conversation, "anna", 0, &text("m2"), at(21))
+        .await
+        .unwrap();
+    fan_out(&db, &conversation, "anna", 0, &text("m3"), at(22))
+        .await
+        .unwrap();
     assert_eq!(turns(&db).await.len(), 1);
     assert_eq!(notices(&db, &conversation, "jonas-bot").await, 1);
     let notice = inbox_entry::Entity::find()
@@ -623,8 +670,14 @@ async fn the_gate_silences_a_bot_above_a_person_once_and_lets_it_answer_otherwis
         .await
         .unwrap()
         .unwrap();
-    let said = notice.envelope["body"]["text"].as_str().unwrap().to_string();
-    assert!(said.contains("doesn't answer here") && said.contains("internal"), "{said}");
+    let said = notice.envelope["body"]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        said.contains("doesn't answer here") && said.contains("internal"),
+        "{said}"
+    );
 
     classify_person(&db, &kestrel, "anna", "confidential").await;
     fan_out(&db, &conversation, "anna", 0, &text("m4"), at(23))
@@ -639,15 +692,26 @@ async fn the_gate_ignores_a_bot_whose_owner_is_the_lowest_person_and_ended_chats
     let kestrel = org(&db).await;
     let conversation = open_chat(&db).await;
     classify_person(&db, &kestrel, "jonas", "public").await;
-    fan_out(&db, &conversation, "anna", 0, &text("m1"), at(20)).await.unwrap();
-    assert_eq!(turns(&db).await.len(), 1, "the owner never gates their own bot");
+    fan_out(&db, &conversation, "anna", 0, &text("m1"), at(20))
+        .await
+        .unwrap();
+    assert_eq!(
+        turns(&db).await.len(),
+        1,
+        "the owner never gates their own bot"
+    );
 
     bot_team_chat::Entity::update_many()
-        .col_expr(bot_team_chat::Column::Status, Expr::value("ENDED".to_string()))
+        .col_expr(
+            bot_team_chat::Column::Status,
+            Expr::value("ENDED".to_string()),
+        )
         .exec(&db)
         .await
         .unwrap();
-    fan_out(&db, &conversation, "anna", 0, &text("m2"), at(21)).await.unwrap();
+    fan_out(&db, &conversation, "anna", 0, &text("m2"), at(21))
+        .await
+        .unwrap();
     assert_eq!(turns(&db).await.len(), 1, "an ended chat takes no turn");
     let _ = bot_team_bot::Entity::find().all(&db).await.unwrap();
 }

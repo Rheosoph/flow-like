@@ -7,14 +7,9 @@
 //! server ([`after_reply`]), Discord from the owner's desktop, which holds the connection and
 //! waits for the turn.
 
-mod routes;
+pub(crate) mod routes;
 
 pub(crate) use routes::routes;
-pub use routes::{
-    ChannelLinkList, ChannelLinkView, ChannelPostedView, ChannelTurnQuery, DiscordAttachment,
-    DiscordMessageRequest, DiscordSender, __path_delete_channel_link, __path_get_channel_turn,
-    __path_list_channel_links, __path_post_discord_message,
-};
 
 use crate::{
     bot_host,
@@ -174,10 +169,6 @@ pub(crate) fn outside_requester(provider: ChannelProvider, sender_id: &str) -> S
         provider.stored(),
         digest(&[provider.stored(), sender_id])
     )
-}
-
-pub(crate) fn is_outside_requester(id: &str) -> bool {
-    id.starts_with(OUTSIDE_REQUESTER_PREFIX)
 }
 
 pub(crate) fn link_id(bot_id: &str, provider: ChannelProvider, chat_key: &str) -> String {

@@ -32,6 +32,7 @@ pub(crate) mod activity;
 pub(crate) mod approvals;
 pub mod blocks;
 mod bot_mentions;
+pub(crate) mod channel_rooms;
 pub mod conversations;
 pub mod deletion;
 pub mod delivery;
