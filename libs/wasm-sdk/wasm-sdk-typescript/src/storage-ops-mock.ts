@@ -14,6 +14,11 @@ const key = (path: FlowPath) => JSON.stringify([path.store_ref, path.path]);
 const fail = (code: string, message: string): never => {
 	throw new StorageError(code, message);
 };
+const trimTrailingSlashes = (path: string) => {
+	let end = path.length;
+	while (end > 0 && path[end - 1] === "/") end--;
+	return path.slice(0, end);
+};
 
 export class MockStorageOps implements StorageOps {
 	private files = new Map<
@@ -110,7 +115,7 @@ export class MockStorageOps implements StorageOps {
 			if (this.listings.size >= 32)
 				fail("resource_limit", "Too many open listings");
 			id = this.nextId();
-			const prefix = request.path.path.replace(/\/+$/, "");
+			const prefix = trimTrailingSlashes(request.path.path);
 			entries = Array.from(this.files.values())
 				.filter((file) => {
 					if (file.path.store_ref !== request.path.store_ref) return false;

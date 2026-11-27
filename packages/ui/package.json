@@ -140,7 +140,7 @@
 		"hastscript": "^9.0.0",
 		"html-to-image": "1.11.11",
 		"html2canvas-pro": "^1.5.11",
-		"i18next": "^25.3.2",
+		"i18next": "^26.7.2",
 		"i18next-browser-languagedetector": "^8.0.2",
 		"idb-keyval": "^6.2.1",
 		"jose": "^6.1.0",

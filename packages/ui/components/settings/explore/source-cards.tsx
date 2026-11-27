@@ -1,6 +1,6 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
+import { type FallbackTranslate, useTranslation } from "@flow-like/locales";
 import {
 	AlertTriangle,
 	Boxes,
@@ -77,11 +77,7 @@ interface SourceAlert {
 
 export function summaryAlert(
 	summary: ITableSummary | undefined,
-	t: (
-		key: string,
-		fallback: string,
-		values?: Record<string, unknown>,
-	) => string,
+	t: FallbackTranslate,
 ): SourceAlert | null {
 	if (!summary) return null;
 	if (summary.error) {

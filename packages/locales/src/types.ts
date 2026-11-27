@@ -13,11 +13,28 @@ import type { SourceResources } from "./resources";
  * prunes call-siteless keys, and the studio shows them per namespace. Every
  * instrumented call also passes its English text as a default, so a key that
  * goes missing renders the source string rather than a raw key.
+ *
+ * `keySeparator: false` keeps dotted keys opaque to the types too. Without it,
+ * i18next 26 walks `theme.light` into the `string` value and types `t()` as
+ * `never`. Runtime lookups still split keys on `.`.
  */
 declare module "i18next" {
 	interface CustomTypeOptions {
 		defaultNS: "common";
 		resources: Record<keyof SourceResources, Record<string, string>>;
 		returnNull: false;
+		keySeparator: false;
 	}
+}
+
+/**
+ * A `t` that takes its English fallback as the second argument. Two call
+ * signatures rather than `options?`: i18next 26's `t` rejects an `undefined`
+ * third argument, so a `TFunction` is only assignable to this form.
+ */
+export interface FallbackTranslate<
+	Options extends object = Record<string, unknown>,
+> {
+	(key: string, fallback: string): string;
+	(key: string, fallback: string, options: Options): string;
 }

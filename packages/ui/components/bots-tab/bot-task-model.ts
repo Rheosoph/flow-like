@@ -1,3 +1,4 @@
+import type { FallbackTranslate } from "@flow-like/locales";
 import type {
 	IBotTask,
 	ICreateBotTaskRequest,
@@ -72,14 +73,13 @@ export function taskRequest(
 	};
 }
 
-export type TaskTranslate = (
-	key: string,
+export type TaskTranslate = FallbackTranslate;
+
+const englishText: TaskTranslate = (
+	_key: string,
 	fallback: string,
 	options?: Record<string, unknown>,
-) => string;
-
-const englishText: TaskTranslate = (_key, fallback, options) =>
-	fallback.replace(/{{(\w+)}}/g, (_, name) => String(options?.[name] ?? ""));
+) => fallback.replace(/{{(\w+)}}/g, (_, name) => String(options?.[name] ?? ""));
 
 function formatMoment(value: string, locale?: string): string | undefined {
 	const date = new Date(value);

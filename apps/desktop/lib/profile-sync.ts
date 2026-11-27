@@ -1,5 +1,6 @@
 import type { IProfile } from "@flow-like/flow-like-ui";
 import type { IHomeLayout } from "@flow-like/flow-like-ui/components/home/types";
+import { IConnectionMode } from "@flow-like/flow-like-ui/types";
 
 export type OnlineProfile = {
 	id: string;
@@ -9,7 +10,7 @@ export type OnlineProfile = {
 	thumbnail?: string | null;
 	interests?: string[];
 	tags?: string[];
-	theme?: any;
+	theme?: unknown;
 	home_layout?: IHomeLayout | null;
 	home_default_id?: string | null;
 	hidden_bots?: string[] | null;
@@ -25,7 +26,7 @@ export type OnlineProfile = {
 		order: number;
 		createdAt: string;
 	}>;
-	settings?: any;
+	settings?: IProfile["settings"];
 	hub: string;
 	hubs?: string[];
 	created_at: string;
@@ -52,7 +53,7 @@ export const toLocalProfile = (onlineProfile: OnlineProfile) => ({
 		hub: onlineProfile.hub,
 		hubs: onlineProfile.hubs ?? [],
 		settings: onlineProfile.settings ?? {
-			connection_mode: "simplebezier",
+			connection_mode: IConnectionMode.Simplebezier,
 		},
 		secure: true,
 		created: onlineProfile.created_at,
@@ -158,6 +159,23 @@ export function createProfileSyncQueue(minIntervalMs = 60_000) {
 		cancel(sync: Sync) {
 			if (pending === sync) pending = undefined;
 		},
+	};
+}
+
+/**
+ * Checking for deleted hub bits asks the hub about every bit in every profile,
+ * so it runs on the first sync and then hourly, not on every minute's sync.
+ */
+export const PROFILE_BIT_CHECK_INTERVAL_MS = 60 * 60_000;
+
+/** Returns true at most once per interval; the first call is always due. */
+export function createIntervalGate(intervalMs: number, now = Date.now) {
+	let last = Number.NEGATIVE_INFINITY;
+	return () => {
+		const time = now();
+		if (time - last < intervalMs) return false;
+		last = time;
+		return true;
 	};
 }
 

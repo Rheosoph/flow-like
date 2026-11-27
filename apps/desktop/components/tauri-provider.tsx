@@ -86,6 +86,8 @@ import { accountSession } from "../lib/local-bots/account";
 import { isIOSDevice, isMobileDevice } from "../lib/platform";
 import {
 	type OnlineProfile,
+	PROFILE_BIT_CHECK_INTERVAL_MS,
+	createIntervalGate,
 	createProfileSyncQueue,
 	mergeRemoteProfileMetadata,
 	storedSignedImageIsCurrent,
@@ -1274,6 +1276,9 @@ export function ProfileSyncer({
 	const profileSecure = profile.data?.secure;
 
 	const syncQueueRef = useRef(createProfileSyncQueue());
+	const bitCheckDueRef = useRef(
+		createIntervalGate(PROFILE_BIT_CHECK_INTERVAL_MS),
+	);
 	const profileRef = useRef(profile.data);
 
 	useEffect(() => {
@@ -2350,42 +2355,46 @@ export function ProfileSyncer({
 					}
 
 					if (disposed) return;
-					try {
-						const customBitsResponse = await fetchWithDeadline(
-							`${apiBase}/api/v1/user/bits?device_models=true`,
-							{
-								method: "GET",
-								headers: { Authorization: `Bearer ${accessToken}` },
-							},
-						);
-						if (!customBitsResponse.ok) {
-							throw new Error("Could not check the custom bit library.");
-						}
-						const customBits: unknown = await customBitsResponse.json();
-						if (!Array.isArray(customBits)) {
-							throw new Error("The custom bit library response is invalid.");
-						}
-						const remoteCustomBitIds = customBits.map((bit: unknown) => {
-							if (
-								!isRecord(bit) ||
-								typeof bit.id !== "string" ||
-								!bit.id.trim()
-							) {
+					if (bitCheckDueRef.current()) {
+						try {
+							const customBitsResponse = await fetchWithDeadline(
+								`${apiBase}/api/v1/user/bits?device_models=true`,
+								{
+									method: "GET",
+									headers: { Authorization: `Bearer ${accessToken}` },
+								},
+							);
+							if (!customBitsResponse.ok) {
+								throw new Error("Could not check the custom bit library.");
+							}
+							const customBits: unknown = await customBitsResponse.json();
+							if (!Array.isArray(customBits)) {
 								throw new Error("The custom bit library response is invalid.");
 							}
-							return bit.id;
-						});
-						if (disposed) return;
-						const prunedBits = await invoke<boolean>(
-							"prune_missing_profile_bits",
-							{ hub: apiBase, remoteCustomBitIds },
-						);
-						if (prunedBits) changed = true;
-						if (prunedBits && !disposed) {
-							void syncQueueRef.current.request(syncProfiles, true);
+							const remoteCustomBitIds = customBits.map((bit: unknown) => {
+								if (
+									!isRecord(bit) ||
+									typeof bit.id !== "string" ||
+									!bit.id.trim()
+								) {
+									throw new Error(
+										"The custom bit library response is invalid.",
+									);
+								}
+								return bit.id;
+							});
+							if (disposed) return;
+							const prunedBits = await invoke<boolean>(
+								"prune_missing_profile_bits",
+								{ hub: apiBase, remoteCustomBitIds },
+							);
+							if (prunedBits) changed = true;
+							if (prunedBits && !disposed) {
+								void syncQueueRef.current.request(syncProfiles, true);
+							}
+						} catch (error) {
+							console.warn("Failed to remove missing profile bits:", error);
 						}
-					} catch (error) {
-						console.warn("Failed to remove missing profile bits:", error);
 					}
 
 					console.log("[ProfileSync] Profile sync complete");

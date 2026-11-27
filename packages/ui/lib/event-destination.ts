@@ -1,3 +1,4 @@
+import type { FallbackTranslate } from "@flow-like/locales";
 import { eventKind } from "./device-management/deployment";
 import {
 	type EventSinkDefinition,
@@ -208,11 +209,7 @@ export function destinationSinkExecution(
 	return undefined;
 }
 
-type Translate = (
-	key: string,
-	defaultValue: string,
-	options?: { type: string },
-) => string;
+type Translate = FallbackTranslate<{ type: string }>;
 
 export function destinationReasonText(
 	t: Translate,
