@@ -858,14 +858,8 @@ async fn invoke_event_impl(
         .instrument(invoke_span!("invoke.scoped_credentials")),
         async {
             if remote && !sink_profile {
-                caller_dispatch_profile(
-                    &state,
-                    &user,
-                    &sub,
-                    params.profile_id.as_deref(),
-                    &app_id,
-                )
-                .await
+                caller_dispatch_profile(&state, &user, &sub, params.profile_id.as_deref(), &app_id)
+                    .await
             } else {
                 (None, None)
             }

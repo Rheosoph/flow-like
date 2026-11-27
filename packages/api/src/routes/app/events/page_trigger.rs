@@ -1270,11 +1270,19 @@ mod tests {
             Arc::new(CachedDraftPage::new(e_tag, held, 1)),
         );
         let read = revalidated_draft_page(&cache, store.clone(), &board, key, "page-1").await;
-        assert_eq!(read.unwrap().name, "Held", "storage confirmed the held copy");
+        assert_eq!(
+            read.unwrap().name,
+            "Held",
+            "storage confirmed the held copy"
+        );
 
         save("Saved again").await;
         let read = revalidated_draft_page(&cache, store.clone(), &board, key, "page-1").await;
-        assert_eq!(read.unwrap().name, "Saved again", "a save replaces the copy");
+        assert_eq!(
+            read.unwrap().name,
+            "Saved again",
+            "a save replaces the copy"
+        );
         assert_eq!(cache.get(key).unwrap().page.name, "Saved again");
 
         assert!(

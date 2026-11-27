@@ -19,9 +19,9 @@ use crate::{
 };
 use flow_like_types::{
     bot_team::{
-        BotChat, BotChatStatus, OrgApp, OrgBot, OrgView, PersonClassification, Team, TeamApp, TeamBot,
-        TeamInvitation, TeamInvitationKind, TeamMemberStatus, TeamPerson, TeamRole, TeamThread,
-        UNCLASSIFIED_PERSON, person_may_talk,
+        BotChat, BotChatStatus, OrgApp, OrgBot, OrgView, PersonClassification, Team, TeamApp,
+        TeamBot, TeamInvitation, TeamInvitationKind, TeamMemberStatus, TeamPerson, TeamRole,
+        TeamThread, UNCLASSIFIED_PERSON, person_may_talk,
     },
     data_classification::DataClassification,
 };
@@ -423,16 +423,8 @@ pub(crate) async fn org_view<C: ConnectionTrait>(
     org_bots.retain(|id, _| visible.contains(id));
     let mut inputs = inputs_of(db, &org_bots.values().collect::<Vec<_>>()).await?;
     let pins = visible_pin_rows(db, &ids_of(&teams)).await?;
-    let (apps, mut bot_apps) = chart_apps(
-        db,
-        user_id,
-        &pins,
-        &admin_teams,
-        &in_org,
-        &org_bots,
-        now,
-    )
-    .await?;
+    let (apps, mut bot_apps) =
+        chart_apps(db, user_id, &pins, &admin_teams, &in_org, &org_bots, now).await?;
     let mut bots: Vec<OrgBot> = org_bots
         .values()
         .map(|row| OrgBot {

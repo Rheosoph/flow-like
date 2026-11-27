@@ -25,12 +25,10 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{DateTime, FixedOffset};
-use flow_like_types::bot_team::{
-    MAX_TEAM_APPS, PinnableApp, Team, TeamMemberStatus, TeamRole,
-};
+use flow_like_types::bot_team::{MAX_TEAM_APPS, PinnableApp, Team, TeamMemberStatus, TeamRole};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, sea_query::Expr,
+    QueryFilter, QueryOrder, QuerySelect,
 };
 use std::collections::HashMap;
 
@@ -111,7 +109,11 @@ async fn administered_app<C: ConnectionTrait>(
     Ok(facts)
 }
 
-fn activate(row: bot_team_app::Model, by: &str, now: DateTime<FixedOffset>) -> bot_team_app::ActiveModel {
+fn activate(
+    row: bot_team_app::Model,
+    by: &str,
+    now: DateTime<FixedOffset>,
+) -> bot_team_app::ActiveModel {
     let mut update: bot_team_app::ActiveModel = row.into();
     update.status = Set(active().to_string());
     update.approved_by = Set(Some(by.to_string()));
@@ -179,7 +181,11 @@ pub(crate) async fn pin_app_in<C: ConnectionTrait>(
             effects.notice(
                 admin,
                 sub,
-                format!("wants to pin the app {} to the team {}", facts.name(), team.name),
+                format!(
+                    "wants to pin the app {} to the team {}",
+                    facts.name(),
+                    team.name
+                ),
             );
         }
         effects.wake(admins);

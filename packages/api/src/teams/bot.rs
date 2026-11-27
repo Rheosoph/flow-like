@@ -472,10 +472,10 @@ async fn accept(
             }
         }
         (PostStatus::Queued, _) => {
-            if tokio::time::timeout(SIDE_MESSAGE_TIMEOUT, send_typing(state, &fresh, &session))
-                .await
-                .is_err()
-            {
+            let typing =
+                tokio::time::timeout(SIDE_MESSAGE_TIMEOUT, send_typing(state, &fresh, &session))
+                    .await;
+            if typing.is_err() {
                 tracing::debug!(connection_id = %c.id, "Teams typing indicator timed out");
             }
         }

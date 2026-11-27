@@ -292,7 +292,9 @@ async fn a_declined_pin_is_deleted() {
         .await
         .unwrap_err();
     assert_code(&error, StatusCode::FORBIDDEN, TEAM_FORBIDDEN);
-    decline_pin_in(&db, "mara", &security, "app2").await.unwrap();
+    decline_pin_in(&db, "mara", &security, "app2")
+        .await
+        .unwrap();
     assert!(pins_of(&db, "jonas", &security).await.is_empty());
     let error = decline_pin_in(&db, "mara", &security, "app2")
         .await
@@ -312,9 +314,24 @@ async fn pinning_needs_a_team_seat_an_app_admin_role_and_a_real_app() {
     let error = pin(&db, "outsider", &security, "app1").await.unwrap_err();
     assert_code(&error, StatusCode::NOT_FOUND, TEAM_NOT_FOUND);
 
-    insert_app(&db, "workspace", "mara", Visibility::Private, Some("mara-bot"), AppStatus::Active)
-        .await;
-    insert_app(&db, "old", "mara", Visibility::Private, None, AppStatus::Archived).await;
+    insert_app(
+        &db,
+        "workspace",
+        "mara",
+        Visibility::Private,
+        Some("mara-bot"),
+        AppStatus::Active,
+    )
+    .await;
+    insert_app(
+        &db,
+        "old",
+        "mara",
+        Visibility::Private,
+        None,
+        AppStatus::Archived,
+    )
+    .await;
     for refused in ["workspace", "old", "missing"] {
         let error = pin(&db, "mara", &security, refused).await.unwrap_err();
         assert_eq!(error.status(), StatusCode::NOT_FOUND, "{refused}");
@@ -344,7 +361,9 @@ async fn the_pinner_a_team_admin_or_an_app_admin_unpins_nobody_else() {
     for id in ["app2", "app3", "app4"] {
         pin(&db, "jonas", &security, id).await.unwrap();
     }
-    let error = unpin_app_in(&db, "anna", &security, "app2").await.unwrap_err();
+    let error = unpin_app_in(&db, "anna", &security, "app2")
+        .await
+        .unwrap_err();
     assert_code(&error, StatusCode::FORBIDDEN, TEAM_FORBIDDEN);
     let error = unpin_app_in(&db, "outsider", &security, "app2")
         .await
@@ -353,7 +372,9 @@ async fn the_pinner_a_team_admin_or_an_app_admin_unpins_nobody_else() {
     unpin_app_in(&db, "jonas", &security, "app2").await.unwrap();
     unpin_app_in(&db, "mara", &security, "app3").await.unwrap();
     grant(&db, "app4", "outsider", ADMIN).await;
-    unpin_app_in(&db, "outsider", &security, "app4").await.unwrap();
+    unpin_app_in(&db, "outsider", &security, "app4")
+        .await
+        .unwrap();
     assert!(pins_of(&db, "mara", &security).await.is_empty());
 }
 
@@ -379,9 +400,24 @@ async fn pins_of_a_person_who_left_the_org_go_with_them() {
 #[tokio::test]
 async fn everyone_in_the_org_sees_metadata_but_only_members_see_numbers() {
     let (db, security) = apps_world().await;
-    insert_app(&db, "open", "jonas", Visibility::PublicRequestAccess, None, AppStatus::Active)
-        .await;
-    insert_app(&db, "shut", "jonas", Visibility::Private, None, AppStatus::Active).await;
+    insert_app(
+        &db,
+        "open",
+        "jonas",
+        Visibility::PublicRequestAccess,
+        None,
+        AppStatus::Active,
+    )
+    .await;
+    insert_app(
+        &db,
+        "shut",
+        "jonas",
+        Visibility::Private,
+        None,
+        AppStatus::Active,
+    )
+    .await;
     name_app(&db, "open", "de", "Offen").await;
     name_app(&db, "open", "en", "Open").await;
     name_app(&db, "shut", "en", "Shut").await;
@@ -537,8 +573,15 @@ async fn a_bots_apps_count_only_while_it_is_active_and_never_its_workspace() {
     let (db, security) = apps_world().await;
     app_of(&db, "app1", "mara").await;
     app_of(&db, "app2", "jonas").await;
-    insert_app(&db, "workspace", "mara", Visibility::Private, Some("mara-bot"), AppStatus::Active)
-        .await;
+    insert_app(
+        &db,
+        "workspace",
+        "mara",
+        Visibility::Private,
+        Some("mara-bot"),
+        AppStatus::Active,
+    )
+    .await;
     for (bot, app_id) in [
         ("mara-bot", "app1"),
         ("mara-bot", "workspace"),
@@ -561,7 +604,9 @@ async fn a_bots_apps_count_only_while_it_is_active_and_never_its_workspace() {
         bot_id: "anna-bot".into(),
         limits: None,
     };
-    add_bot_in(&db, "mara", &security, &invite, at(5)).await.unwrap();
+    add_bot_in(&db, "mara", &security, &invite, at(5))
+        .await
+        .unwrap();
     let view = org_view(&db, "mara").await.unwrap();
     let ids = |bot: &str| {
         view.bots
@@ -589,7 +634,9 @@ async fn the_pin_dialog_lists_my_apps_admin_first_with_pins_here_and_elsewhere()
     name_app(&db, "alpha", "en", "Alpha").await;
     name_app(&db, "mid", "en", "Mid").await;
     pin(&db, "jonas", &other, "mid").await.unwrap();
-    approve_pin_in(&db, "mara", &other, "mid", at(11)).await.unwrap();
+    approve_pin_in(&db, "mara", &other, "mid", at(11))
+        .await
+        .unwrap();
     pin(&db, "jonas", &security, "zeta").await.unwrap();
     let apps = list_pinnable_in(&db, "jonas", &security).await.unwrap();
     let names: Vec<&str> = apps.iter().map(|app| app.name.as_str()).collect();
@@ -598,6 +645,8 @@ async fn the_pin_dialog_lists_my_apps_admin_first_with_pins_here_and_elsewhere()
     assert_eq!(apps[1].pinned, Some(TeamMemberStatus::Pending));
     assert!(!apps[2].reader_admin);
     assert_eq!(apps[0].owner_id.as_deref(), Some("jonas"));
-    let error = list_pinnable_in(&db, "outsider", &security).await.unwrap_err();
+    let error = list_pinnable_in(&db, "outsider", &security)
+        .await
+        .unwrap_err();
     assert_code(&error, StatusCode::NOT_FOUND, TEAM_NOT_FOUND);
 }

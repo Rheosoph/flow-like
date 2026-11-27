@@ -154,7 +154,9 @@ mod tests {
             .await
             .unwrap();
 
-        discard_payload(store.clone(), "app1", "run1").await.unwrap();
+        discard_payload(store.clone(), "app1", "run1")
+            .await
+            .unwrap();
 
         assert!(matches!(
             retrieve_payload(store, "app1", "run1", &stored.key).await,

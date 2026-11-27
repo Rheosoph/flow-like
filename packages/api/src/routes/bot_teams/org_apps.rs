@@ -1,13 +1,13 @@
 //! Apps in the org chart: the metadata and type everyone in an org sees, and the live numbers
 //! only members of an app see.
 
-use super::access::active;
 use crate::{
     entity::{
         app, event, execution_usage_daily, execution_usage_tracking, membership, meta, page, role,
         sea_orm_active_enums::{AppType, ExecutionStatus, Status, Visibility},
     },
     execution_usage_rollup::{last_closed_day, rolled_days},
+    permission::role_permission::RolePermissions,
     routes::{
         app::events::db::extract_cron_expression,
         explore::{
@@ -16,7 +16,6 @@ use crate::{
         },
     },
     state::AppState,
-    permission::role_permission::RolePermissions,
     utils::{day_buckets::Buckets, time::utc_midnight},
 };
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate};
@@ -469,8 +468,4 @@ pub(crate) async fn org_apps<C: ConnectionTrait>(
         .collect();
     cards.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(cards)
-}
-
-pub(crate) fn is_active(status: &str) -> bool {
-    status == active()
 }

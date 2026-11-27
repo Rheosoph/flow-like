@@ -992,7 +992,7 @@ fn ranked<T>(items: &[T], score: impl Fn(&T) -> u32) -> Vec<&T> {
         .map(|item| (score(item), item))
         .filter(|(score, _)| *score > 0)
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     scored.into_iter().map(|(_, item)| item).collect()
 }
 
