@@ -252,6 +252,7 @@ pub(crate) async fn deliver_held_in<C: ConnectionTrait>(
             hands_over: false,
             chain_origin: None,
             discussion_hops: None,
+            team_addressed: false,
         },
     )
     .await?;

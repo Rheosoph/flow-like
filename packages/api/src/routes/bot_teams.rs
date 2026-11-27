@@ -4,7 +4,7 @@
 
 use crate::{
     db::coordination::coordinate,
-    entity::{bot_team, bot_team_bot},
+    entity::{bot_team, bot_team_bot, bot_team_thread},
     routes::{bots::lock_bot, inbox::team_room::lock_room},
     state::AppState,
 };
@@ -21,8 +21,11 @@ pub mod model;
 pub mod people;
 pub(crate) mod room;
 pub mod teams;
+pub(crate) mod threads;
 pub(crate) mod view;
 
+#[cfg(test)]
+mod request_tests;
 #[cfg(test)]
 mod tests;
 
@@ -53,7 +56,7 @@ pub(crate) async fn lock_scope(
         coordinate(txn, "bot-team", &[team_id]).await?;
     }
     let mut rooms: Vec<String> = bot_team::Entity::find()
-        .filter(bot_team::Column::Id.is_in(teams))
+        .filter(bot_team::Column::Id.is_in(teams.clone()))
         .all(txn)
         .await?
         .into_iter()
@@ -61,6 +64,16 @@ pub(crate) async fn lock_scope(
         .collect();
     for room_id in sorted(&mut rooms) {
         lock_room(txn, room_id).await?;
+    }
+    let mut threads: Vec<String> = bot_team_thread::Entity::find()
+        .filter(bot_team_thread::Column::TeamId.is_in(teams))
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|thread| thread.conversation_id)
+        .collect();
+    for thread_id in sorted(&mut threads) {
+        lock_room(txn, thread_id).await?;
     }
     Ok(())
 }

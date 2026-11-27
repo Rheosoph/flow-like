@@ -27,6 +27,8 @@ import { cn, humanFileSize } from "../../../lib/utils";
 import type { ComposerAttachSource } from "../../../state/composer-capture";
 import { useMentionPicker } from "../../bots-tab/mention-picker";
 import type { Mentionable } from "../../bots-tab/mentions";
+import type { TeamTagOption } from "../../bots-tab/team-tag-model";
+import { useTeamTagPicker } from "../../bots-tab/team-tag-picker";
 import type { ThinkingOption } from "../../thinking/thinking-options";
 import { ThinkingPicker } from "../../thinking/thinking-picker";
 import { Button } from "../../ui/button";
@@ -92,6 +94,8 @@ interface ChatBoxProps {
 	actions?: ReactNode;
 	/** Who typing `@` suggests; the text keeps `@Name`, so the host reads mentions from it. */
 	mentionables?: readonly Mentionable[];
+	/** Teams a leading `#` suggests; the text keeps `#Tag`, which the server reads. */
+	teamTags?: readonly TeamTagOption[];
 	placeholder?: string;
 	/** This chat's own "+" sources, e.g. its app storage. Keep the array stable between renders. */
 	attachSources?: readonly ComposerAttachSource[];
@@ -165,6 +169,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			model,
 			actions,
 			mentionables,
+			teamTags,
 			placeholder,
 			attachSources,
 		}: Readonly<ChatBoxProps>,
@@ -187,6 +192,13 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		const transcriptionBaseRef = useRef("");
 		const mentionPicker = useMentionPicker({
 			mentionables,
+			value: input,
+			onChange: setInput,
+			inputRef: chatboxRef,
+		});
+
+		const teamTagPicker = useTeamTagPicker({
+			teams: teamTags,
 			value: input,
 			onChange: setInput,
 			inputRef: chatboxRef,
@@ -436,7 +448,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
 			if (e.nativeEvent.isComposing || composing) return;
-			if (mentionPicker.handleKeyDown(e)) return;
+			if (mentionPicker.handleKeyDown(e) || teamTagPicker.handleKeyDown(e))
+				return;
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
 				void handleSubmit(e);
@@ -565,11 +578,15 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 				onChange={(e) => {
 					setInput(e.target.value);
 					mentionPicker.track(e.target);
+					teamTagPicker.track(e.target);
 				}}
 				onCompositionStart={() => setComposing(true)}
 				onCompositionEnd={() => setComposing(false)}
 				onKeyDown={handleKeyDown}
-				onKeyUp={mentionPicker.handleKeyUp}
+				onKeyUp={(e) => {
+					mentionPicker.handleKeyUp(e);
+					teamTagPicker.handleKeyUp(e);
+				}}
 				onPaste={handlePaste}
 				placeholder={
 					placeholder ?? i18next.t("typeAMessage", "Type a message...")
@@ -799,6 +816,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					data-guide="chat-composer"
 				>
 					{mentionPicker.menu}
+					{teamTagPicker.menu}
 					{compact ? (
 						<div
 							className="flex flex-col overflow-hidden rounded-[22px] border border-border shadow-sm transition-[border-color] duration-200 focus-within:border-muted-foreground/40"

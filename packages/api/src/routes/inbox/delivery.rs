@@ -63,6 +63,9 @@ pub(crate) struct BotDelivery {
     /// (`body.discussion`), or for a bot's message what its chain was allowed; `None`: the
     /// default budget.
     pub discussion_hops: Option<u32>,
+    /// A person's `#Team` message: it goes to those teams' leads and wakes no bot of the
+    /// conversation it was written in.
+    pub team_addressed: bool,
 }
 
 impl BotDelivery {

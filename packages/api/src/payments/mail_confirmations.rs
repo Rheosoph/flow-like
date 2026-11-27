@@ -122,7 +122,8 @@ fn confirmation_event(
     };
     let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp)
         .ok_or_else(|| ApiError::internal("Invalid payment confirmation timestamp"))?
-        .to_rfc3339();
+        .format("%-d %B %Y, %H:%M:%S UTC")
+        .to_string();
     if kind != "withdrawn" {
         return Ok(vec![("Purchase confirmed at".into(), timestamp)]);
     }
@@ -254,7 +255,7 @@ mod tests {
             [
                 row("Consumer name", "Jörg Buyer"),
                 row("Declaration received", "I withdraw from order order."),
-                row("Received at", "1970-01-01T00:00:00+00:00"),
+                row("Received at", "1 January 1970, 00:00:00 UTC"),
             ]
         );
     }

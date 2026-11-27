@@ -181,7 +181,7 @@ export function startNewTopic(
 	});
 }
 
-/** A trigger the model reads as what it was asked; a bot ask is only shown. */
+/** A trigger the model reads as what it was asked; a bot ask or a team's answer is only shown. */
 function noticeOf(
 	note: ConversationNote,
 	botId: string,
@@ -208,7 +208,11 @@ function messageOf(
 	botId: string,
 	sessionId: string,
 ): IMessage | null {
-	if (item.type === "trigger" || item.type === "bot_ask") {
+	if (
+		item.type === "trigger" ||
+		item.type === "bot_ask" ||
+		item.type === "team_answer"
+	) {
 		return noticeOf(item, botId, sessionId);
 	}
 	if (item.type === "transcript") {

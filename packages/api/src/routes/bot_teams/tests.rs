@@ -22,13 +22,14 @@ use flow_like_types::{
 use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, Schema};
 use std::collections::BTreeMap;
 
-async fn world() -> DatabaseConnection {
+pub(super) async fn world() -> DatabaseConnection {
     let db = database().await;
     let schema = Schema::new(db.get_database_backend());
     for table in [
         schema.create_table_from_entity(bot_team::Entity),
         schema.create_table_from_entity(crate::entity::bot_team_person::Entity),
         schema.create_table_from_entity(bot_team_bot::Entity),
+        schema.create_table_from_entity(crate::entity::bot_team_thread::Entity),
     ] {
         db.execute(&table).await.unwrap();
     }
@@ -50,7 +51,7 @@ async fn world() -> DatabaseConnection {
     db
 }
 
-async fn create(
+pub(super) async fn create(
     db: &DatabaseConnection,
     sub: &str,
     name: &str,
@@ -66,7 +67,7 @@ async fn create(
         .map(|(id, _)| id)
 }
 
-async fn join(db: &DatabaseConnection, admin: &str, team: &str, user: &str) {
+pub(super) async fn join(db: &DatabaseConnection, admin: &str, team: &str, user: &str) {
     let request = AddPeopleRequest {
         user_ids: vec![user.into()],
         role: None,
@@ -77,7 +78,7 @@ async fn join(db: &DatabaseConnection, admin: &str, team: &str, user: &str) {
     join_in(db, user, team, at(3)).await.unwrap();
 }
 
-async fn own_bot(db: &DatabaseConnection, sub: &str, team: &str, bot_id: &str) {
+pub(super) async fn own_bot(db: &DatabaseConnection, sub: &str, team: &str, bot_id: &str) {
     let request = AddBotRequest {
         bot_id: bot_id.into(),
         limits: None,
@@ -85,7 +86,7 @@ async fn own_bot(db: &DatabaseConnection, sub: &str, team: &str, bot_id: &str) {
     add_bot_in(db, sub, team, &request, at(4)).await.unwrap();
 }
 
-async fn patch(
+pub(super) async fn patch(
     db: &DatabaseConnection,
     sub: &str,
     team: &str,
@@ -96,7 +97,7 @@ async fn patch(
         .map(|_| ())
 }
 
-async fn team(db: &DatabaseConnection, id: &str) -> bot_team::Model {
+pub(super) async fn team(db: &DatabaseConnection, id: &str) -> bot_team::Model {
     bot_team::Entity::find_by_id(id)
         .one(db)
         .await

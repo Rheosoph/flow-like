@@ -3,12 +3,12 @@
 use super::access::{active, load_team, org_of, pending};
 use crate::{
     bot_host::teams::{org_teams, root_of},
-    entity::{bot, bot_team, bot_team_bot, bot_team_person},
+    entity::{bot, bot_team, bot_team_bot, bot_team_person, bot_team_thread},
     error::ApiError,
 };
 use flow_like_types::bot_team::{
     OrgBot, OrgView, Team, TeamBot, TeamInvitation, TeamInvitationKind, TeamMemberStatus,
-    TeamPerson, TeamRole,
+    TeamPerson, TeamRole, TeamThread,
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder};
 use std::collections::{HashMap, HashSet};
@@ -156,10 +156,23 @@ pub(crate) async fn org_view<C: ConnectionTrait>(
         .collect();
     bots.sort_by(|a, b| a.id.cmp(&b.id));
     let invitations = invitations_for(db, user_id, &rows, &own_teams, &names).await?;
+    let threads = bot_team_thread::Entity::find()
+        .filter(bot_team_thread::Column::UserId.eq(user_id))
+        .filter(bot_team_thread::Column::TeamId.is_in(teams.iter().map(|team| team.id.clone())))
+        .order_by_asc(bot_team_thread::Column::CreatedAt)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|row| TeamThread {
+            team_id: row.team_id,
+            conversation_id: row.conversation_id,
+        })
+        .collect();
     Ok(OrgView {
         teams: team_views(db, &teams).await?,
         bots,
         invitations,
+        threads,
     })
 }
 

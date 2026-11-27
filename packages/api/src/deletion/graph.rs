@@ -430,11 +430,20 @@ fn build() -> FkGraph {
     graph.register::<crate::entity::bot_team::Entity>();
     graph.register::<crate::entity::bot_team_person::Entity>();
     graph.register::<crate::entity::bot_team_bot::Entity>();
+    graph.register::<crate::entity::bot_team_thread::Entity>();
     for (child, column, parent, action) in [
         ("BotTeamPerson", "teamId", "BotTeam", FkAction::Cascade),
         ("BotTeamPerson", "userId", "User", FkAction::Cascade),
         ("BotTeamBot", "teamId", "BotTeam", FkAction::Cascade),
         ("BotTeamBot", "botId", "Bot", FkAction::Cascade),
+        ("BotTeamThread", "teamId", "BotTeam", FkAction::Cascade),
+        ("BotTeamThread", "userId", "User", FkAction::Cascade),
+        (
+            "BotTeamThread",
+            "conversationId",
+            "Conversation",
+            FkAction::Cascade,
+        ),
         ("BotTeam", "parentId", "BotTeam", FkAction::SetNull),
         ("BotTeam", "leadBotId", "Bot", FkAction::SetNull),
         (

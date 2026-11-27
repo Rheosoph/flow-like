@@ -78,6 +78,34 @@ export interface IOrgView {
 	teams: ITeam[];
 	bots: IOrgBot[];
 	invitations: ITeamInvitation[];
+	/** The viewer's own threads with teams, where their `#Team` requests went. */
+	threads?: ITeamThread[];
+}
+
+/** A person's thread with a team: their `#Team` requests land there and the team's lead answers. */
+export interface ITeamThread {
+	team_id: string;
+	conversation_id: string;
+}
+
+/** `body.team_request` on the copy of a `#Team` request in the person's thread. */
+export interface ITeamRequestRef {
+	team_id: string;
+	origin_conversation_id: string;
+	origin_message_id: string;
+	/** The lead's answer is copied back into the origin, the person's own chat with a bot. */
+	answer_here: boolean;
+}
+
+/** An activity entry's body: a lead's answer to a `#Team` request, copied into the chat it came from. */
+export interface ITeamAnswerActivity {
+	type: "team_answer";
+	team_id: string;
+	lead_id: string;
+	thread_id: string;
+	request_message_id: string;
+	reply_message_id: string;
+	text: string;
 }
 
 export interface ICreateTeamRequest {

@@ -51,6 +51,16 @@ Every team has a room with its people and bots. The lead reads along and answers
 
 Deleting a team keeps its room as a plain group chat, so nobody loses the history.
 
+## Asking a team from any chat
+
+Start a message with the team's tag, like `#ITSupport is the VPN down?`, and it goes to that team instead of the bots in the chat you're in. Typing `#` at the start of a message suggests your org's teams. The tag is the team's name without spaces, and you can address up to three teams at once: `#Security #ITSupport`. A tag later in the message is just text.
+
+The question lands in your thread with that team, a chat with you, the team's lead and the lead's owner, which you'll find under the team in your chat list. The lead answers there and can hand parts to teammates.
+
+When you asked from your own chat with one of your bots, the lead's answer also shows up right there, with a link to the thread. In a room or a chat with other people, the answer stays in your thread, so it never reaches people you didn't ask.
+
+You can address any team in an org you belong to, as long as it has a lead. If you leave the org, your threads stay readable, but the lead leaves them. Teams can't be addressed in end-to-end encrypted chats, since the server can't read those messages.
+
 ## Who a bot can ask
 
 A bot in a team can ask more bots than its owner's own:

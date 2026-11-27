@@ -55,6 +55,7 @@ import {
 	triggerPreview,
 	webhookFacts,
 } from "./note-facts";
+import { TeamAnswerCard } from "./team-answer-card";
 
 const SOURCE_ICONS: Readonly<Record<TriggerSource, LucideIcon>> = {
 	schedule: AlarmClockIcon,
@@ -79,6 +80,11 @@ export function useNoteText() {
 			nameOf: (id: string) => string,
 			viewerBotId?: string,
 		): string => {
+			if (note.type === "team_answer") {
+				return t("teams.requests.answer.snippet", "{{name}} answered", {
+					name: nameOf(note.leadId),
+				});
+			}
 			if (note.type === "bot_ask") {
 				if (viewerBotId === note.askerId) {
 					return t("crew.note.messaged", "Messaged {{name}}", {
@@ -142,7 +148,7 @@ function useNoteTime(time: number, style: "short" | "long" = "short"): string {
 }
 
 /** Opens a conversation in the Bots tab, from the tab itself or from any chat. */
-function useOpenConversation() {
+export function useOpenConversation() {
 	const router = useClientRouter();
 	return useCallback(
 		(conversationId: string) => {
@@ -573,9 +579,15 @@ export function ConversationNotePill({
 	note,
 	viewerBotId,
 }: Readonly<{ note: ConversationNote; viewerBotId?: string }>) {
-	return note.type === "trigger" ? (
-		<TriggerPill trigger={note} />
-	) : (
-		<BotAskPill ask={note} viewerBotId={viewerBotId} />
-	);
+	const openConversation = useOpenConversation();
+	if (note.type === "trigger") return <TriggerPill trigger={note} />;
+	if (note.type === "team_answer") {
+		return (
+			<TeamAnswerCard
+				answer={note}
+				onOpenThread={() => openConversation(note.threadId)}
+			/>
+		);
+	}
+	return <BotAskPill ask={note} viewerBotId={viewerBotId} />;
 }

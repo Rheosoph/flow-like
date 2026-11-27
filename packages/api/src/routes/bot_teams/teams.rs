@@ -7,6 +7,7 @@ use super::{
     lock_org_scope, lock_scope,
     model::{CreateTeamRequest, PatchTeamRequest},
     room::sync_room,
+    threads::{release_team_threads, sync_team_threads},
     view::{org_view, team_view},
 };
 use crate::{
@@ -317,6 +318,7 @@ pub(crate) async fn patch_team_in<C: ConnectionTrait>(
     }
     if lead_changed {
         sync_room(db, &team, sub, now, &mut effects).await?;
+        sync_team_threads(db, &team, sub, now, &mut effects).await?;
     }
     Ok(effects)
 }
@@ -363,7 +365,11 @@ pub async fn patch_team(
 pub(crate) async fn remove_team_rows<C: ConnectionTrait>(
     db: &C,
     team: &bot_team::Model,
+    by: &str,
+    now: DateTime<FixedOffset>,
+    effects: &mut Effects,
 ) -> Result<(), ApiError> {
+    release_team_threads(db, team, by, now, effects).await?;
     bot_team::Entity::update_many()
         .col_expr(
             bot_team::Column::ParentId,
@@ -402,7 +408,7 @@ pub(crate) async fn remove_team_and_prune<C: ConnectionTrait>(
         .filter(|child| child.parent_id.as_deref() == Some(team.id.as_str()))
         .map(|child| child.id.clone())
         .collect();
-    remove_team_rows(db, team).await?;
+    remove_team_rows(db, team, by, now, effects).await?;
     let roots = match team.parent_id {
         Some(_) => vec![org.root.id.clone()],
         None => children,

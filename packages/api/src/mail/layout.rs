@@ -1,69 +1,112 @@
 //! The one look of every email the platform sends. An email is a list of blocks, and the same
 //! blocks render its HTML part and its plain-text part, so a client without HTML reads all of
-//! it. The HTML is a light card that turns dark where the client follows the system theme
-//! (Apple Mail, Outlook for Mac and iOS, Outlook.com), built from tables and inline styles so
-//! Outlook for Windows and Gmail keep it intact, with no images and no web fonts: nothing is
-//! fetched when it opens, and nothing breaks when images are blocked.
+//! it. The HTML is a white card on a warm canvas in the brand's orange, which turns dark where the
+//! client follows the system theme (Apple Mail, Outlook for Mac and iOS, Outlook.com). It is built
+//! from tables and inline styles so Outlook for Windows and Gmail keep it intact, with no images
+//! and no web fonts: nothing is fetched when it opens, and nothing breaks when images are blocked.
 
 const FONT: &str =
-    "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
-const MONO: &str = "'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace";
+    "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+const MONO: &str = "'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace";
 const CONTACT: &str = "help@great-co.de";
 const COMPANY: &str = "Flow-Like by Rheosoph GmbH";
+const PRIVACY_POLICY: &str = "https://flow-like.com/privacy-policy";
+const LEGAL_NOTICE: &str = "https://flow-like.com/legal-notice";
 
-const PAGE: &str = "#f3f3f7";
-const CARD: &str = "#ffffff";
-const BORDER: &str = "#e4e4ea";
-const PANEL: &str = "#f7f7fa";
-const PANEL_BORDER: &str = "#e9e9f0";
-const INK: &str = "#16161d";
-const BODY: &str = "#33333d";
-const MUTED: &str = "#5c5c68";
-const SUBTLE: &str = "#7c7c8a";
-const ACCENT: &str = "#4f46e5";
-const BRAND: &str = "#6366f1";
+const PAGE: &str = "#F5F5F4";
+const CARD: &str = "#FFFFFF";
+const HERO: &str = "#FFF8F4";
+const BORDER: &str = "#E7E5E4";
+const PANEL: &str = "#FAFAF9";
+const PANEL_BORDER: &str = "#EFEDEB";
+const BUBBLE: &str = "#F5F5F4";
+const CHIP: &str = "#F0EEEC";
+const OUTLINE: &str = "#D6D3D1";
+const INK: &str = "#1C1917";
+const BODY: &str = "#44403C";
+const MUTED: &str = "#78716C";
+const FOOTNOTE: &str = "#6B6560";
+/// White text on it passes WCAG AA; the logo's brighter orange does not.
+const ACCENT: &str = "#D93A0B";
+const LINK: &str = "#C2410C";
+const TINT: &str = "#FFF1EA";
+const TINT_STRONG: &str = "#FFE7DB";
+const TINT_BORDER: &str = "#FFDCCB";
+const TINT_INK: &str = "#B3360C";
+const BRAND: &str = "#FF4C18";
+const BRAND_TOP: &str = "#FF8500";
+const BRAND_BOTTOM: &str = "#FF002E";
 
-/// Light colors are inline; the stylesheet swaps in the dark ones for clients that follow the
-/// system theme. `[data-ogsc]`/`[data-ogsb]` are the selectors Outlook.com sets in dark mode.
-const STYLE: &str = r#"
+/// Layout rules every client with a stylesheet keeps, Gmail included.
+const BASE_STYLE: &str = r#"
 :root { color-scheme: light dark; supported-color-schemes: light dark; }
 body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
 table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
 a[x-apple-data-detectors] { color: inherit !important; text-decoration: none !important; }
 @media only screen and (max-width: 620px) {
+  .fl-outer { padding: 24px 10px 32px 10px !important; }
   .fl-pad { padding-left: 24px !important; padding-right: 24px !important; }
   .fl-title { font-size: 24px !important; line-height: 30px !important; }
-  .fl-label, .fl-value { display: block !important; width: 100% !important; box-sizing: border-box; }
-  .fl-label { padding: 10px 0 0 0 !important; }
-  .fl-value { padding: 2px 0 10px 0 !important; text-align: left !important; border-top: 0 !important; }
+  .fl-code-text { font-size: 30px !important; letter-spacing: 7px !important; }
+  .fl-stack-label { display: block !important; width: 100% !important; box-sizing: border-box; padding: 12px 0 2px 0 !important; }
+  .fl-stack-value { display: block !important; width: 100% !important; box-sizing: border-box; padding: 0 0 12px 0 !important; text-align: left !important; border-top: 0 !important; }
+  .fl-actions { width: 100% !important; }
+  .fl-action { display: block !important; width: 100% !important; }
+  .fl-action-gap { display: block !important; width: 100% !important; height: 10px !important; }
+  .fl-btn, .fl-btn td { width: 100% !important; }
+  .fl-btn a { display: block !important; }
 }
+"#;
+
+/// Dark colors for clients that follow the system theme, and the selectors Outlook.com sets in
+/// dark mode. Apart from [`BASE_STYLE`]: Gmail drops a whole style block it cannot parse.
+const THEME_STYLE: &str = r#"
 @media (prefers-color-scheme: dark) {
-  .fl-page { background-color: #0c0c11 !important; }
-  .fl-card { background-color: #16161e !important; border-color: #2a2a35 !important; }
-  .fl-panel { background-color: #1e1e28 !important; border-top-color: #2e2e3a !important; border-right-color: #2e2e3a !important; border-bottom-color: #2e2e3a !important; }
-  .fl-ink { color: #f2f2f6 !important; }
-  .fl-body { color: #d6d6de !important; }
-  .fl-muted { color: #a7a7b5 !important; }
-  .fl-subtle { color: #868696 !important; }
-  .fl-rule { border-color: #2e2e3a !important; }
-  .fl-link { color: #a5b4fc !important; }
-  .fl-code { background-color: #23233a !important; color: #c7d2fe !important; }
-  .fl-outline { border-color: #3a3a48 !important; }
+  .fl-page { background-color: #0C0A09 !important; }
+  .fl-card { background-color: #1C1917 !important; border-color: #2E2925 !important; }
+  .fl-hero { background-color: #221915 !important; background-image: linear-gradient(180deg, #2A1B13 0%, #1C1917 100%) !important; }
+  .fl-panel { background-color: #24201D !important; border-color: #342F2B !important; }
+  .fl-bubble { background-color: #2A2522 !important; }
+  .fl-chip { background-color: #2E2926 !important; border-color: #3D3733 !important; }
+  .fl-rule { border-color: #342F2B !important; }
+  .fl-ink { color: #FAFAF9 !important; }
+  .fl-body { color: #D6D3D1 !important; }
+  .fl-muted { color: #A8A29E !important; }
+  .fl-link { color: #FF9A6E !important; }
+  .fl-outline { border-color: #44403C !important; }
+  .fl-pill { background-color: #3A2216 !important; color: #FFB08A !important; }
+  .fl-tint { background-color: #2B1C14 !important; border-color: #4A2B1D !important; }
+  .fl-tint-ink { color: #FFB08A !important; }
+  .fl-tone-neutral { background-color: #292524 !important; border-color: #3A3431 !important; }
+  .fl-tone-neutral-ink { color: #D6D3D1 !important; }
+  .fl-tone-info { background-color: #2B1C14 !important; border-color: #4A2B1D !important; }
+  .fl-tone-info-ink { color: #FFB08A !important; }
+  .fl-tone-success { background-color: #12261B !important; border-color: #1E3D2B !important; }
+  .fl-tone-success-ink { color: #7DD3A0 !important; }
+  .fl-tone-warning { background-color: #2B2210 !important; border-color: #4A3A16 !important; }
+  .fl-tone-warning-ink { color: #F5C451 !important; }
+  .fl-tone-danger { background-color: #2E1515 !important; border-color: #4D2222 !important; }
+  .fl-tone-danger-ink { color: #F59A9A !important; }
 }
-[data-ogsc] .fl-ink { color: #f2f2f6 !important; }
-[data-ogsc] .fl-body { color: #d6d6de !important; }
-[data-ogsc] .fl-muted { color: #a7a7b5 !important; }
-[data-ogsc] .fl-subtle { color: #868696 !important; }
-[data-ogsc] .fl-link { color: #a5b4fc !important; }
-[data-ogsb] .fl-page { background-color: #0c0c11 !important; }
-[data-ogsb] .fl-card { background-color: #16161e !important; }
-[data-ogsb] .fl-panel { background-color: #1e1e28 !important; }
+[data-ogsc] .fl-ink { color: #FAFAF9 !important; }
+[data-ogsc] .fl-body { color: #D6D3D1 !important; }
+[data-ogsc] .fl-muted { color: #A8A29E !important; }
+[data-ogsc] .fl-link { color: #FF9A6E !important; }
+[data-ogsb] .fl-page { background-color: #0C0A09 !important; }
+[data-ogsb] .fl-card { background-color: #1C1917 !important; }
+[data-ogsb] .fl-hero { background-color: #221915 !important; background-image: none !important; }
+[data-ogsb] .fl-panel { background-color: #24201D !important; }
+[data-ogsb] .fl-bubble { background-color: #2A2522 !important; }
 "#;
 
 /// Keeps the inbox preview to the preview line instead of the start of the body.
 const PREVIEW_FILLER: &str = "&#847;&zwnj;&nbsp;";
 
-/// The color of a badge or a callout's edge.
+/// Detail rows longer than this stack label over value on a phone.
+const SIDE_BY_SIDE_LABEL_CHARS: usize = 24;
+const SIDE_BY_SIDE_VALUE_CHARS: usize = 28;
+
+/// The color of a badge or a callout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tone {
     Neutral,
@@ -73,15 +116,28 @@ pub(crate) enum Tone {
     Danger,
 }
 
+struct ToneColors {
+    background: &'static str,
+    border: &'static str,
+    ink: &'static str,
+    /// `fl-tone-<name>` darkens the box, `fl-tone-<name>-ink` its text.
+    name: &'static str,
+}
+
 impl Tone {
-    /// Badge background, badge text, edge.
-    fn colors(self) -> (&'static str, &'static str, &'static str) {
-        match self {
-            Self::Neutral => ("#eeeef3", "#3f3f4a", "#a1a1ae"),
-            Self::Info => ("#e9ebff", "#3730a3", BRAND),
-            Self::Success => ("#e1f6ec", "#0f6a45", "#10b981"),
-            Self::Warning => ("#fff3d6", "#7a4f00", "#f59e0b"),
-            Self::Danger => ("#fde7e7", "#991b1b", "#ef4444"),
+    fn colors(self) -> ToneColors {
+        let (background, border, ink, name) = match self {
+            Self::Neutral => ("#F5F5F4", "#E7E5E4", "#57534E", "neutral"),
+            Self::Info => (TINT, TINT_BORDER, TINT_INK, "info"),
+            Self::Success => ("#EAF7EF", "#CBEBD7", "#13693F", "success"),
+            Self::Warning => ("#FFF5DD", "#F8E1A6", "#8A5300", "warning"),
+            Self::Danger => ("#FDEDED", "#F6CFCF", "#A61B1B", "danger"),
+        };
+        ToneColors {
+            background,
+            border,
+            ink,
+            name,
         }
     }
 }
@@ -101,10 +157,15 @@ impl Badge {
     }
 
     fn html(&self) -> String {
-        let (background, color, _) = self.tone.colors();
+        let colors = self.tone.colors();
         format!(
-            r#"<span style="display:inline-block;padding:3px 10px;border-radius:999px;background-color:{background};color:{color};font-family:{FONT};font-size:12px;line-height:18px;font-weight:600;white-space:nowrap;">{}</span>"#,
-            escape(&self.label)
+            r#"<span class="fl-tone-{name} fl-tone-{name}-ink" style="display:inline-block;padding:3px 10px;border-radius:999px;background-color:{background};border:1px solid {border};color:{ink};{font}white-space:nowrap;">{label}</span>"#,
+            name = colors.name,
+            background = colors.background,
+            border = colors.border,
+            ink = colors.ink,
+            font = font(12, 18, 600),
+            label = escape(&self.label)
         )
     }
 }
@@ -137,7 +198,7 @@ impl Value {
         match self {
             Self::Text(text) => escape(text),
             Self::Code(code) => format!(
-                r#"<span class="fl-code" style="display:inline-block;padding:2px 8px;border-radius:6px;background-color:#eef0ff;color:#312e81;font-family:{MONO};font-size:13px;line-height:20px;">{}</span>"#,
+                r#"<span class="fl-chip fl-ink" style="display:inline-block;padding:2px 8px;border-radius:6px;background-color:{CHIP};border:1px solid {BORDER};color:{INK};font-family:{MONO};font-size:13px;line-height:20px;font-weight:500;">{}</span>"#,
                 escape(code)
             ),
             Self::Badge(badge) => badge.html(),
@@ -152,16 +213,45 @@ impl Value {
     }
 }
 
+/// Who said the words of a [`Block::Quote`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Speaker {
+    /// Flow-Like's own people, shown with the logo.
+    Team(String),
+    /// Someone named, shown with their initial; the role reads after the name.
+    Named { name: String, role: Option<String> },
+}
+
+impl Speaker {
+    fn heading(&self) -> String {
+        match self {
+            Self::Team(name)
+            | Self::Named {
+                name, role: None, ..
+            } => name.clone(),
+            Self::Named {
+                name,
+                role: Some(role),
+            } => format!("{name}, {role}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Block {
-    /// The opening: a short label, the headline and a line under it.
+    /// The opening at the top of the card: a short label, the headline and a line under it.
     Hero {
         eyebrow: Option<String>,
         title: String,
         subtitle: Option<String>,
     },
     Text(Vec<Span>),
-    /// Words set apart: a reason, a reviewer's comment, a notice. Line breaks are kept.
+    /// Words someone wrote to the reader, as a chat message. Line breaks are kept.
+    Quote {
+        speaker: Speaker,
+        body: String,
+    },
+    /// Words set apart: a notice or a record. Line breaks are kept.
     Callout {
         tone: Tone,
         label: String,
@@ -182,17 +272,19 @@ pub(crate) enum Block {
         title: String,
         steps: Vec<(String, String)>,
     },
-    /// The main action, with its link written out below for clients that drop the button.
+    /// The main action. Its link is written out in the fine print for clients that drop it.
     Button {
         label: String,
         url: String,
     },
+    /// A lesser action; right after a [`Block::Button`] it sits beside it.
     SecondaryButton {
         label: String,
         url: String,
     },
     /// A one-time code, large and easy to copy.
     Code(String),
+    /// Small print; the notes that end an email sit below a rule, after everything else.
     Note(String),
 }
 
@@ -250,11 +342,23 @@ fn row(top: u32, bottom: u32, content: &str) -> String {
     )
 }
 
-/// A small uppercase label; `class` picks its dark-mode color.
-fn label_html(label: &str, color: &str, class: &str) -> String {
+fn full_width(rows: &str) -> String {
     format!(
-        r#"<p class="{class}" style="margin:0 0 6px 0;{}letter-spacing:0.6px;text-transform:uppercase;color:{color};">{}</p>"#,
-        font(12, 16, 600),
+        r#"<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;">{rows}</table>"#
+    )
+}
+
+fn inline_table(cells: &str) -> String {
+    format!(
+        r#"<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>{cells}</tr></table>"#
+    )
+}
+
+/// A small uppercase label with `gap` pixels below it; `class` picks its dark-mode color.
+fn label_html(label: &str, color: &str, class: &str, gap: u32) -> String {
+    format!(
+        r#"<p class="{class}" style="margin:0 0 {gap}px 0;{}letter-spacing:0.8px;text-transform:uppercase;color:{color};">{}</p>"#,
+        font(11, 16, 700),
         escape(label)
     )
 }
@@ -281,31 +385,184 @@ fn spans_text(spans: &[Span]) -> String {
         .collect()
 }
 
-/// A tinted box; an `edge` color marks its left side and keeps it in dark mode.
-fn panel(edge: Option<&str>, content: &str) -> String {
-    let (class, edge) = match edge {
-        Some(color) => ("fl-panel", format!("border-left:3px solid {color};")),
-        None => ("fl-panel fl-rule", String::new()),
-    };
-    format!(
-        r#"<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;"><tr><td class="{class}" bgcolor="{PANEL}" style="background-color:{PANEL};border:1px solid {PANEL_BORDER};{edge}border-radius:10px;padding:16px 18px;">{content}</td></tr></table>"#
-    )
+/// A rounded box in `class`'s colors.
+fn panel(
+    class: &str,
+    background: &str,
+    border: &str,
+    padding: &str,
+    radius: u32,
+    content: &str,
+) -> String {
+    full_width(&format!(
+        r#"<tr><td class="{class}" bgcolor="{background}" style="background-color:{background};border:1px solid {border};border-radius:{radius}px;padding:{padding};">{content}</td></tr>"#
+    ))
+}
+
+/// The logo: the app icon's orange square with its F, drawn without an image.
+fn logo_mark(size: u32, radius: u32, letter: u32) -> String {
+    inline_table(&format!(
+        r#"<td width="{size}" height="{size}" align="center" valign="middle" bgcolor="{BRAND}" style="width:{size}px;height:{size}px;border-radius:{radius}px;background-color:{BRAND};background-image:linear-gradient(180deg,{BRAND_TOP} 0%,{BRAND_BOTTOM} 100%);{}color:#FFFFFF;text-align:center;mso-line-height-rule:exactly;">F</td>"#,
+        font(letter, size, 800)
+    ))
+}
+
+fn initial_avatar(name: &str) -> String {
+    let initial: String = name
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map_or_else(|| "?".to_string(), |c| c.to_uppercase().collect());
+    inline_table(&format!(
+        r#"<td class="fl-tint fl-tint-ink" width="34" height="34" align="center" valign="middle" bgcolor="{TINT_STRONG}" style="width:34px;height:34px;border-radius:18px;background-color:{TINT_STRONG};border:1px solid {TINT_BORDER};{}color:{TINT_INK};text-align:center;">{}</td>"#,
+        font(15, 34, 700),
+        escape(&initial)
+    ))
 }
 
 fn button_html(label: &str, url: &str, primary: bool) -> String {
     let url = escape(url);
     let label = escape(label);
+    let body = font(15, 20, 600);
     if primary {
         format!(
-            r#"<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="{ACCENT}" style="border-radius:10px;background-color:{ACCENT};background-image:linear-gradient(135deg,#2563eb,#7c3aed);mso-padding-alt:14px 28px;"><a href="{url}" target="_blank" rel="noopener" style="display:inline-block;padding:14px 28px;{}color:#ffffff;text-decoration:none;border-radius:10px;">{label}</a></td></tr></table>"#,
-            font(15, 20, 600)
+            r#"<table role="presentation" class="fl-btn" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="{ACCENT}" style="border-radius:12px;background-color:{ACCENT};mso-padding-alt:14px 28px;"><a href="{url}" target="_blank" rel="noopener" style="display:inline-block;padding:14px 28px;{body}color:#FFFFFF;text-decoration:none;border-radius:12px;">{label}</a></td></tr></table>"#
         )
     } else {
         format!(
-            r#"<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td class="fl-outline" align="center" style="border:1px solid #d4d4de;border-radius:10px;mso-padding-alt:11px 22px;"><a class="fl-ink" href="{url}" target="_blank" rel="noopener" style="display:inline-block;padding:11px 22px;{}color:{INK};text-decoration:none;border-radius:10px;">{label}</a></td></tr></table>"#,
-            font(14, 20, 600)
+            r#"<table role="presentation" class="fl-btn" cellpadding="0" cellspacing="0" border="0"><tr><td class="fl-outline" align="center" style="border:1px solid {OUTLINE};border-radius:12px;mso-padding-alt:13px 24px;"><a class="fl-ink" href="{url}" target="_blank" rel="noopener" style="display:inline-block;padding:13px 24px;{body}color:{INK};text-decoration:none;border-radius:12px;">{label}</a></td></tr></table>"#
         )
     }
+}
+
+/// A primary button with a secondary one beside it, stacked on a phone.
+fn button_pair(primary: (&str, &str), secondary: (&str, &str)) -> String {
+    format!(
+        r#"<table role="presentation" class="fl-actions" cellpadding="0" cellspacing="0" border="0"><tr><td class="fl-action" valign="middle">{}</td><td class="fl-action-gap" width="12" style="width:12px;font-size:0;line-height:0;">&nbsp;</td><td class="fl-action" valign="middle">{}</td></tr></table>"#,
+        button_html(primary.0, primary.1, true),
+        button_html(secondary.0, secondary.1, false)
+    )
+}
+
+fn hero_html(eyebrow: Option<&str>, title: &str, subtitle: Option<&str>) -> String {
+    let pill = eyebrow
+        .map(|eyebrow| {
+            format!(
+                r#"<span class="fl-pill" style="display:inline-block;padding:4px 11px;border-radius:999px;background-color:{TINT_STRONG};{}letter-spacing:0.7px;text-transform:uppercase;color:{TINT_INK};">{}</span>"#,
+                font(11, 16, 700),
+                escape(eyebrow)
+            )
+        })
+        .unwrap_or_default();
+    let gap = if eyebrow.is_some() { 16 } else { 0 };
+    let subtitle = subtitle
+        .map(|subtitle| {
+            format!(
+                r#"<p class="fl-muted" style="margin:10px 0 0 0;{}color:{MUTED};">{}</p>"#,
+                font(16, 24, 400),
+                escape(subtitle)
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r#"<tr><td class="fl-pad fl-hero" bgcolor="{HERO}" style="padding:36px 40px 28px 40px;background-color:{HERO};background-image:linear-gradient(180deg,#FFF1E9 0%,{CARD} 100%);border-radius:19px 19px 0 0;">{pill}<h1 class="fl-ink fl-title" style="margin:{gap}px 0 0 0;{}letter-spacing:-0.6px;color:{INK};">{}</h1>{subtitle}</td></tr><tr><td height="4" style="height:4px;line-height:4px;font-size:4px;">&nbsp;</td></tr>"#,
+        font(28, 34, 700),
+        escape(title)
+    )
+}
+
+fn quote_html(speaker: &Speaker, body: &str) -> String {
+    let (picture, name, role) = match speaker {
+        Speaker::Team(name) => (logo_mark(34, 10, 18), name, None),
+        Speaker::Named { name, role } => (initial_avatar(name), name, role.as_deref()),
+    };
+    let role = role
+        .map(|role| {
+            format!(
+                r#" <span class="fl-muted" style="color:{MUTED};font-weight:400;">· {}</span>"#,
+                escape(role)
+            )
+        })
+        .unwrap_or_default();
+    let bubble = full_width(&format!(
+        r#"<tr><td class="fl-bubble" bgcolor="{BUBBLE}" style="background-color:{BUBBLE};border-radius:4px 16px 16px 16px;padding:14px 16px;"><p class="fl-body" style="margin:0;{}color:{BODY};">{}</p></td></tr>"#,
+        font(15, 24, 400),
+        escape_lines(body)
+    ));
+    full_width(&format!(
+        r#"<tr><td width="48" valign="top" style="width:48px;padding-top:2px;">{picture}</td><td valign="top"><p class="fl-ink" style="margin:0 0 8px 0;{}color:{INK};">{}{role}</p>{bubble}</td></tr>"#,
+        font(14, 20, 600),
+        escape(name)
+    ))
+}
+
+fn details_html(title: Option<&str>, rows: &[(String, Value)]) -> String {
+    let stacks = rows.iter().any(|(label, value)| {
+        label.chars().count() > SIDE_BY_SIDE_LABEL_CHARS
+            || value.text().chars().count() > SIDE_BY_SIDE_VALUE_CHARS
+    });
+    let (label_class, value_class) = if stacks {
+        (" fl-stack-label", " fl-stack-value")
+    } else {
+        ("", "")
+    };
+    let lines: String = rows
+        .iter()
+        .enumerate()
+        .map(|(index, (label, value))| {
+            let rule = if index == 0 {
+                String::new()
+            } else {
+                format!("border-top:1px solid {PANEL_BORDER};")
+            };
+            format!(
+                r#"<tr><td class="fl-muted fl-rule{label_class}" width="46%" valign="top" style="width:46%;padding:11px 16px 11px 0;{rule}{}color:{MUTED};">{}</td><td class="fl-ink fl-rule{value_class}" align="right" valign="top" style="padding:11px 0;{rule}{}color:{INK};text-align:right;word-break:break-word;">{}</td></tr>"#,
+                font(14, 20, 400),
+                escape(label),
+                font(14, 20, 600),
+                value.html()
+            )
+        })
+        .collect();
+    let title = title
+        .map(|title| label_html(title, MUTED, "fl-muted", 10))
+        .unwrap_or_default();
+    format!(
+        "{title}{}",
+        panel(
+            "fl-panel",
+            PANEL,
+            PANEL_BORDER,
+            "5px 18px",
+            12,
+            &full_width(&lines)
+        )
+    )
+}
+
+fn steps_html(title: &str, steps: &[(String, String)]) -> String {
+    let items: String = steps
+        .iter()
+        .enumerate()
+        .map(|(index, (title, line))| {
+            let number = inline_table(&format!(
+                r#"<td class="fl-tint fl-tint-ink" width="26" height="26" align="center" valign="middle" bgcolor="{TINT}" style="width:26px;height:26px;border-radius:13px;background-color:{TINT};border:1px solid {TINT_BORDER};{}color:{TINT_INK};text-align:center;">{}</td>"#,
+                font(12, 26, 700),
+                index + 1
+            ));
+            format!(
+                r#"<tr><td width="40" valign="top" style="width:40px;padding:0 0 16px 0;">{number}</td><td valign="top" style="padding:3px 0 16px 0;"><p class="fl-ink" style="margin:0;{}color:{INK};">{}</p><p class="fl-muted" style="margin:2px 0 0 0;{}color:{MUTED};">{}</p></td></tr>"#,
+                font(14, 20, 600),
+                escape(title),
+                font(14, 20, 400),
+                escape(line)
+            )
+        })
+        .collect();
+    format!(
+        "{}{}",
+        label_html(title, MUTED, "fl-muted", 10),
+        full_width(&items)
+    )
 }
 
 impl Block {
@@ -315,31 +572,7 @@ impl Block {
                 eyebrow,
                 title,
                 subtitle,
-            } => {
-                let eyebrow = eyebrow
-                    .as_deref()
-                    .map(|eyebrow| label_html(eyebrow, ACCENT, "fl-link"))
-                    .unwrap_or_default();
-                let subtitle = subtitle
-                    .as_deref()
-                    .map(|subtitle| {
-                        format!(
-                            r#"<p class="fl-muted" style="margin:8px 0 0 0;{}color:{MUTED};">{}</p>"#,
-                            font(16, 24, 400),
-                            escape(subtitle)
-                        )
-                    })
-                    .unwrap_or_default();
-                row(
-                    36,
-                    24,
-                    &format!(
-                        r#"{eyebrow}<h1 class="fl-ink fl-title" style="margin:0;{}letter-spacing:-0.4px;color:{INK};">{}</h1>{subtitle}"#,
-                        font(26, 32, 700),
-                        escape(title)
-                    ),
-                )
-            }
+            } => hero_html(eyebrow.as_deref(), title, subtitle.as_deref()),
             Self::Text(spans) => row(
                 0,
                 20,
@@ -349,122 +582,68 @@ impl Block {
                     spans_html(spans)
                 ),
             ),
+            Self::Quote { speaker, body } => row(4, 24, &quote_html(speaker, body)),
             Self::Callout { tone, label, body } => {
-                let (_, label_color, edge) = tone.colors();
+                let colors = tone.colors();
+                let class = format!("fl-tone-{}", colors.name);
                 row(
                     0,
                     20,
                     &panel(
-                        Some(edge),
+                        &class,
+                        colors.background,
+                        colors.border,
+                        "16px 18px",
+                        12,
                         &format!(
                             r#"{}<p class="fl-body" style="margin:0;{}color:{BODY};">{}</p>"#,
-                            label_html(label, label_color, "fl-subtle"),
-                            font(15, 24, 400),
+                            label_html(label, colors.ink, &format!("{class}-ink"), 6),
+                            font(14, 22, 400),
                             escape_lines(body)
                         ),
                     ),
                 )
             }
-            Self::Details { title, rows } => {
-                let title = title
-                    .as_deref()
-                    .map(|title| {
-                        format!(
-                            r#"<tr><td colspan="2" style="padding:0 0 4px 0;">{}</td></tr>"#,
-                            label_html(title, SUBTLE, "fl-subtle")
-                        )
-                    })
-                    .unwrap_or_default();
-                let lines: String = rows
-                    .iter()
-                    .enumerate()
-                    .map(|(index, (label, value))| {
-                        let rule = if index == 0 {
-                            String::new()
-                        } else {
-                            format!("border-top:1px solid {PANEL_BORDER};")
-                        };
-                        format!(
-                            r#"<tr><td class="fl-label fl-muted fl-rule" valign="top" style="padding:8px 12px 8px 0;{rule}{}color:{MUTED};">{}</td><td class="fl-value fl-ink fl-rule" align="right" valign="top" style="padding:8px 0;{rule}{}color:{INK};text-align:right;word-break:break-word;">{}</td></tr>"#,
-                            font(14, 20, 400),
-                            escape(label),
-                            font(14, 20, 600),
-                            value.html()
-                        )
-                    })
-                    .collect();
-                row(
-                    0,
-                    20,
-                    &panel(
-                        None,
-                        &format!(
-                            r#"<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;">{title}{lines}</table>"#
-                        ),
-                    ),
-                )
-            }
+            Self::Details { title, rows } => row(0, 24, &details_html(title.as_deref(), rows)),
             Self::Change { label, from, to } => row(
                 0,
-                20,
+                24,
                 &panel(
-                    None,
+                    "fl-panel",
+                    PANEL,
+                    PANEL_BORDER,
+                    "16px 18px",
+                    12,
                     &format!(
-                        r#"{}<p style="margin:0;{}">{} <span class="fl-subtle" style="color:{SUBTLE};">&rarr;</span> {}</p>"#,
-                        label_html(label, SUBTLE, "fl-subtle"),
-                        font(14, 24, 400),
-                        from.html(),
+                        r#"{}<p style="margin:0;{}">{}&nbsp;&nbsp;<span class="fl-muted" style="color:{MUTED};">&rarr;</span>&nbsp;&nbsp;{}</p>"#,
+                        label_html(label, MUTED, "fl-muted", 10),
+                        font(14, 26, 400),
+                        Badge::new(Tone::Neutral, from.label.clone()).html(),
                         to.html()
                     ),
                 ),
             ),
-            Self::Steps { title, steps } => {
-                let items: String = steps
-                    .iter()
-                    .enumerate()
-                    .map(|(index, (title, line))| {
-                        format!(
-                            r#"<tr><td width="36" valign="top" style="width:36px;padding:0 0 14px 0;"><span class="fl-code" style="display:inline-block;width:24px;height:24px;border-radius:12px;background-color:#eef0ff;color:{ACCENT};{}text-align:center;">{}</span></td><td valign="top" style="padding:0 0 14px 0;"><p class="fl-ink" style="margin:0;{}color:{INK};">{}</p><p class="fl-muted" style="margin:2px 0 0 0;{}color:{MUTED};">{}</p></td></tr>"#,
-                            font(12, 24, 700),
-                            index + 1,
-                            font(14, 20, 600),
-                            escape(title),
-                            font(14, 20, 400),
-                            escape(line)
-                        )
-                    })
-                    .collect();
-                row(
-                    0,
-                    6,
-                    &format!(
-                        r#"{}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;">{items}</table>"#,
-                        label_html(title, SUBTLE, "fl-subtle")
-                    ),
-                )
-            }
-            Self::Button { label, url } => row(
-                4,
-                24,
-                &format!(
-                    r#"{}<p class="fl-subtle" style="margin:12px 0 0 0;{}color:{SUBTLE};word-break:break-all;">If the button doesn’t work, open this link:<br><a class="fl-link" href="{url}" target="_blank" rel="noopener" style="color:{ACCENT};text-decoration:underline;">{url}</a></p>"#,
-                    button_html(label, url, true),
-                    font(12, 18, 400),
-                    url = escape(url)
-                ),
-            ),
-            Self::SecondaryButton { label, url } => row(0, 24, &button_html(label, url, false)),
+            Self::Steps { title, steps } => row(4, 8, &steps_html(title, steps)),
+            Self::Button { label, url } => row(6, 28, &button_html(label, url, true)),
+            Self::SecondaryButton { label, url } => row(0, 28, &button_html(label, url, false)),
             Self::Code(code) => row(
-                4,
-                24,
-                &format!(
-                    r##"<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td class="fl-code" bgcolor="#eef0ff" style="background-color:#eef0ff;border-radius:12px;padding:16px 24px;"><span class="fl-code" style="font-family:{MONO};font-size:30px;line-height:36px;font-weight:700;letter-spacing:6px;color:#312e81;">{}</span></td></tr></table>"##,
-                    escape(code)
+                6,
+                28,
+                &panel(
+                    "fl-tint",
+                    TINT,
+                    TINT_BORDER,
+                    "22px 16px 22px 26px",
+                    14,
+                    &format!(
+                        r#"<p class="fl-ink fl-code-text" style="margin:0;font-family:{FONT};font-size:36px;line-height:44px;font-weight:700;letter-spacing:10px;color:{INK};text-align:center;">{}</p>"#,
+                        escape(code)
+                    ),
                 ),
             ),
             Self::Note(note) => row(
                 0,
-                16,
+                12,
                 &format!(
                     r#"<p class="fl-muted" style="margin:0;{}color:{MUTED};">{}</p>"#,
                     font(13, 20, 400),
@@ -490,6 +669,7 @@ impl Block {
             .collect::<Vec<_>>()
             .join("\n"),
             Self::Text(spans) => spans_text(spans),
+            Self::Quote { speaker, body } => format!("{}:\n{}", speaker.heading(), body.trim()),
             Self::Callout { label, body, .. } => {
                 format!("{}\n{}", label.to_uppercase(), body.trim())
             }
@@ -535,19 +715,95 @@ impl Email {
             .unwrap_or("Flow-Like")
     }
 
+    /// The card's rows: the blocks, a button with the secondary one after it side by side, then
+    /// the closing notes and the main button's link below a rule.
+    fn card_html(&self) -> String {
+        let fine_print_from = self
+            .blocks
+            .iter()
+            .rposition(|block| !matches!(block, Block::Note(_)))
+            .map_or(0, |index| index + 1);
+        let (main, notes) = self.blocks.split_at(fine_print_from);
+        let mut rows = String::new();
+        let mut blocks = main.iter().peekable();
+        while let Some(block) = blocks.next() {
+            if let Block::Button { label, url } = block
+                && let Some(Block::SecondaryButton {
+                    label: second_label,
+                    url: second_url,
+                }) = blocks.peek()
+            {
+                rows.push_str(&row(
+                    6,
+                    28,
+                    &button_pair(
+                        (label.as_str(), url.as_str()),
+                        (second_label.as_str(), second_url.as_str()),
+                    ),
+                ));
+                blocks.next();
+                continue;
+            }
+            rows.push_str(&block.html());
+        }
+        let primary = main.iter().find_map(|block| match block {
+            Block::Button { url, .. } => Some(url.as_str()),
+            _ => None,
+        });
+        if notes.is_empty() && primary.is_none() {
+            return rows;
+        }
+        rows.push_str(&format!(
+            r#"<tr><td class="fl-pad" style="padding:0 40px;">{}</td></tr>"#,
+            full_width(&format!(
+                r#"<tr><td class="fl-rule" style="border-top:1px solid {BORDER};font-size:0;line-height:0;height:20px;">&nbsp;</td></tr>"#
+            ))
+        ));
+        for note in notes {
+            rows.push_str(&note.html());
+        }
+        if let Some(url) = primary {
+            rows.push_str(&row(
+                0,
+                12,
+                &format!(
+                    r#"<p class="fl-muted" style="margin:0;{}color:{MUTED};word-break:break-all;">Button not working? Paste this link into your browser:<br><a class="fl-link" href="{url}" target="_blank" rel="noopener" style="color:{LINK};text-decoration:underline;">{url}</a></p>"#,
+                    font(12, 18, 400),
+                    url = escape(url)
+                ),
+            ));
+        }
+        rows
+    }
+
+    fn footer_html(&self) -> String {
+        let small = font(12, 18, 400);
+        let quiet = |url: &str, label: &str| {
+            format!(
+                r#"<a class="fl-muted" href="{url}" target="_blank" rel="noopener" style="color:{FOOTNOTE};text-decoration:underline;">{label}</a>"#
+            )
+        };
+        format!(
+            r#"<p class="fl-muted" style="margin:0 0 8px 0;{small}color:{FOOTNOTE};">{}</p><p class="fl-muted" style="margin:0 0 8px 0;{small}color:{FOOTNOTE};">Questions? Write to <a class="fl-link" href="mailto:{CONTACT}" style="color:{LINK};text-decoration:underline;">{CONTACT}</a></p><p class="fl-muted" style="margin:0 0 8px 0;{small}color:{FOOTNOTE};">{} &nbsp;&middot;&nbsp; {}</p><p class="fl-muted" style="margin:0;{small}color:{FOOTNOTE};">&copy; {COMPANY}</p>"#,
+            escape(&self.footer),
+            quiet(PRIVACY_POLICY, "Privacy policy"),
+            quiet(LEGAL_NOTICE, "Legal notice")
+        )
+    }
+
     pub(crate) fn html(&self) -> String {
         let title = escape(self.title());
         let preview = format!("{}{}", escape(&self.preview), PREVIEW_FILLER.repeat(40));
-        let body: String = self.blocks.iter().map(Block::html).collect();
-        let wordmark = format!(
-            r#"<span class="fl-ink" style="{}letter-spacing:-0.2px;color:{INK};"><span style="color:{BRAND};">&#10022;</span>&nbsp;Flow-Like</span>"#,
-            font(17, 24, 700)
-        );
-        let footer = format!(
-            r#"<p class="fl-subtle" style="margin:0 0 6px 0;{small}color:{SUBTLE};">{}</p><p class="fl-subtle" style="margin:0 0 6px 0;{small}color:{SUBTLE};">Questions? Write to <a class="fl-link" href="mailto:{CONTACT}" style="color:{ACCENT};text-decoration:underline;">{CONTACT}</a></p><p class="fl-subtle" style="margin:0;{small}color:{SUBTLE};">&copy; {COMPANY}</p>"#,
-            escape(&self.footer),
-            small = font(12, 18, 400)
-        );
+        let logo = inline_table(&format!(
+            r#"<td valign="middle">{}</td><td class="fl-ink" valign="middle" style="padding-left:10px;{}letter-spacing:-0.3px;color:{INK};">Flow-Like</td>"#,
+            logo_mark(30, 9, 17),
+            font(18, 30, 700)
+        ));
+        let card = full_width(&format!(
+            r#"{}<tr><td height="20" style="height:20px;line-height:20px;font-size:20px;">&nbsp;</td></tr>"#,
+            self.card_html()
+        ));
+        let footer = self.footer_html();
         format!(
             r#"<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -561,23 +817,18 @@ impl Email {
 <meta name="supported-color-schemes" content="light dark">
 <title>{title}</title>
 <!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><style>table, td, p, a, span, h1 {{ font-family: Arial, Helvetica, sans-serif !important; }}</style><![endif]-->
-<style>{STYLE}</style>
+<style>{BASE_STYLE}</style>
+<style>{THEME_STYLE}</style>
 </head>
 <body class="fl-page" style="margin:0;padding:0;width:100%;background-color:{PAGE};">
 <div style="display:none;max-height:0;max-width:0;overflow:hidden;opacity:0;mso-hide:all;font-size:1px;line-height:1px;color:{PAGE};">{preview}</div>
 <table role="presentation" class="fl-page" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{PAGE}" style="width:100%;background-color:{PAGE};">
-<tr><td align="center" style="padding:32px 12px 40px 12px;">
+<tr><td class="fl-outer" align="center" style="padding:40px 12px 48px 12px;">
 <!--[if mso]><table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
-<table role="presentation" class="fl-shell" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;">
-<tr><td style="padding:0 4px 18px 4px;">{wordmark}</td></tr>
-<tr><td class="fl-card" bgcolor="{CARD}" style="background-color:{CARD};border:1px solid {BORDER};border-radius:16px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;">
-<tr><td height="4" bgcolor="{BRAND}" style="height:4px;line-height:4px;font-size:4px;background-color:{BRAND};background-image:linear-gradient(90deg,#3b82f6,#8b5cf6,#ec4899);border-radius:16px 16px 0 0;">&nbsp;</td></tr>
-{body}
-<tr><td height="12" style="height:12px;line-height:12px;font-size:12px;">&nbsp;</td></tr>
-</table>
-</td></tr>
-<tr><td class="fl-pad" align="center" style="padding:24px 24px 0 24px;text-align:center;">{footer}</td></tr>
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;">
+<tr><td style="padding:0 6px 20px 6px;">{logo}</td></tr>
+<tr><td class="fl-card" bgcolor="{CARD}" style="background-color:{CARD};border:1px solid {BORDER};border-radius:20px;box-shadow:0 1px 2px rgba(28,25,23,0.04),0 12px 32px -12px rgba(28,25,23,0.10);">{card}</td></tr>
+<tr><td align="center" style="padding:28px 24px 0 24px;text-align:center;">{footer}</td></tr>
 </table>
 <!--[if mso]></td></tr></table><![endif]-->
 </td></tr>
@@ -590,7 +841,7 @@ impl Email {
     pub(crate) fn text(&self) -> String {
         let blocks = self.blocks.iter().map(Block::text);
         let footer = format!(
-            "-- \n{}\nQuestions? Write to {CONTACT}\n© {COMPANY}",
+            "-- \n{}\nQuestions? Write to {CONTACT}\nPrivacy policy: {PRIVACY_POLICY}\nLegal notice: {LEGAL_NOTICE}\n© {COMPANY}",
             self.footer.trim()
         );
         let mut text = blocks
@@ -622,6 +873,17 @@ mod tests {
                     subtitle: Some("Flux invited you".into()),
                 },
                 Block::Text(vec![plain("Hello "), strong("<Ana>"), plain("!")]),
+                Block::Quote {
+                    speaker: Speaker::Named {
+                        name: "<Flux>".into(),
+                        role: Some("<Felix>’s bot".into()),
+                    },
+                    body: "Come <in>\nplease".into(),
+                },
+                Block::Quote {
+                    speaker: Speaker::Team("Flow-Like team".into()),
+                    body: "Done.".into(),
+                },
                 Block::Callout {
                     tone: Tone::Info,
                     label: "Why".into(),
@@ -667,6 +929,9 @@ mod tests {
         for raw in [
             "<b>Launch</b>",
             "<Ana>",
+            "<Flux>",
+            "<Felix>",
+            "<in>",
             "<line>",
             "<t>",
             "<unsure>",
@@ -678,9 +943,12 @@ mod tests {
         assert!(html.contains("Join &lt;b&gt;Launch&lt;/b&gt;"));
         assert!(html.contains("https://example.com/a?b=1&amp;c=&quot;2&quot;"));
         assert!(html.contains("First line<br>second &lt;line&gt;"));
+        assert!(html.contains("Come &lt;in&gt;<br>please"));
         for kept in [
             "GROUP CHAT\nJoin <b>Launch</b>\nFlux invited you",
             "Hello <Ana>!",
+            "<Flux>, <Felix>’s bot:\nCome <in>\nplease",
+            "Flow-Like team:\nDone.",
             "WHY\nFirst line\nsecond <line>",
             "ORDER\nAmount: 9.99 EUR\nToken: <t>\nStatus: Paid",
             "Status: Queued → Done",
@@ -690,6 +958,7 @@ mod tests {
             "{####}",
             "Ignore it if <unsure>.",
             "-- \nYou get this because <you> asked.\nQuestions? Write to help@great-co.de",
+            "Legal notice: https://flow-like.com/legal-notice",
         ] {
             assert!(
                 text.contains(kept),
@@ -711,6 +980,59 @@ mod tests {
         assert!(!html.contains("fonts.googleapis.com"));
         assert!(!html.contains("<img"));
         assert!(html.contains("{####}"));
+    }
+
+    #[test]
+    fn gmail_keeps_the_phone_layout_when_it_drops_the_dark_colors() {
+        let html = sample().html();
+        let base = html.find(".fl-stack-label").unwrap();
+        let base_closes = base + html[base..].find("</style>").unwrap();
+        let theme = html.find("[data-ogsc]").unwrap();
+        assert!(base_closes < theme);
+    }
+
+    #[test]
+    fn a_secondary_button_sits_beside_the_primary_whose_link_closes_the_card() {
+        let html = sample().html();
+        assert!(html.contains(r#"class="fl-actions""#));
+        let note = html.find("Ignore it if").unwrap();
+        let fallback = html.find("Button not working?").unwrap();
+        let footer = html.find("You get this because").unwrap();
+        assert!(note < fallback && fallback < footer);
+        let alone = Email {
+            preview: String::new(),
+            footer: String::new(),
+            blocks: vec![Block::Button {
+                label: "Open".into(),
+                url: "https://example.com".into(),
+            }],
+        }
+        .html();
+        assert!(!alone.contains(r#"class="fl-actions""#));
+        assert!(alone.contains("Button not working?"));
+    }
+
+    #[test]
+    fn long_detail_rows_stack_on_a_phone_and_short_ones_stay_side_by_side() {
+        let details = |label: &str, value: &str| {
+            Block::Details {
+                title: None,
+                rows: vec![(label.into(), Value::Text(value.into()))],
+            }
+            .html()
+        };
+        assert!(!details("Amount", "9.99 EUR").contains("fl-stack-label"));
+        assert!(
+            details("Immediate delivery withdrawal waiver accepted", "Yes")
+                .contains("fl-stack-label")
+        );
+        assert!(
+            details(
+                "Declaration",
+                "Withdrawal from the purchase identified below."
+            )
+            .contains("fl-stack-value")
+        );
     }
 
     #[test]

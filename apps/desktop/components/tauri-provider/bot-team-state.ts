@@ -49,7 +49,7 @@ export class BotTeamState implements IBotTeamState {
 
 	async getOrg(): Promise<IOrgView> {
 		const session = accountSession(this.backend);
-		if (!session) return { teams: [], bots: [], invitations: [] };
+		if (!session) return { teams: [], bots: [], invitations: [], threads: [] };
 		const response = await get<Partial<IOrgView>>(
 			session.profile,
 			TEAMS,
@@ -61,6 +61,7 @@ export class BotTeamState implements IBotTeamState {
 			invitations: Array.isArray(response?.invitations)
 				? response.invitations
 				: [],
+			threads: Array.isArray(response?.threads) ? response.threads : [],
 		};
 	}
 

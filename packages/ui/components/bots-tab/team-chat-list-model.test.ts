@@ -240,6 +240,60 @@ describe("buildChatGroups", () => {
 	});
 });
 
+describe("your requests", () => {
+	const withThreads = (
+		threads: NonNullable<IOrgView["threads"]>,
+		over: Partial<ChatListInput> = {},
+	) =>
+		input({
+			org: { ...org, threads },
+			requestsLabel: "Your requests",
+			conversations: [
+				conversation("itroom"),
+				conversation("thread1", { title: "thread" }),
+				conversation("r1"),
+			],
+			...over,
+		});
+
+	test("the thread sits right after the team room, labelled", () => {
+		const groups = buildChatGroups(
+			withThreads([{ team_id: "IT Support", conversation_id: "thread1" }]),
+		);
+		const rows = groups.find((g) => g.key === "team:IT Support")?.rows;
+		expect(rows?.slice(0, 2).map((row) => row.key)).toEqual([
+			"conversation:itroom",
+			"conversation:thread1",
+		]);
+		expect(rows?.[1]).toMatchObject({ name: "Your requests", thread: true });
+	});
+
+	test("it does not appear again under Rooms or Pinned", () => {
+		const groups = buildChatGroups(
+			withThreads([{ team_id: "IT Support", conversation_id: "thread1" }], {
+				conversations: [
+					conversation("itroom"),
+					conversation("thread1", { pinned_at: "2026-03-01T00:00:00Z" }),
+					conversation("r1"),
+				],
+			}),
+		);
+		expect(keys(groups)).not.toContain("pinned");
+		expect(
+			groups.find((g) => g.key === "rooms")?.rows.map((r) => r.key),
+		).toEqual(["conversation:r1"]);
+	});
+
+	test("a thread of a team the reader's org view lacks stays under Rooms", () => {
+		const groups = buildChatGroups(
+			withThreads([{ team_id: "gone", conversation_id: "thread1" }]),
+		);
+		expect(
+			groups.find((g) => g.key === "rooms")?.rows.map((r) => r.key),
+		).toEqual(["conversation:thread1", "conversation:r1"]);
+	});
+});
+
 describe("teamRooms", () => {
 	test("lists the rooms present in the conversations, in org order", () => {
 		expect(teamRooms(org, input().conversations).map((r) => r.team.id)).toEqual(

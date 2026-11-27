@@ -1205,7 +1205,9 @@ async fn an_ask_leaves_one_activity_in_the_askers_chat_and_the_callees_chat_and_
         assert_eq!(row.message_id, activity_message_id("ask-9", chat));
         let parsed = ActivityBody::parse(&row.envelope["body"]).unwrap();
         assert_eq!(parsed, body);
-        let ActivityBody::BotAsk { question, .. } = parsed;
+        let ActivityBody::BotAsk { question, .. } = parsed else {
+            panic!("a bot ask parses as one");
+        };
         assert_eq!(question.chars().count(), 300);
         assert_eq!(activity_rows(&db, sender).await.len(), 1);
     }

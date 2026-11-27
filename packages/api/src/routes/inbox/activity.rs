@@ -88,6 +88,9 @@ async fn post_locked(
     lock_conversation(txn, conversation_id).await?;
     let message_id = match body {
         ActivityBody::BotAsk { ask_id, .. } => activity_message_id(ask_id, conversation_id),
+        ActivityBody::TeamAnswer {
+            reply_message_id, ..
+        } => super::team_request::answer_message_id(reply_message_id, conversation_id),
     };
     write_activity_in(
         txn,
@@ -133,7 +136,10 @@ pub(crate) async fn bot_ask_targets<C: ConnectionTrait>(
         asker_id,
         callee_id,
         ..
-    } = body;
+    } = body
+    else {
+        return Ok(Vec::new());
+    };
     let mut targets = Vec::new();
     if is_plain_conversation(db, origin_conversation).await? {
         targets.push((origin_conversation.to_string(), asker_id.clone()));

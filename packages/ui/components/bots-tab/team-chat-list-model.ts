@@ -4,12 +4,14 @@ import {
 	flattenForest,
 	orgBot,
 	orgForest,
+	teamById,
 	teamTag,
 } from "../../lib/bot-teams/org-model";
 import type {
 	IOrgBot,
 	IOrgView,
 	ITeam,
+	ITeamThread,
 } from "../../state/backend-state/bot-team-state";
 import type { IConversation } from "../../state/backend-state/inbox-state";
 import type { CrewMember } from "./crew-grid";
@@ -50,6 +52,8 @@ export interface ConversationRow extends RowBase {
 	conversation: IConversation;
 	team: ITeam | null;
 	tag: string | null;
+	/** The reader's own thread with the team, where their `#Team` requests go. */
+	thread?: boolean;
 }
 
 export type ChatRow = BotRow | ColleagueBotRow | ConversationRow;
@@ -73,6 +77,8 @@ export interface ChatListInput {
 	filter: ChatFilter;
 	query: string;
 	title: (conversation: IConversation) => string;
+	/** What a team's thread of the reader is called inside the team's group. */
+	requestsLabel?: string;
 	snippet: (conversation: IConversation) => string;
 	orgBotName: (bot: IOrgBot) => string;
 	ownerName: (ownerId: string) => string;
@@ -149,6 +155,10 @@ function directChatsOfCrew(
 	return chats;
 }
 
+function threadsOf(org: IOrgView, teamId: string): ITeamThread[] {
+	return (org.threads ?? []).filter((thread) => thread.team_id === teamId);
+}
+
 function teamGroup(
 	input: ChatListInput,
 	node: OrgTeamNode,
@@ -161,6 +171,15 @@ function teamGroup(
 		? byId.get(team.conversation_id)
 		: undefined;
 	const rows: ChatRow[] = room ? [conversationRow(input, room, team)] : [];
+	for (const thread of threadsOf(input.org, team.id)) {
+		const conversation = byId.get(thread.conversation_id);
+		if (!conversation) continue;
+		rows.push({
+			...conversationRow(input, conversation),
+			name: input.requestsLabel ?? input.title(conversation),
+			thread: true,
+		});
+	}
 	const members: (BotRow | ColleagueBotRow)[] = [];
 	const pending: ColleagueBotRow[] = [];
 	for (const entry of team.bots) {
@@ -250,8 +269,18 @@ export function buildChatGroups(input: ChatListInput): ChatGroup[] {
 		),
 	);
 
+	const groupedThreadIds = new Set(
+		(org.threads ?? []).flatMap((thread) =>
+			teamById(org, thread.team_id) ? [thread.conversation_id] : [],
+		),
+	);
 	const loose = conversations
-		.filter((item) => !directIds.has(item.id) && !teamRoomIds.has(item.id))
+		.filter(
+			(item) =>
+				!directIds.has(item.id) &&
+				!teamRoomIds.has(item.id) &&
+				!groupedThreadIds.has(item.id),
+		)
 		.sort(byActivity);
 	const pinned = loose
 		.filter((item) => item.pinned_at)

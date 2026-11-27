@@ -22,6 +22,7 @@ model BotTeam {
   updatedAt      DateTime        @default(now()) @db.Timestamptz(3)
   people         BotTeamPerson[]
   bots           BotTeamBot[]
+  threads        BotTeamThread[]
 
   @@index([parentId])
 }
@@ -63,4 +64,19 @@ model BotTeamBot {
 
   @@id([teamId, botId])
   @@index([botId])
+}
+
+/// A person's thread with a team: their `#Team` requests land here and the team's lead answers.
+/// Its members are the person, the current lead and the lead's owner.
+model BotTeamThread {
+  teamId         String
+  team           BotTeam      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationId String       @unique
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@id([teamId, userId])
+  @@index([userId])
 }

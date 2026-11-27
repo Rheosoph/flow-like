@@ -222,6 +222,8 @@ export interface ConversationMessage {
 	usageStats?: IChatUsageStat[];
 	replyTo?: string;
 	mentions: string[];
+	/** Teams a `#Team` request went to, by team id. */
+	teams?: string[];
 	errorCode?: string;
 	attachments?: IInboxAttachmentPart[];
 	/** App widgets on the message, inline or as stored documents. */
@@ -301,8 +303,25 @@ export interface ConversationBotAsk {
 	question: string;
 }
 
-/** A line between messages: what woke a bot, or one bot asking another. */
-export type ConversationNote = ConversationTrigger | ConversationBotAsk;
+/** A team lead's answer to a `#Team` request, copied into the chat the request came from. */
+export interface ConversationTeamAnswer {
+	type: "team_answer";
+	id: string;
+	createdAt: string;
+	time: number;
+	teamId: string;
+	leadId: string;
+	threadId: string;
+	requestMessageId: string;
+	replyMessageId: string;
+	text: string;
+}
+
+/** A line between messages: what woke a bot, one bot asking another, or a team's answer. */
+export type ConversationNote =
+	| ConversationTrigger
+	| ConversationBotAsk
+	| ConversationTeamAnswer;
 
 /** A call someone started, with how it ended once its last person left. */
 export interface ConversationCall {
@@ -477,10 +496,31 @@ function botAskEvent(entry: IInboxEntry): ConversationBotAsk | null {
 	};
 }
 
+function teamAnswerEvent(entry: IInboxEntry): ConversationTeamAnswer | null {
+	const body = plainBody(entry);
+	if (body?.type !== "team_answer") return null;
+	const teamId = text(body.team_id);
+	const threadId = text(body.thread_id);
+	if (!teamId || !threadId) return null;
+	return {
+		type: "team_answer",
+		id: entry.message_id,
+		createdAt: entry.created_at,
+		time: entryTime(entry),
+		teamId,
+		leadId: text(body.lead_id) ?? "",
+		threadId,
+		requestMessageId: text(body.request_message_id) ?? "",
+		replyMessageId: text(body.reply_message_id) ?? "",
+		text: text(body.text) ?? "",
+	};
+}
+
 /** The note a trigger or activity entry shows as; null for anything else or a body it can't read. */
 export function noteOf(entry: IInboxEntry): ConversationNote | null {
 	if (entry.kind === "trigger") return triggerEvent(entry);
-	if (entry.kind === "activity") return botAskEvent(entry);
+	if (entry.kind === "activity")
+		return botAskEvent(entry) ?? teamAnswerEvent(entry);
 	return null;
 }
 
@@ -639,6 +679,7 @@ export function foldInboxEntries(
 						.map(readUsageStat)
 						.filter((stat): stat is IChatUsageStat => stat !== null)
 				: [];
+			const teams = stringsOf(plainBody(entry)?.teams);
 			const message: ConversationMessage = {
 				type: "message",
 				id: entry.message_id,
@@ -649,6 +690,7 @@ export function foldInboxEntries(
 				content: inboxMessageContent(entry),
 				...(usageStats.length > 0 ? { usageStats } : {}),
 				mentions: mentionsOf(entry),
+				...(teams.length > 0 ? { teams } : {}),
 				...(contextRequest ? { userContext: { request: contextRequest } } : {}),
 				...(typeof plainBody(entry)?.user_context_derived === "string"
 					? {
@@ -783,7 +825,11 @@ export function groupConversationItems(
 			blocks.push({ type: "room", key: `room:${item.id}`, event: item });
 			continue;
 		}
-		if (item.type === "trigger" || item.type === "bot_ask") {
+		if (
+			item.type === "trigger" ||
+			item.type === "bot_ask" ||
+			item.type === "team_answer"
+		) {
 			group = undefined;
 			blocks.push({ type: "note", key: `note:${item.id}`, note: item });
 			continue;
