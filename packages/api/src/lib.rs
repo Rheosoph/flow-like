@@ -40,6 +40,7 @@ mod bit_pricing;
 pub(crate) mod bot_app_gate;
 pub mod bot_calendar_feed;
 pub(crate) mod bot_caller;
+pub(crate) mod bot_channels;
 pub(crate) mod bot_flow;
 pub mod bot_host;
 pub(crate) mod bot_mail;

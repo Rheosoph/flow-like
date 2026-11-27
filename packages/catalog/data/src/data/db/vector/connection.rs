@@ -41,6 +41,48 @@ impl Cacheable for CachedConnection {
     }
 }
 
+#[derive(Clone, Default)]
+struct InitializationSlot(Arc<flow_like_types::tokio::sync::Mutex<()>>);
+
+impl Cacheable for InitializationSlot {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+/// The lock that serialises filling the run-cache entry `key`. Parallel branches share one run
+/// cache: without it each would open the same table, and the later insert would replace a handle
+/// another branch may already buffer writes in.
+pub(crate) async fn initialization_slot(
+    context: &ExecutionContext,
+    key: &str,
+) -> flow_like_types::Result<Arc<flow_like_types::tokio::sync::Mutex<()>>> {
+    let slot_key = format!("{key}::initialize");
+    let existing = context.cache.read().await.get(&slot_key).cloned();
+    let slot = match existing {
+        Some(slot) => slot,
+        None => context
+            .cache
+            .write()
+            .await
+            .entry(slot_key)
+            .or_insert_with(|| Arc::new(InitializationSlot::default()))
+            .clone(),
+    };
+    slot.as_any()
+        .downcast_ref::<InitializationSlot>()
+        .map(|slot| slot.0.clone())
+        .ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "Run cache entry for '{key}' holds an unexpected initialization type"
+            )
+        })
+}
+
 fn execution_cache(context: &ExecutionContext) -> flow_like_types::Result<&ExecutionContextCache> {
     context
         .execution_cache
@@ -132,8 +174,19 @@ pub(crate) async fn open_shared(
         .await?
     };
     let cacheable: Arc<dyn Cacheable> = Arc::new(CachedConnection(connection.clone()));
-    context.cache.write().await.insert(cache_key, cacheable);
-    Ok(connection)
+    // A parallel branch may have built the same connection meanwhile; all branches use the first.
+    let shared = context
+        .cache
+        .write()
+        .await
+        .entry(cache_key)
+        .or_insert(cacheable)
+        .clone();
+    Ok(shared
+        .as_any()
+        .downcast_ref::<CachedConnection>()
+        .map(|cached| cached.0.clone())
+        .unwrap_or(connection))
 }
 
 async fn database_builder(

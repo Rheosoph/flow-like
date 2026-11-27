@@ -172,10 +172,11 @@ pub async fn upsert_page(
     // A rewritten board gets a new storage identity even when its content is the same, and every
     // API instance then rehydrates it on its next read. Persist the board only when the page
     // changed it: a new page id, or page event nodes whose options follow the page.
+    let mut seeded = None;
     if board.content_hash() != board_before_page {
         page_id_guard.ensure_held()?;
         let put = board.save(None).await?;
-        state.seed_board_cache(&app_id, &board_id, board, &put);
+        seeded = state.seed_board_cache(&app_id, &board_id, board, &put);
     }
     rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
 
@@ -208,6 +209,12 @@ pub async fn upsert_page(
         .await?;
 
     page_id_guard.release().await;
+    if let Some(cached) = &seeded {
+        crate::routes::app::prerun_shared::prewarm_draft_revision(
+            &state, &app_id, &board_id, cached,
+        )
+        .await;
+    }
 
     if retargeted.is_empty() {
         audit_branch!(state, user, app_id, "page.upsert", "Page", page_id);

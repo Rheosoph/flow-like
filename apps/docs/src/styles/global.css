@@ -5,6 +5,8 @@
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 @import "../../../../packages/ui/styles/scrollbars.css" layer(scrollbars);
+/* Chart previews render packages/ui components; generate the utilities they use. */
+@source "../../../../packages/ui/components/editor/ui/chart-{nivo-preview,nivo-bar,plotly-preview}.tsx";
 
 /* The menu button has an inverted surface, so its icon follows button text. */
 starlight-menu-button button {

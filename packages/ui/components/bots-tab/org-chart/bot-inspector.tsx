@@ -6,13 +6,32 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useTeamBriefing } from "../../../hooks/use-bot-teams";
 import { useUserIdentity } from "../../../hooks/use-user-lookup";
-import { activeTeamOf } from "../../../lib/bot-teams/org-model";
+import {
+	activeTeamOf,
+	leadOfferFor,
+	rootTeamId,
+	teamById,
+} from "../../../lib/bot-teams/org-model";
 import { parseDataClassification } from "../../../lib/data-classification";
-import type { IOrgBot } from "../../../state/backend-state/bot-team-state";
+import type {
+	IOrgBot,
+	ITeam,
+} from "../../../state/backend-state/bot-team-state";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "../../ui/alert-dialog";
 import { Button } from "../../ui/button";
 import { DataClassificationBadge } from "../../ui/data-classification";
 import { Skeleton } from "../../ui/skeleton";
 import { Chip, InspectorSection } from "./inspector-parts";
+import { BotIoSection } from "./io-inspector";
 import { useOrgChart } from "./org-chart-context";
 import {
 	ASK_GROUP_ORDER,
@@ -26,8 +45,10 @@ import {
 	previewBriefing,
 } from "./org-chart-model";
 import { AskBadge, LeadStar, OrgBotAvatar } from "./org-chart-parts";
+import { ReachAction } from "./reach-parts";
 
 const PREVIEW_LINES = 8;
+const LEAD_TURNS_PER_PERSON_A_DAY = 20;
 
 function BotChip({ bot }: Readonly<{ bot: IOrgBot }>) {
 	const { select, nameOf } = useOrgChart();
@@ -229,6 +250,102 @@ function MoveTo({ bot }: Readonly<{ bot: IOrgBot }>) {
 	);
 }
 
+function LeadOfferCard({ team, bot }: Readonly<{ team: ITeam; bot: IOrgBot }>) {
+	const { t } = useTranslation("bots");
+	const { org, nameOf, actions } = useOrgChart();
+	const orgName = teamById(org, rootTeamId(org, team.id) ?? team.id)?.name;
+	const args = { teamId: team.id, botId: bot.id };
+	const fail = { onError: (error: Error) => toast.error(error.message) };
+	return (
+		<section className="flex flex-col gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3">
+			<p className="text-sm">
+				{t(
+					"teams.reach.leadOffer",
+					"{{team}} asks {{bot}} to lead it. Everyone in {{org}} can then talk to it, and its turns are on you (up to {{limit}} per person a day).",
+					{
+						team: team.name,
+						bot: nameOf(bot),
+						org: orgName ?? team.name,
+						limit: LEAD_TURNS_PER_PERSON_A_DAY,
+					},
+				)}
+			</p>
+			<div className="flex gap-2">
+				<Button
+					size="sm"
+					disabled={actions.acceptLead.isPending}
+					onClick={() => actions.acceptLead.mutate(args, fail)}
+				>
+					{t("teams.reach.acceptLead", "Accept")}
+				</Button>
+				<Button
+					size="sm"
+					variant="outline"
+					disabled={actions.declineLead.isPending}
+					onClick={() => actions.declineLead.mutate(args, fail)}
+				>
+					{t("teams.reach.declineLead", "Decline")}
+				</Button>
+			</div>
+		</section>
+	);
+}
+
+function StepDown({ team, bot }: Readonly<{ team: ITeam; bot: IOrgBot }>) {
+	const { t } = useTranslation("bots");
+	const { nameOf, actions } = useOrgChart();
+	const [open, setOpen] = useState(false);
+	return (
+		<>
+			<Button
+				size="sm"
+				variant="outline"
+				className="self-start"
+				onClick={() => setOpen(true)}
+			>
+				{t("teams.reach.stepDown", "Step down as lead")}
+			</Button>
+			<AlertDialog open={open} onOpenChange={setOpen}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>
+							{t(
+								"teams.reach.stepDownTitle",
+								"Step down as lead of {{team}}?",
+								{
+									team: team.name,
+								},
+							)}
+						</AlertDialogTitle>
+						<AlertDialogDescription>
+							{t(
+								"teams.reach.stepDownBody",
+								"{{bot}} stays in the team, but nobody can talk to {{team}} directly until another bot leads it.",
+								{ bot: nameOf(bot), team: team.name },
+							)}
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>
+							{t("teams.org.cancel", "Cancel")}
+						</AlertDialogCancel>
+						<AlertDialogAction
+							onClick={() =>
+								actions.resignLead.mutate(
+									{ teamId: team.id, botId: bot.id },
+									{ onError: (error) => toast.error(error.message) },
+								)
+							}
+						>
+							{t("teams.reach.stepDownConfirm", "Step down")}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+		</>
+	);
+}
+
 export function BotInspector({ bot }: Readonly<{ bot: IOrgBot }>) {
 	const { t } = useTranslation("bots");
 	const { org, me, nameOf, onOpenChat, onOpenConversation, actions, select } =
@@ -236,6 +353,9 @@ export function BotInspector({ bot }: Readonly<{ bot: IOrgBot }>) {
 	const owner = useUserIdentity(bot.owner_id);
 	const team = activeTeamOf(org, bot.id);
 	const own = bot.owner_id === me;
+	const offerTeam = own
+		? org.teams.find((entry) => leadOfferFor(entry)?.bot_id === bot.id)
+		: undefined;
 	const classification =
 		parseDataClassification(bot.classification) ?? "internal";
 
@@ -317,6 +437,12 @@ export function BotInspector({ bot }: Readonly<{ bot: IOrgBot }>) {
 					</Button>
 				)}
 			</div>
+			<ReachAction bot={bot} />
+			{offerTeam && <LeadOfferCard team={offerTeam} bot={bot} />}
+			{own && team?.lead_bot_id === bot.id && (
+				<StepDown team={team} bot={bot} />
+			)}
+			<BotIoSection bot={bot} />
 			{team && <ReportingLine botId={bot.id} />}
 			{team && <AskLists bot={bot} />}
 			{team && <BriefingBlock botId={bot.id} />}

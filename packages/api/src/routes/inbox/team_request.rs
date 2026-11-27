@@ -228,7 +228,7 @@ pub(crate) async fn answers_in_origin<C: ConnectionTrait>(
         .is_some())
 }
 
-async fn person_label<C: ConnectionTrait>(db: &C, user_id: &str) -> String {
+pub(crate) async fn person_label<C: ConnectionTrait>(db: &C, user_id: &str) -> String {
     let row = user::Entity::find_by_id(user_id)
         .select_only()
         .column(user::Column::Name)
@@ -250,6 +250,20 @@ pub(crate) struct Origin {
     pub conversation_id: String,
     pub message_id: String,
     pub text: String,
+}
+
+/// The person's thread with the team, created when they have none yet.
+pub(crate) async fn ensure_thread<C: ConnectionTrait>(
+    db: &C,
+    team: &bot_team::Model,
+    person_id: &str,
+    now: DateTime<FixedOffset>,
+    effects: &mut Effects,
+) -> Result<bot_team_thread::Model, ApiError> {
+    match thread_of(db, &team.id, person_id).await? {
+        Some(thread) => Ok(thread),
+        None => create_thread(db, team, person_id, now, effects).await,
+    }
 }
 
 async fn create_thread<C: ConnectionTrait>(
@@ -304,10 +318,7 @@ pub(crate) async fn route_request_in<C: ConnectionTrait>(
         return Ok(None);
     };
     let mut effects = Effects::default();
-    let thread = match thread_of(db, team_id, person_id).await? {
-        Some(thread) => thread,
-        None => create_thread(db, &team, person_id, now, &mut effects).await?,
-    };
+    let thread = ensure_thread(db, &team, person_id, now, &mut effects).await?;
     sync_thread(db, &team, &thread, person_id, now, &mut effects).await?;
     let request = TeamRequestRef {
         team_id: team.id.clone(),
@@ -333,7 +344,7 @@ pub(crate) async fn route_request_in<C: ConnectionTrait>(
     Ok(Some(Routed { sent, effects }))
 }
 
-async fn lock_request(
+pub(crate) async fn lock_request(
     txn: &DatabaseTransaction,
     person_id: &str,
     team_id: &str,

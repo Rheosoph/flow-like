@@ -325,6 +325,31 @@ describe("requests", () => {
 		).toEqual({ subtask_model: null });
 	});
 
+	test("a bot stays hidden from other people until its owner lets them invite it", () => {
+		const fresh = { ...createEmptyBotDraft(), name: "Scout" };
+		expect(fresh.othersCanInvite).toBe(false);
+		expect(buildCreateBotRequest(fresh)).not.toHaveProperty(
+			"others_can_invite",
+		);
+		expect(
+			buildCreateBotRequest({ ...fresh, othersCanInvite: true }),
+		).toMatchObject({ others_can_invite: true });
+
+		const original = bot();
+		const draft = botDraftFromBot(original);
+		expect(draft.othersCanInvite).toBe(false);
+		expect(
+			buildUpdateBotRequest(original, { ...draft, othersCanInvite: true }),
+		).toEqual({ others_can_invite: true });
+		const open = bot({ others_can_invite: true });
+		expect(
+			buildUpdateBotRequest(open, {
+				...botDraftFromBot(open),
+				othersCanInvite: false,
+			}),
+		).toEqual({ others_can_invite: false });
+	});
+
 	test("update sends nothing when nothing changed", () => {
 		const original = bot();
 		expect(buildUpdateBotRequest(original, botDraftFromBot(original))).toEqual(

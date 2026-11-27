@@ -14,7 +14,7 @@ Every message in a 1:1 chat with a bot wakes it. In rooms the rules are subtler:
 <WakeChecker client:visible />
 
 - **An @mention or a reply** to one of its messages always wakes the bot.
-- **Reading along.** Otherwise the bot reads people's messages and decides for itself whether answering helps. It may well stay silent. A message that names nobody counts as meant for whoever you were just talking with, so the other bots stay out of it. The bot's owner can switch this off per room with **Answer only when mentioned**.
+- **Reading along.** Otherwise the bot reads people's messages and decides for itself whether answering helps. It may well stay silent. A message that names nobody counts as meant for whoever you were just talking with, so the other bots stay out of it. The bot's owner can switch this off per room with **Answer only when mentioned**; the bot then still gets the follow-ups of someone it's talking with, so nobody has to repeat the @mention.
 - **People other than the owner** can wake a bot up to 20 times a day each, counting the turns bots take in a discussion their message started. When someone hits the cap, the bot says so in the room. The owner is never capped.
 
 See [Rooms and people](/bots/rooms/) for invitations, limits and room memory.

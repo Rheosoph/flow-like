@@ -1,5 +1,5 @@
-pub mod config;
 pub mod bounded;
+pub mod config;
 pub mod credentials;
 #[cfg(feature = "lance")]
 pub mod immutable_lance_cache;

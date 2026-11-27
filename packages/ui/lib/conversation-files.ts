@@ -6,6 +6,7 @@ import {
 	type IInboxMessagePart,
 	MAX_CONVERSATION_FILE_BYTES,
 } from "../state/backend-state/inbox-state";
+import { isAzureBlobStorageUrl } from "./storage-url";
 
 const UPLOAD_PARALLELISM = 3;
 
@@ -39,7 +40,7 @@ export async function putSignedFile(url: string, file: File): Promise<void> {
 	const headers: Record<string, string> = {
 		"Content-Type": file.type || "application/octet-stream",
 	};
-	if (url.includes(".blob.core.windows.net")) {
+	if (isAzureBlobStorageUrl(url)) {
 		headers["x-ms-blob-type"] = "BlockBlob";
 	}
 	const response = await fetch(url, { method: "PUT", body: file, headers });

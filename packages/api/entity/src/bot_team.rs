@@ -13,6 +13,12 @@ pub struct Model {
     pub parent_id: Option<String>,
     #[sea_orm(column_name = "leadBotId")]
     pub lead_bot_id: Option<String>,
+    #[sea_orm(column_name = "leadOfferBotId")]
+    pub lead_offer_bot_id: Option<String>,
+    #[sea_orm(column_name = "leadOfferBy")]
+    pub lead_offer_by: Option<String>,
+    #[sea_orm(column_name = "leadOfferAt")]
+    pub lead_offer_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "directAsks")]
     pub direct_asks: bool,
     #[sea_orm(column_name = "conversationId", unique)]

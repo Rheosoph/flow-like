@@ -70,16 +70,19 @@ async fn the_owner_takes_over_a_bots_virtual_display_and_hands_it_back() {
 
     host.hand_back("takeover-bot").expect("hand back");
     assert!(!host.is_taken_over("takeover-bot"));
-    let after = computer.screenshot().await.expect("screenshot after hand back");
-    let note = after.note.expect("a note about the owner's time");
-    assert!(note.contains("The owner used the computer"), "note was: {note}");
-    assert!(
-        host.inject(
-            "takeover-bot",
-            InputEvent::PointerMove { x: 1.0, y: 1.0 }
-        )
+    let after = computer
+        .screenshot()
         .await
-        .is_err(),
+        .expect("screenshot after hand back");
+    let note = after.note.expect("a note about the owner's time");
+    assert!(
+        note.contains("The owner used the computer"),
+        "note was: {note}"
+    );
+    assert!(
+        host.inject("takeover-bot", InputEvent::PointerMove { x: 1.0, y: 1.0 })
+            .await
+            .is_err(),
         "input is refused once the bot has the computer back"
     );
     host.shutdown().await;

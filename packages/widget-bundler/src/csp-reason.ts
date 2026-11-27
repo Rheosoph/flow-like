@@ -178,6 +178,15 @@ function splitRuns(
 	return runs;
 }
 
+/** `str::trim_matches('.')`, linear on long runs of dots. */
+function trimDots(chars: readonly string[]): string {
+	let start = 0;
+	let end = chars.length;
+	while (start < end && chars[start] === ".") start++;
+	while (end > start && chars[end - 1] === ".") end--;
+	return chars.slice(start, end).join("");
+}
+
 /** Reason rule 7: a letter run mixing ASCII and non-Latin letters. */
 export function reasonHasMixedScript(reason: string): boolean {
 	return splitRuns(Array.from(reason), isLetterOrMark).some(
@@ -288,10 +297,7 @@ export function reasonContainsAddress(reason: string): boolean {
 		Array.from(folded),
 		(c) => isLetterOrMark(c) || isNumeric(c) || c === "-" || c === ".",
 	).some((run) => {
-		const labels = run
-			.join("")
-			.replace(/^\.+|\.+$/g, "")
-			.split(".");
+		const labels = trimDots(run).split(".");
 		const last = labels[labels.length - 1] ?? "";
 		return (
 			labels.length >= 2 &&

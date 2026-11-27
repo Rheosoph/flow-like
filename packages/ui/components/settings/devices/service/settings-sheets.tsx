@@ -489,11 +489,12 @@ function draftErrorText(
 }
 
 function jsonErrorText(t: DevicesT, error: JsonError): string {
+	const params = error.params ?? {};
 	const texts: Record<JsonError["code"], string> = {
 		invalid_json: t(
 			"devices:serviceConfig.json.invalid",
 			"That isn't valid JSON: {{detail}}. Nothing was applied.",
-			error.params,
+			params,
 		),
 		not_an_object: t(
 			"devices:serviceConfig.json.notObject",
@@ -502,7 +503,7 @@ function jsonErrorText(t: DevicesT, error: JsonError): string {
 		identity_changed: t(
 			"devices:serviceConfig.json.identity",
 			"The service's identity can't change (it now says {{value}}). Deploy a new service instead.",
-			error.params,
+			params,
 		),
 		nothing_changed: t(
 			"devices:serviceConfig.json.nothingChanged",
@@ -515,7 +516,7 @@ function jsonErrorText(t: DevicesT, error: JsonError): string {
 		too_large: t(
 			"devices:serviceConfig.error.tooLarge",
 			"The settings are {{bytes, number}} bytes. The device accepts up to {{max, number}}. Remove something and try again.",
-			error.params,
+			params,
 		),
 	};
 	return texts[error.code];

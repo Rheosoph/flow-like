@@ -68,7 +68,7 @@ describe("an app's events on one device (design R2 §6.4 App › Devices)", () =
 		);
 		expect(
 			cell(SHOP.once)?.querySelector("[data-schedule-run]")?.textContent,
-		).toMatch(/^Runs once Oct 15 at 09:00 GMT\+2 · in 2 wk\./);
+		).toMatch(/^Runs once Oct 15(?: at |, )09:00 GMT\+2 · in 2 wk\./);
 	});
 
 	test("Run now… under the form, never under another kind", async () => {

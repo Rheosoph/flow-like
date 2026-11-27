@@ -130,23 +130,32 @@ impl Calendar {
     }
 }
 
-/// The calendars of the bot's connectors whose reads the owner did not switch off: OAuth accounts
-/// of Google or Microsoft, and CalDAV connectors with a chosen calendar.
+impl Calendar {
+    /// The calendar `entry` connects: an OAuth account of Google or Microsoft, or a CalDAV
+    /// connector with a chosen calendar, whose reads the owner did not switch off.
+    fn of(entry: ConnectorEntry) -> Option<Self> {
+        let provider = match entry.kind {
+            ConnectorKind::Oauth => Provider::parse(entry.provider_id.as_deref()?)
+                .filter(|provider| *provider != Provider::Caldav)?,
+            ConnectorKind::Caldav if entry.calendar.is_some() => Provider::Caldav,
+            _ => return None,
+        };
+        Some(Self { entry, provider }).filter(|calendar| calendar.allows("GET"))
+    }
+}
+
+/// The provider id of the calendar `entry` connects, when [`calendars`] counts it as one.
+pub fn calendar_provider(entry: ConnectorEntry) -> Option<&'static str> {
+    Calendar::of(entry).map(|calendar| calendar.provider.id())
+}
+
+/// The calendars of the bot's connectors, as [`Calendar::of`] picks them.
 pub async fn calendars(source: &dyn ConnectorSource) -> flow_like_types::Result<Vec<Calendar>> {
     Ok(source
         .entries()
         .await?
         .into_iter()
-        .filter_map(|entry| {
-            let provider = match entry.kind {
-                ConnectorKind::Oauth => Provider::parse(entry.provider_id.as_deref()?)
-                    .filter(|provider| *provider != Provider::Caldav)?,
-                ConnectorKind::Caldav if entry.calendar.is_some() => Provider::Caldav,
-                _ => return None,
-            };
-            Some(Calendar { entry, provider })
-        })
-        .filter(|calendar| calendar.allows("GET"))
+        .filter_map(Calendar::of)
         .collect())
 }
 

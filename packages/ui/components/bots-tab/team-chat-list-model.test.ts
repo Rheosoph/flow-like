@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type {
+	IBotChat,
 	IOrgBot,
 	IOrgView,
 	ITeam,
@@ -232,11 +233,117 @@ describe("buildChatGroups", () => {
 		]);
 	});
 
+	test("a pinned bot shows in Pinned by pin time, stays in its team, leaves Your bots", () => {
+		const groups = buildChatGroups(
+			input({
+				conversations: [
+					conversation("itroom"),
+					direct("d1", "botMine", { pinned_at: "2026-03-02T00:00:00Z" }),
+					direct("d2", "botFree", { pinned_at: "2026-02-01T00:00:00Z" }),
+					conversation("r2", { pinned_at: "2026-03-01T00:00:00Z" }),
+				],
+			}),
+		);
+		expect(groups[0].rows.map((r) => r.key)).toEqual([
+			"bot:botMine",
+			"conversation:r2",
+			"bot:botFree",
+		]);
+		const it = groups.find((g) => g.key === "team:IT Support");
+		expect(it?.rows.map((r) => r.key)).toContain("bot:botMine");
+		expect(keys(groups)).not.toContain("bots");
+	});
+
+	test("filtering or searching shows a pinned team bot once, in Pinned", () => {
+		const conversations = [
+			direct("d1", "botMine", {
+				pinned_at: "2026-03-02T00:00:00Z",
+				unread_count: 1,
+			}),
+		];
+		for (const over of [
+			{ filter: "pinned" as const },
+			{ filter: "unread" as const },
+			{ query: "mine" },
+		]) {
+			const groups = buildChatGroups(input({ conversations, ...over }));
+			expect(groups.map((g) => [g.key, g.rows.map((r) => r.key)])).toEqual([
+				["pinned", ["bot:botMine"]],
+			]);
+		}
+	});
+
 	test("without teams only the plain groups remain", () => {
 		const groups = buildChatGroups(
 			input({ org: { teams: [], bots: [], invitations: [] } }),
 		);
 		expect(keys(groups)).toEqual(["pinned", "bots", "rooms", "people"]);
+	});
+});
+
+describe("teammates", () => {
+	const person = (user_id: string, status: "active" | "invited" = "active") =>
+		({ user_id, role: "member", status }) as ITeam["people"][number];
+	const withPeople = (over: Partial<ChatListInput> = {}) => {
+		const [kestrel, it] = org.teams;
+		return input({
+			org: {
+				...org,
+				teams: [
+					{
+						...kestrel,
+						people: [
+							person(ME),
+							person("jonas"),
+							person("anna"),
+							person("ida", "invited"),
+						],
+					},
+					{ ...it, people: [person(ME), person("jonas")] },
+					team("Elsewhere", { people: [person("lea")] }),
+				],
+			},
+			...over,
+		});
+	};
+	const rowsOf = (groups: ReturnType<typeof buildChatGroups>, key: string) =>
+		groups.find((g) => g.key === key)?.rows.map((r) => r.key);
+
+	test("a teammate's direct chat moves from People into the most specific shared team", () => {
+		const groups = buildChatGroups(withPeople());
+		expect(rowsOf(groups, "team:IT Support")?.at(-1)).toBe("conversation:p1");
+		expect(rowsOf(groups, "team:Kestrel")).not.toContain("conversation:p1");
+		expect(keys(groups)).not.toContain("people");
+	});
+
+	test("a teammate without a chat gets a row to start one; invited people and strangers don't", () => {
+		const groups = buildChatGroups(withPeople());
+		expect(rowsOf(groups, "team:Kestrel")).toEqual([
+			"conversation:kroom",
+			"person:Kestrel:anna",
+		]);
+		const people = groups
+			.flatMap((g) => g.rows.map((r) => r.key))
+			.filter((key) => key.startsWith("person:"));
+		expect(people).toEqual(["person:Kestrel:anna"]);
+	});
+
+	test("a pinned chat with a teammate shows in Pinned and stays in their team", () => {
+		const conversations = [
+			direct("p2", "anna", { pinned_at: "2026-03-01T00:00:00Z" }),
+		];
+		const groups = buildChatGroups(withPeople({ conversations }));
+		expect(rowsOf(groups, "pinned")).toEqual(["conversation:p2"]);
+		expect(rowsOf(groups, "team:Kestrel")).toEqual(["conversation:p2"]);
+		const pinnedOnly = buildChatGroups(
+			withPeople({ conversations, filter: "pinned" }),
+		);
+		expect(keys(pinnedOnly)).toEqual(["pinned"]);
+	});
+
+	test("search finds a teammate by name", () => {
+		const groups = buildChatGroups(withPeople({ query: "anna" }));
+		expect(rowsOf(groups, "team:Kestrel")).toEqual(["person:Kestrel:anna"]);
 	});
 });
 
@@ -291,6 +398,135 @@ describe("your requests", () => {
 		expect(
 			groups.find((g) => g.key === "rooms")?.rows.map((r) => r.key),
 		).toEqual(["conversation:thread1", "conversation:r1"]);
+	});
+});
+
+describe("bot chats and watching", () => {
+	const chat = (over: Partial<IBotChat> = {}): IBotChat => ({
+		bot_id: "botLead",
+		user_id: ME,
+		owner_id: "jonas",
+		status: "active",
+		conversation_id: "chat1",
+		requested_at: "2026-01-01T00:00:00Z",
+		...over,
+	});
+	const withChats = (
+		chats: IBotChat[],
+		conversations: IConversation[],
+		over: Partial<ChatListInput> = {},
+	) => input({ org: { ...org, chats }, conversations, ...over });
+	const rowKeys = (groups: ReturnType<typeof buildChatGroups>, key: string) =>
+		groups.find((group) => group.key === key)?.rows.map((row) => row.key);
+
+	test("an approved chat sits in the bot's team and not in Rooms", () => {
+		const groups = buildChatGroups(
+			withChats([chat()], [conversation("chat1", { unread_count: 3 })]),
+		);
+		expect(rowKeys(groups, "team:IT Support")).toContain("conversation:chat1");
+		expect(rowKeys(groups, "team:IT Support")).not.toContain(
+			"colleague:IT Support:botLead",
+		);
+		expect(groups.find((group) => group.key === "rooms")).toBeUndefined();
+		const row = groups
+			.flatMap((group) => group.rows)
+			.find((item) => item.key === "conversation:chat1");
+		expect(row?.name).toBe("botLead");
+		expect(row?.unread).toBe(3);
+	});
+
+	test("an approved chat of a team the list doesn't show goes to Colleagues' bots", () => {
+		const groups = buildChatGroups(
+			withChats([chat({ bot_id: "botStray" })], [conversation("chat1")], {
+				org: {
+					...org,
+					bots: [...org.bots, orgBot("botStray", "jonas")],
+					chats: [chat({ bot_id: "botStray" })],
+				},
+			}),
+		);
+		expect(rowKeys(groups, "colleagues")).toEqual(["conversation:chat1"]);
+	});
+
+	test("a pending request waits as a muted row, a declined one shows nothing", () => {
+		const pending = buildChatGroups(
+			withChats(
+				[chat({ status: "pending", conversation_id: null })],
+				[conversation("itroom")],
+			),
+		);
+		const waiting = pending
+			.flatMap((group) => group.rows)
+			.find((row) => row.key === "colleague:IT Support:botLead");
+		expect(waiting?.kind === "colleague" && waiting.pending).toBe(true);
+		const declined = buildChatGroups(
+			withChats(
+				[chat({ status: "declined", conversation_id: null })],
+				[conversation("itroom")],
+			),
+		);
+		expect(
+			declined
+				.flatMap((group) => group.rows)
+				.filter((row) => row.key.startsWith("conversation:")),
+		).toHaveLength(1);
+	});
+
+	test("other people's chats with the reader's bot are not the reader's chats", () => {
+		const groups = buildChatGroups(
+			withChats(
+				[chat({ bot_id: "botMine", user_id: "tom", owner_id: ME })],
+				[conversation("chat1", { watching: true })],
+			),
+		);
+		expect(rowKeys(groups, "team:IT Support")).not.toContain(
+			"conversation:chat1",
+		);
+	});
+
+	test("watching conversations list last, quiet, named after whose they are", () => {
+		const groups = buildChatGroups(
+			withChats(
+				[chat({ bot_id: "botMine", user_id: "tom", owner_id: ME })],
+				[
+					conversation("r1", { unread_count: 1 }),
+					conversation("chat1", { watching: true, unread_count: 5 }),
+					conversation("thr", {
+						watching: true,
+						unread_count: 2,
+						title: "Thread of tom",
+					}),
+				],
+			),
+		);
+		expect(keys(groups).at(-1)).toBe("watching");
+		const watching = groups.at(-1);
+		expect(watching?.rows.map((row) => row.name).sort()).toEqual([
+			"Thread of tom",
+			"tom \u00b7 botMine",
+		]);
+		expect(watching?.rows.every((row) => row.unread === 0)).toBe(true);
+		expect(watching?.unread).toBe(0);
+		expect(groups.find((group) => group.key === "rooms")?.unread).toBe(1);
+	});
+
+	test("watching conversations stay out of unread and pinned filters, and match search", () => {
+		const conversations = [
+			conversation("chat1", {
+				watching: true,
+				unread_count: 5,
+				pinned_at: "2026-03-01T00:00:00Z",
+			}),
+		];
+		expect(buildChatGroups(input({ conversations, filter: "unread" }))).toEqual(
+			[],
+		);
+		expect(buildChatGroups(input({ conversations, filter: "pinned" }))).toEqual(
+			[],
+		);
+		expect(
+			keys(buildChatGroups(input({ conversations, query: "chat1" }))),
+		).toEqual(["watching"]);
 	});
 });
 

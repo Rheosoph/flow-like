@@ -9,6 +9,7 @@
 mod android_bot_runtime;
 #[cfg(target_os = "android")]
 mod android_mobile;
+mod bot_channels;
 mod bot_host;
 #[cfg(desktop)]
 mod bot_notch;
@@ -853,6 +854,7 @@ pub fn run() {
                 &local_bots_db,
             ));
             bot_host::start(app.app_handle());
+            bot_channels::start(app.app_handle());
 
             // Initialize Event Sink Manager synchronously to ensure it's ready before accepting commands
             let settings_clone = settings_state_for_sink.clone();
@@ -1671,6 +1673,9 @@ pub fn run() {
             functions::local_bots::notes::local_bots_notes_update,
             functions::local_bots::history::local_inbox_import_history,
             functions::local_bots::history::local_inbox_write_segment,
+            bot_channels::bot_discord_get,
+            bot_channels::bot_discord_set,
+            bot_channels::bot_discord_remove,
             bot_host::commands::bot_host_turns,
             bot_host::commands::bot_host_poke,
             bot_host::commands::bot_host_e2e_status,

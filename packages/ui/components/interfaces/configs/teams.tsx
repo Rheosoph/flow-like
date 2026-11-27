@@ -1,7 +1,11 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import type { UseQueryResult } from "@tanstack/react-query";
+import {
+	type UseQueryResult,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import {
 	CheckCircle2,
@@ -19,6 +23,7 @@ import {
 	type ReactNode,
 	useEffect,
 	useId,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -123,6 +128,64 @@ function saveTeamsPackage(result: TeamsBotPackage) {
 	setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+export interface TeamsAdapter {
+	scope: string;
+	target?: "event" | "bot";
+	setup?: (input: TeamsBotSetup) => Promise<TeamsBotConnection>;
+	disconnect?: () => Promise<TeamsBotConnection>;
+	package?: () => Promise<TeamsBotPackage>;
+	rotate?: () => Promise<TeamsBotConnection>;
+	access?: () => Promise<TeamsBotAccess>;
+	accessKey: readonly unknown[];
+	refreshConnection: () => Promise<void>;
+	refreshAccess: () => Promise<void>;
+}
+
+function useEventTeamsAdapter(appId: string, eventId: string): TeamsAdapter {
+	const events = useBackend().eventState;
+	const queryClient = useQueryClient();
+	const invalidate = useInvalidateInvoke();
+	const get = events.getTeamsBot;
+	const accessKey = useMemo(
+		() => ["teams-event-access", appId, eventId] as const,
+		[appId, eventId],
+	);
+	const setupFn = events.setupTeamsBot?.bind(events);
+	const disconnectFn = events.disconnectTeamsBot?.bind(events);
+	const packageFn = events.getTeamsBotPackage?.bind(events);
+	const rotateFn = events.rotateTeamsBotSecret?.bind(events);
+	const accessFn = events.getTeamsBotAccess?.bind(events);
+	return useMemo(
+		() => ({
+			scope: `${appId}/${eventId}`,
+			setup: setupFn && ((input) => setupFn(appId, eventId, input)),
+			disconnect: disconnectFn && (() => disconnectFn(appId, eventId)),
+			package: packageFn && (() => packageFn(appId, eventId)),
+			rotate: rotateFn && (() => rotateFn(appId, eventId)),
+			access: accessFn && (() => accessFn(appId, eventId)),
+			accessKey,
+			refreshConnection: async () => {
+				if (get) await invalidate(get, [appId, eventId]);
+			},
+			refreshAccess: () =>
+				queryClient.invalidateQueries({ queryKey: accessKey }),
+		}),
+		[
+			appId,
+			eventId,
+			setupFn,
+			disconnectFn,
+			packageFn,
+			rotateFn,
+			accessFn,
+			get,
+			invalidate,
+			queryClient,
+			accessKey,
+		],
+	);
+}
+
 export function TeamsConfig({
 	appId,
 	eventId,
@@ -133,6 +196,7 @@ export function TeamsConfig({
 	const events = backend.eventState;
 	const offline = useInvoke(backend.isOffline, backend, [appId], !!appId);
 	const get = events.getTeamsBot;
+	const adapter = useEventTeamsAdapter(appId, eventId ?? "");
 	const connection = useInvoke(
 		get ?? unavailable,
 		events,
@@ -149,8 +213,7 @@ export function TeamsConfig({
 	if (!connection.data || !eventId) return null;
 	return (
 		<TeamsSetupForm
-			appId={appId}
-			eventId={eventId}
+			adapter={adapter}
 			isEditing={isEditing}
 			saved={connection.data}
 			refreshing={connection.isFetching}
@@ -251,23 +314,34 @@ function teamsConnectionGate(
 function teamsFailureSummary(
 	t: Translate,
 	failure: TeamsFailure,
+	bot = false,
 ): string | undefined {
 	switch (failure) {
 		case "forbidden":
-			return t(
-				"teamsFailureForbidden",
-				"Teams bots are turned off on this server, or your role cannot change this event. Ask your administrator.",
-			);
+			return bot
+				? t(
+						"teamsFailureForbiddenBot",
+						"Teams bots are turned off on this server, or you are not the owner of this bot. Ask your administrator.",
+					)
+				: t(
+						"teamsFailureForbidden",
+						"Teams bots are turned off on this server, or your role cannot change this event. Ask your administrator.",
+					);
 		case "busy":
 			return t(
 				"teamsFailureBusy",
 				"Another operation on this bot is still running. Refresh the status, then try again.",
 			);
 		case "managed_limit":
-			return t(
-				"teamsFailureManagedLimit",
-				"This app has reached its limit of Flow-Like managed bots. Disconnect a managed bot on another event, or connect your own bot instead.",
-			);
+			return bot
+				? t(
+						"teamsFailureManagedLimitBot",
+						"This account has reached its limit of Flow-Like managed Teams bots. Disconnect the managed connection of another bot, or connect your own bot instead.",
+					)
+				: t(
+						"teamsFailureManagedLimit",
+						"This app has reached its limit of Flow-Like managed bots. Disconnect a managed bot on another event, or connect your own bot instead.",
+					);
 		case "rate_limited":
 			return t(
 				"teamsFailureRateLimited",
@@ -293,28 +367,24 @@ function teamsFailureSummary(
 	}
 }
 
-function TeamsSetupForm({
-	appId,
-	eventId,
+export function TeamsSetupForm({
+	adapter,
+	intro,
 	isEditing,
 	saved,
 	refreshing,
 	onRefresh,
 }: Readonly<{
-	appId: string;
-	eventId: string;
+	adapter: TeamsAdapter;
+	intro?: string;
 	isEditing: boolean;
 	saved: TeamsBotConnection;
 	refreshing: boolean;
 	onRefresh: () => void;
 }>) {
 	const { t } = useTranslation("interfaces");
-	const backend = useBackend();
-	const events = backend.eventState;
-	const get = events.getTeamsBot;
-	const checkAccess = events.getTeamsBotAccess;
 	const prefix = useId();
-	const invalidate = useInvalidateInvoke();
+	const forBot = adapter.target === "bot";
 	const [form, setForm] = useState<TeamsBotSetup>(EMPTY_SETUP);
 	const [approvers, setApprovers] = useState("");
 	const [busy, setBusy] = useState<TeamsOperation | null>(null);
@@ -323,7 +393,7 @@ function TeamsSetupForm({
 	const [pendingSave, setPendingSave] = useState<TeamsBotSetup | null>(null);
 	const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 
-	const scope = `${appId}/${eventId}`;
+	const scope = adapter.scope;
 	const scopeRef = useRef<string | null>(scope);
 	const hydratedScope = useRef<string | null>(null);
 
@@ -385,13 +455,13 @@ function TeamsSetupForm({
 			const summary = teamsFailureSummary(
 				t,
 				teamsFailure(cause, operation, form.mode),
+				forBot,
 			);
 			setError(summary ? { summary, detail } : { summary: detail });
 		} finally {
-			if (operation !== "download" && get)
-				await invalidate(get, [appId, eventId]);
-			if (operation === "setup" && checkAccess)
-				await invalidate(checkAccess, [appId, eventId]);
+			if (operation !== "download") await adapter.refreshConnection();
+			if (operation === "setup" && adapter.access)
+				await adapter.refreshAccess();
 			if (current()) setBusy(null);
 		}
 	}
@@ -399,7 +469,7 @@ function TeamsSetupForm({
 	async function submit(input: TeamsBotSetup) {
 		setPendingSave(null);
 		await run("setup", async () => {
-			const result = await events.setupTeamsBot?.(appId, eventId, input);
+			const result = await adapter.setup?.(input);
 			if (!result) return undefined;
 			return () => {
 				applyConnection(result);
@@ -409,7 +479,7 @@ function TeamsSetupForm({
 	}
 
 	function save() {
-		if (!events.setupTeamsBot) return;
+		if (!adapter.setup) return;
 		const input = {
 			...form,
 			allowed_responders: parseTeamsApprovers(approvers),
@@ -427,7 +497,7 @@ function TeamsSetupForm({
 
 	function download() {
 		void run("download", async () => {
-			const result = await events.getTeamsBotPackage?.(appId, eventId);
+			const result = await adapter.package?.();
 			if (result) saveTeamsPackage(result);
 			return undefined;
 		});
@@ -435,7 +505,7 @@ function TeamsSetupForm({
 
 	function rotate() {
 		void run("rotate", async () => {
-			await events.rotateTeamsBotSecret?.(appId, eventId);
+			await adapter.rotate?.();
 			return () =>
 				toast.success(t("teamsBotSecretRenewed", "Bot secret renewed"));
 		});
@@ -444,7 +514,7 @@ function TeamsSetupForm({
 	function disconnect() {
 		setConfirmDisconnect(false);
 		void run("disconnect", async () => {
-			const result = await events.disconnectTeamsBot?.(appId, eventId);
+			const result = await adapter.disconnect?.();
 			return () => {
 				if (result) applyConnection(result);
 				toast.success(t("teamsBotDisconnected", "Teams bot disconnected"));
@@ -469,16 +539,17 @@ function TeamsSetupForm({
 	const saveDisabled =
 		!editable ||
 		serverBusy ||
-		!events.setupTeamsBot ||
+		!adapter.setup ||
 		(form.mode === "flow_like_managed" && !saved.managed_available);
 
 	return (
 		<div className="max-w-3xl space-y-6">
 			<p className="text-sm text-muted-foreground">
-				{t(
-					"teamsConnectThisChatEventToTeams",
-					"Connect this Chat Event to Teams. Messages run your flow on the server; your desktop can be closed.",
-				)}
+				{intro ??
+					t(
+						"teamsConnectThisChatEventToTeams",
+						"Connect this Chat Event to Teams. Messages run your flow on the server; your desktop can be closed.",
+					)}
 			</p>
 			<TeamsAuthPathPicker
 				value={form.mode}
@@ -517,7 +588,7 @@ function TeamsSetupForm({
 				<TeamsField
 					id={`${prefix}-tenant`}
 					label={t("teamsOrganizationTenantId", "Teams organization tenant ID")}
-					hint={<TenantIdHelp />}
+					hint={<TenantIdHelp bot={forBot} />}
 					error={
 						invalid("customer_tenant_id")
 							? t(
@@ -569,6 +640,7 @@ function TeamsSetupForm({
 			</TeamsField>
 			{custom && (
 				<TeamsCustomerRegistration
+					bot={forBot}
 					form={form}
 					endpoint={endpoint}
 					editable={editable}
@@ -599,11 +671,10 @@ function TeamsSetupForm({
 					)
 				}
 			>
-				{showAccess && checkAccess && (
+				{showAccess && adapter.access && (
 					<TeamsGraphAccess
-						appId={appId}
-						eventId={eventId}
-						check={checkAccess}
+						queryKey={adapter.accessKey}
+						check={adapter.access}
 					/>
 				)}
 			</TeamsPermissions>
@@ -645,9 +716,10 @@ function TeamsSetupForm({
 			<TeamsStatus connection={saved} />
 			{saved.configured && (
 				<TeamsInstall
+					bot={forBot}
 					connection={saved}
 					downloading={busy === "download"}
-					disabled={!!busy || !events.getTeamsBotPackage}
+					disabled={!!busy || !adapter.package}
 					onDownload={download}
 				/>
 			)}
@@ -656,8 +728,8 @@ function TeamsSetupForm({
 					connection={saved}
 					busy={busy}
 					disabled={!editable || serverBusy}
-					canRotate={!!events.rotateTeamsBotSecret}
-					canDisconnect={!!events.disconnectTeamsBot}
+					canRotate={!!adapter.rotate}
+					canDisconnect={!!adapter.disconnect}
 					onRotate={rotate}
 					onDisconnect={() => setConfirmDisconnect(true)}
 				/>
@@ -704,10 +776,15 @@ function TeamsSetupForm({
 										"teamsDisconnectManagedDescription",
 										"Disconnecting removes the managed Microsoft registration and stops this bot. Remove the app from Teams separately.",
 									)
-								: t(
-										"teamsDisconnectCustomerDescription",
-										"Disconnecting stops this event's bot access. Your Microsoft registration remains in your account.",
-									)}
+								: forBot
+									? t(
+											"teamsDisconnectCustomerDescriptionBot",
+											"Disconnecting stops this bot's Teams access. Your Microsoft registration remains in your account.",
+										)
+									: t(
+											"teamsDisconnectCustomerDescription",
+											"Disconnecting stops this event's bot access. Your Microsoft registration remains in your account.",
+										)}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
@@ -999,14 +1076,19 @@ function TeamsAuthPathRow({
 	);
 }
 
-function TenantIdHelp() {
+function TenantIdHelp({ bot }: Readonly<{ bot: boolean }>) {
 	const { t } = useTranslation("interfaces");
 	return (
 		<span>
-			{t(
-				"teamsTenantIdHelp",
-				"Only this organization's Teams conversations can run the event. Find the ID in the Microsoft Entra admin center under Overview → Tenant ID, or ask your Microsoft 365 admin.",
-			)}{" "}
+			{bot
+				? t(
+						"teamsTenantIdHelpBot",
+						"Only this organization's Teams conversations can reach the bot. Find the ID in the Microsoft Entra admin center under Overview → Tenant ID, or ask your Microsoft 365 admin.",
+					)
+				: t(
+						"teamsTenantIdHelp",
+						"Only this organization's Teams conversations can run the event. Find the ID in the Microsoft Entra admin center under Overview → Tenant ID, or ask your Microsoft 365 admin.",
+					)}{" "}
 			<ExternalLinkText href={TENANT_HELP_URL}>
 				{t("teamsHowToFindYourTenantId", "How to find your tenant ID")}
 			</ExternalLinkText>
@@ -1032,6 +1114,7 @@ function ExternalLinkText({
 }
 
 function TeamsCustomerRegistration({
+	bot,
 	form,
 	endpoint,
 	editable,
@@ -1040,6 +1123,7 @@ function TeamsCustomerRegistration({
 	onEdit,
 	onCopyEndpoint,
 }: Readonly<{
+	bot: boolean;
 	form: TeamsBotSetup;
 	endpoint: string;
 	editable: boolean;
@@ -1191,10 +1275,17 @@ function TeamsCustomerRegistration({
 			<TeamsField
 				id={`${prefix}-secret`}
 				label={t("teamsClientSecretValue", "Client secret value")}
-				hint={t(
-					"teamsSecretStorageHint",
-					"Stored encrypted on the server. Excluded from the event configuration and the downloaded ZIP.",
-				)}
+				hint={
+					bot
+						? t(
+								"teamsSecretStorageHintBot",
+								"Stored encrypted on the server. Excluded from the downloaded ZIP.",
+							)
+						: t(
+								"teamsSecretStorageHint",
+								"Stored encrypted on the server. Excluded from the event configuration and the downloaded ZIP.",
+							)
+				}
 				error={
 					invalid("client_secret")
 						? t(
@@ -1583,17 +1674,17 @@ function TeamsAccessIcon({
 }
 
 function TeamsGraphAccess({
-	appId,
-	eventId,
+	queryKey,
 	check,
 }: Readonly<{
-	appId: string;
-	eventId: string;
-	check: (appId: string, eventId: string) => Promise<TeamsBotAccess>;
+	queryKey: readonly unknown[];
+	check: () => Promise<TeamsBotAccess>;
 }>) {
 	const { t } = useTranslation("interfaces");
-	const events = useBackend().eventState;
-	const access = useInvoke(check, events, [appId, eventId]);
+	const access = useQuery<TeamsBotAccess, Error>({
+		queryKey,
+		queryFn: check,
+	});
 	const copy = useTeamsAccessCopy(access);
 	const consentUrl = teamsConsentUrl(access.data);
 	return (
@@ -1757,11 +1848,13 @@ function TeamsStatus({
 }
 
 function TeamsInstall({
+	bot,
 	connection,
 	downloading,
 	disabled,
 	onDownload,
 }: Readonly<{
+	bot: boolean;
 	connection: TeamsBotConnection;
 	downloading: boolean;
 	disabled: boolean;
@@ -1780,16 +1873,26 @@ function TeamsInstall({
 							"Last Teams activity received {{date}}.",
 							{ date: new Date(connection.last_activity_at).toLocaleString() },
 						)
-					: t(
-							"teamsSendATestMessageAfterInstallation",
-							"Send a test message after installation, then refresh status to confirm Teams can reach this event.",
-						)}
+					: bot
+						? t(
+								"teamsSendATestMessageAfterInstallationBot",
+								"Send a test message after installation, then refresh status to confirm Teams can reach this bot.",
+							)
+						: t(
+								"teamsSendATestMessageAfterInstallation",
+								"Send a test message after installation, then refresh status to confirm Teams can reach this event.",
+							)}
 			</p>
 			<p className="text-sm text-muted-foreground">
-				{t(
-					"teamsInstallSteps",
-					"Download the app, then in Teams choose Apps → Manage your apps → Upload an app. If uploads are disabled, send the ZIP to your Teams admin. Activate this event before sending a message to the bot.",
-				)}
+				{bot
+					? t(
+							"teamsInstallStepsBot",
+							"Download the app, then in Teams choose Apps → Manage your apps → Upload an app. If uploads are disabled, send the ZIP to your Teams admin. Once the connection is ready, the server answers every message to the bot.",
+						)
+					: t(
+							"teamsInstallSteps",
+							"Download the app, then in Teams choose Apps → Manage your apps → Upload an app. If uploads are disabled, send the ZIP to your Teams admin. Activate this event before sending a message to the bot.",
+						)}
 			</p>
 			<p className="text-sm text-muted-foreground">
 				{t(

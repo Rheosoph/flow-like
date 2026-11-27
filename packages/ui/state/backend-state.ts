@@ -31,6 +31,7 @@ import type {
 	IFlowScriptDiagnostic,
 	IScopedFlowScriptResponse,
 } from "./backend-state/board-state";
+import type { IBotDiscordState } from "./backend-state/bot-channels-state";
 import type { IBotState } from "./backend-state/bot-state";
 import type { IBotTeamState } from "./backend-state/bot-team-state";
 import type { IDataSourceState } from "./backend-state/data-source-state";
@@ -303,6 +304,8 @@ export interface IBackendState {
 	offlineWritesState?: IOfflineWritesState;
 	/** The signed-in account's bots; absent without a hub account */
 	botState?: IBotState;
+	/** Discord relay of the bots on this device; desktop only */
+	botDiscordState?: IBotDiscordState;
 	/** Teams of bots and people on the account's hub; absent without a hub account */
 	botTeamState?: IBotTeamState;
 	/** Conversations between people and bots; absent without a hub account */

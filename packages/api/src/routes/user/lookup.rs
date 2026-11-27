@@ -1156,6 +1156,7 @@ mod tests {
             subtask_model: None,
             calendar_wake: None,
             calendar_synced_at: None,
+            others_can_invite: None,
         }
     }
 

@@ -3,7 +3,9 @@ use super::{
     blocks::{INBOX_BLOCKED, block_in, blocked_between, blocks_for, unblock_in},
     conversations::{NewConversation, start_direct, start_group},
     entries::send_in,
-    fixture::{assert_code, at, bot_principal, copies, database, insert_bot, text, user},
+    fixture::{
+        assert_code, at, bot_principal, copies, database, insert_bot, let_others_invite, text, user,
+    },
     invitations::{accept_in, classify, invitations_for, invite_in},
     members::remove_in,
     requests::answer_by_writing,
@@ -21,6 +23,8 @@ async fn world() -> DatabaseConnection {
     db.execute_unprepared(r#"INSERT INTO public."User" ("id", "name") VALUES ('alice', 'Alice'), ('bob', 'Bob'), ('carol', 'Carol')"#).await.unwrap();
     insert_bot(&db, "alice-bot", "alice", "SERVER").await;
     insert_bot(&db, "bob-bot", "bob", "SERVER").await;
+    let_others_invite(&db, "alice-bot").await;
+    let_others_invite(&db, "bob-bot").await;
     db
 }
 

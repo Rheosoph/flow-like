@@ -1,4 +1,5 @@
 mod auth;
+pub(crate) mod bot;
 mod cards;
 mod config;
 mod context;
@@ -82,6 +83,10 @@ pub(super) struct Connection {
     pub permissions: Vec<TeamsPermission>,
     #[serde(default)]
     pub operation_until: i64,
+    /// Set when the connection belongs to a bot instead of an app event; `event_id` then holds
+    /// the bot id and `app_id` the bot's workspace.
+    #[serde(default)]
+    pub bot_id: Option<String>,
 }
 
 impl Connection {
@@ -217,6 +222,16 @@ mod tests {
         }))
         .unwrap();
         assert!(connection.permissions.is_empty());
+        assert_eq!(connection.bot_id, None);
+    }
+
+    #[test]
+    fn bot_connection_ids_are_stable_uuids_per_bot() {
+        let id = management::bot_connection_id("bot-1");
+        assert_eq!(id, management::bot_connection_id("bot-1"));
+        assert_ne!(id, management::bot_connection_id("bot-2"));
+        assert_ne!(id, management::connection_id("bot-1", "bot-1"));
+        assert!(uuid::Uuid::parse_str(&id).is_ok());
     }
 
     #[test]

@@ -322,6 +322,12 @@ pub async fn execute_commands(
             cached = state.seed_board_cache(&app_id, &board_id, board, &put);
         }
         drop(mutation_guard);
+        if let Some(cached) = &cached {
+            crate::routes::app::prerun_shared::prewarm_draft_revision(
+                &state, &app_id, &board_id, cached,
+            )
+            .await;
+        }
         let sync = match &sync_request {
             Some(request) => {
                 Some(board_sync_tail(&state, &app_id, &board_id, cached, request).await)
@@ -491,7 +497,12 @@ pub async fn execute_commands(
             )
         }
         None => {
-            state.seed_board_cache(&app_id, &board_id, board, &put);
+            if let Some(cached) = state.seed_board_cache(&app_id, &board_id, board, &put) {
+                crate::routes::app::prerun_shared::prewarm_draft_revision(
+                    &state, &app_id, &board_id, &cached,
+                )
+                .await;
+            }
             None
         }
     };

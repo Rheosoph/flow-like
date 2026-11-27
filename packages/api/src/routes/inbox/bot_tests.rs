@@ -497,6 +497,68 @@ async fn a_persons_unaddressed_message_lets_every_bot_member_read_along_unless_l
 }
 
 #[tokio::test]
+async fn a_follow_up_reaches_the_bot_a_person_talks_with_though_it_answers_only_when_named() {
+    use super::invitations::set_limits_in;
+    use flow_like_types::bot_effective::BotRoomLimits;
+
+    let db = database().await;
+    team(&db).await;
+    let limits = BotRoomLimits {
+        mentioned_only: true,
+        ..Default::default()
+    };
+    for (bot, owner) in [("bot_1", "user-a"), ("bot_2", "user-b")] {
+        set_limits_in(&db, "team", bot, owner, Some(&limits))
+            .await
+            .unwrap();
+    }
+    let woken = |sent: &super::entries::Sent| -> Vec<String> {
+        sent.bots
+            .iter()
+            .filter(|bot| bot.read_along)
+            .map(|bot| bot.bot_id.clone())
+            .collect()
+    };
+    let say = |id: &str, body: serde_json::Value| outgoing(id, InboxEntryKind::Message, body);
+
+    let ask = say(
+        "ask",
+        json!({ "text": "how are you?", "mentions": ["bot_2"] }),
+    );
+    send_in(&db, "team", "user-a", &ask, at(1)).await.unwrap();
+    let answer = say("answer", json!({ "text": "Fine", "reply_to": "ask" }));
+    send_in(&db, "team", "bot_2", &answer, at(2)).await.unwrap();
+
+    let follow_up = send_in(&db, "team", "user-a", &text("follow_up"), at(3))
+        .await
+        .unwrap();
+    assert_eq!(woken(&follow_up), ["bot_2"]);
+    let queued = turn(
+        &db,
+        &flow_like_types::bot_turn::turn_id("bot_2", "follow_up"),
+    )
+    .await;
+    assert_eq!(queued.requester_id.as_deref(), Some("user-a"));
+
+    let chatter = send_in(&db, "team", "user-b", &text("chatter"), at(4))
+        .await
+        .unwrap();
+    assert!(woken(&chatter).is_empty(), "user-b talks with no bot");
+
+    let to_bea = say("to_bea", json!({ "text": "Bea?", "mentions": ["user-b"] }));
+    send_in(&db, "team", "user-a", &to_bea, at(5))
+        .await
+        .unwrap();
+    let after = send_in(&db, "team", "user-a", &text("after"), at(6))
+        .await
+        .unwrap();
+    assert!(
+        woken(&after).is_empty(),
+        "user-a turned to Bea, so the follow-up is hers"
+    );
+}
+
+#[tokio::test]
 async fn a_new_members_unmentioned_question_queues_both_bots_with_that_member_as_requester() {
     let db = database().await;
     insert_bot(&db, "bot_1", "felix", "DESKTOP").await;

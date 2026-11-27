@@ -38,7 +38,7 @@ async function field(label) {
 }
 async function fill(label, value) {
 	const input = await field(label);
-	await input.click({ clickCount: 3 });
+	await input.click({ count: 3 });
 	await page.keyboard.press("Backspace");
 	if (value) await input.type(value);
 }

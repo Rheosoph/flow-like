@@ -42,12 +42,38 @@ describe("canPreviewFile", () => {
 		).toBe(true);
 	});
 
+	test("office files open in the Flows editors", () => {
+		for (const name of ["scope.docx", "budget.xlsx", "pitch.pptx", "rows.csv"])
+			expect(
+				canPreviewFile(
+					attachment({
+						url: "https://cdn.test/objects/abc123?sig=xyz",
+						name,
+						type: "document",
+					}),
+				),
+			).toBe(true);
+	});
+
+	test("a stored office file waits for its signed link", () => {
+		expect(
+			canPreviewFile(
+				attachment({
+					url: "storage://apps/app-1/upload/scope.docx",
+					name: "scope.docx",
+					type: "other",
+					access: "pending",
+				}),
+			),
+		).toBe(false);
+	});
+
 	test("a file nothing can render still routes to the download", () => {
 		expect(
 			canPreviewFile(
 				attachment({
-					url: "https://cdn.test/report.docx",
-					name: "report.docx",
+					url: "https://cdn.test/report.doc",
+					name: "report.doc",
 					type: "document",
 				}),
 			),

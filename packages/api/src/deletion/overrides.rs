@@ -156,6 +156,21 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                     "storage event deduplication outlives the app",
                 ),
                 keep(
+                    "BotTeamChat",
+                    "ownerId",
+                    "the owner's bots cascade with the account, and their chats with them",
+                ),
+                keep(
+                    "BotChannelLink",
+                    "ownerId",
+                    "the owner's bots cascade with the account, and their chat links with them",
+                ),
+                keep(
+                    "BotOrgClassification",
+                    "setBy",
+                    "attribution only; the classification belongs to the org and outlives the admin",
+                ),
+                keep(
                     "LockedItem",
                     "appId",
                     "revision-safe records outlive the app while their objects are retained",
@@ -201,6 +216,7 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 sweep("PinnedConversation", "principalId"),
                 sweep("StarredMessage", "principalId"),
                 sweep("QuotaWarningState", "payerId"),
+                sweep("BotTeamApp", "pinnedBy"),
             ],
             restrict_as_cascade: vec![
                 ("WasmPackageInvitation", "invitedById"),
@@ -216,6 +232,11 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                     "BotTeamPerson",
                     "invitedBy",
                     "attribution only; the invitee's membership outlives the inviter",
+                ),
+                keep(
+                    "BotTeamApp",
+                    "approvedBy",
+                    "attribution only; the pin belongs to its team and outlives the approving admin",
                 ),
                 keep(
                     "BotTeamBot",

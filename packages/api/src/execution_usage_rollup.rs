@@ -26,7 +26,8 @@ use chrono::{DateTime, Duration, FixedOffset, NaiveDate, Utc};
 use flow_like_types::tokio::{self, task::JoinHandle, time::Instant};
 use sea_orm::{
     ActiveEnum, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
-    FromQueryResult, IsolationLevel, QueryFilter, QueryOrder, QuerySelect, Select, Set,
+    FromQueryResult, IsolationLevel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Select,
+    Set,
     sea_query::{Alias, Expr, ExprTrait, OnConflict},
 };
 
@@ -200,6 +201,71 @@ pub(crate) async fn first_unrolled_day(
             from
         }
     }
+}
+
+/// Every execution `user_id` has recorded. Rolled-up days inside the retention
+/// come from the rollup; older days and days not rolled up yet are counted from
+/// raw rows, so the total stays exact while a pass lags.
+pub(crate) async fn lifetime_executions(
+    db: &DatabaseConnection,
+    user_id: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<u64, DbErr> {
+    lifetime_executions_kept(db, user_id, now, retention_days()).await
+}
+
+async fn lifetime_executions_kept(
+    db: &DatabaseConnection,
+    user_id: &str,
+    now: DateTime<FixedOffset>,
+    retention_days: i64,
+) -> Result<u64, DbErr> {
+    use execution_usage_tracking::Column;
+
+    let first_kept = first_kept_day(now, retention_days);
+    let live_from = first_unrolled_day(db, first_kept, last_closed_day(now)).await;
+    let raw = || execution_usage_tracking::Entity::find().filter(Column::UserId.eq(user_id));
+    let (rolled, before, live) = tokio::try_join!(
+        rolled_executions(db, user_id, first_kept, live_from),
+        raw()
+            .filter(Column::CreatedAt.lt(utc_midnight(first_kept)))
+            .count(db),
+        raw()
+            .filter(Column::CreatedAt.gte(utc_midnight(live_from)))
+            .count(db),
+    )?;
+    Ok(rolled + before + live)
+}
+
+/// The account's executions on rolled-up days in `from..until`, read from the
+/// `(userId, day)` covering index alone.
+async fn rolled_executions(
+    db: &DatabaseConnection,
+    user_id: &str,
+    from: NaiveDate,
+    until: NaiveDate,
+) -> Result<u64, DbErr> {
+    use execution_usage_daily::Column;
+
+    if until <= from {
+        return Ok(0);
+    }
+    let total = execution_usage_daily::Entity::find()
+        .select_only()
+        .expr(
+            Expr::col(Column::Executions)
+                .sum()
+                .cast_as(Alias::new("BIGINT")),
+        )
+        .filter(Column::UserId.eq(user_id))
+        .filter(Column::Day.gte(from))
+        .filter(Column::Day.lt(until))
+        .into_tuple::<Option<i64>>()
+        .one(db)
+        .await?
+        .flatten()
+        .unwrap_or(0);
+    Ok(u64::try_from(total).unwrap_or(0))
 }
 
 /// Counts `execution` in its day's rollup row when that day is before `now`'s
@@ -396,7 +462,7 @@ async fn add_rows<C: ConnectionTrait>(
     Ok(())
 }
 
-async fn rolled_days<C: ConnectionTrait>(
+pub(crate) async fn rolled_days<C: ConnectionTrait>(
     conn: &C,
     from: NaiveDate,
     through: NaiveDate,
@@ -914,6 +980,66 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rolled(&db, closed).await, [(3, 30)]);
+    }
+
+    #[tokio::test]
+    async fn lifetime_totals_join_raw_rows_around_the_rolled_days() {
+        let db = database().await;
+        let now = at("2026-10-22T12:00:00Z");
+        for (id, user, stamp) in [
+            ("expired", "alice", "2026-10-10T08:00:00Z"),
+            ("closed-1", "alice", "2026-10-20T08:00:00Z"),
+            ("closed-2", "alice", "2026-10-20T09:00:00Z"),
+            ("yesterday", "alice", "2026-10-21T08:00:00Z"),
+            ("today", "alice", "2026-10-22T08:00:00Z"),
+            ("foreign", "bob", "2026-10-20T08:00:00Z"),
+        ] {
+            insert(
+                &db,
+                id,
+                user,
+                Some("a"),
+                at(stamp),
+                ExecutionStatus::Info,
+                10,
+            )
+            .await;
+        }
+        let total = |user| lifetime_executions_kept(&db, user, now, 5);
+        assert_eq!(total("alice").await.unwrap(), 5, "nothing rolled up yet");
+
+        maintain_with(&db, DbDialect::Postgres, now, &settings(10))
+            .await
+            .unwrap();
+        assert_eq!(total("alice").await.unwrap(), 5);
+        assert_eq!(total("bob").await.unwrap(), 1);
+
+        insert(
+            &db,
+            "late",
+            "alice",
+            Some("a"),
+            at("2026-10-20T10:00:00Z"),
+            ExecutionStatus::Info,
+            10,
+        )
+        .await;
+        count_late_execution(&db, &execution(&db, "late").await, now)
+            .await
+            .unwrap();
+        assert_eq!(total("alice").await.unwrap(), 6);
+
+        for id in ["closed-1", "closed-2", "late"] {
+            execution_usage_tracking::Entity::delete_by_id(id)
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            total("alice").await.unwrap(),
+            6,
+            "rolled days are read from the rollup, not re-counted from raw rows"
+        );
     }
 
     #[tokio::test]

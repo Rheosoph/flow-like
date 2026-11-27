@@ -28,7 +28,7 @@ use flow_like_types::{images::inline_image_thumbnail, inbox::RoomEventBody};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, sea_query::Expr,
 };
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 const IMAGE_URL_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -39,14 +39,15 @@ fn image_path(conversation_id: &str, image: &str) -> ObjectPath {
     ))
 }
 
-/// Fills in the links to the pictures of the conversations that have one. A store that can't
-/// be reached leaves them without, so the members show instead.
-pub(super) async fn sign_images(state: &AppState, conversations: &mut [Conversation]) {
-    if conversations
-        .iter()
-        .all(|conversation| conversation.image.is_none())
-    {
-        return;
+/// Links to the pictures of `pictures` (conversation id, picture), by conversation id. A store
+/// that can't be reached or a picture that can't be signed leaves its conversation out.
+pub(crate) async fn image_urls(
+    state: &AppState,
+    pictures: &[(&str, &str)],
+) -> HashMap<String, String> {
+    let mut urls = HashMap::new();
+    if pictures.is_empty() {
+        return urls;
     }
     let store = match content_store(state).await {
         Ok(store) => store,
@@ -55,25 +56,40 @@ pub(super) async fn sign_images(state: &AppState, conversations: &mut [Conversat
                 ?error,
                 "Could not reach the store holding conversation pictures"
             );
-            return;
+            return urls;
         }
     };
-    for conversation in conversations.iter_mut() {
-        let Some(image) = conversation.image.as_deref() else {
-            continue;
-        };
+    for (conversation_id, image) in pictures {
         match store
             .sign_cached(
                 "GET",
-                &image_path(&conversation.id, image),
+                &image_path(conversation_id, image),
                 IMAGE_URL_LIFETIME,
             )
             .await
         {
-            Ok(url) => conversation.image_url = Some(url.to_string()),
-            Err(error) => {
-                tracing::warn!(%error, conversation_id = %conversation.id, "Could not sign a conversation picture");
+            Ok(url) => {
+                urls.insert(conversation_id.to_string(), url.to_string());
             }
+            Err(error) => {
+                tracing::warn!(%error, %conversation_id, "Could not sign a conversation picture");
+            }
+        }
+    }
+    urls
+}
+
+/// Fills in the links to the pictures of the conversations that have one. A store that can't
+/// be reached leaves them without, so the members show instead.
+pub(super) async fn sign_images(state: &AppState, conversations: &mut [Conversation]) {
+    let pictures: Vec<(&str, &str)> = conversations
+        .iter()
+        .filter_map(|conversation| Some((conversation.id.as_str(), conversation.image.as_deref()?)))
+        .collect();
+    let mut urls = image_urls(state, &pictures).await;
+    for conversation in conversations.iter_mut() {
+        if let Some(url) = urls.remove(&conversation.id) {
+            conversation.image_url = Some(url);
         }
     }
 }

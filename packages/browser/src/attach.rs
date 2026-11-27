@@ -13,7 +13,8 @@ use crate::transport::ws::redact_url;
 
 const APPROVAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(120);
 const DIRECT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
-const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(2);
+const DISCOVERY_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const DISCOVERY_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 const ACTIVE_PORT_FILE: &str = "DevToolsActivePort";
 const BROWSER_WS_PATH: &str = "/devtools/browser";
@@ -199,7 +200,8 @@ async fn fetch_json_version(base: &Url, shown: &str, kind: BrowserKind) -> crate
             "Could not build the /json/version URL for {shown} ({error})"
         ))
     })?;
-    let client = http_client(&[], DISCOVERY_TIMEOUT, HttpProxy::None)?;
+    ensure_port_accepts(base, shown, kind).await?;
+    let client = http_client(&[], DISCOVERY_REPLY_TIMEOUT, HttpProxy::None)?;
     let response = client
         .get(version_url)
         .send()
@@ -227,6 +229,37 @@ async fn fetch_json_version(base: &Url, shown: &str, kind: BrowserKind) -> crate
     Ok(body)
 }
 
+async fn ensure_port_accepts(base: &Url, shown: &str, kind: BrowserKind) -> crate::Result<()> {
+    let (Some(host), Some(port)) = (base.host_str(), base.port_or_known_default()) else {
+        return Ok(());
+    };
+    match tokio::time::timeout(
+        DISCOVERY_CONNECT_TIMEOUT,
+        tokio::net::TcpStream::connect(format!("{host}:{port}")),
+    )
+    .await
+    {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+            Err(refused_error(shown, kind))
+        }
+        Ok(Err(error)) => Err(connect_error(format!(
+            "Connecting to {shown} for GET /json/version failed: {error}"
+        ))),
+        Err(_) => Err(connect_error(format!(
+            "{shown} did not accept a connection for GET /json/version within {} s",
+            DISCOVERY_CONNECT_TIMEOUT.as_secs()
+        ))),
+    }
+}
+
+fn refused_error(shown: &str, kind: BrowserKind) -> BrowserError {
+    let browser = browser_name(kind);
+    connect_error(format!(
+        "Nothing is listening on {shown}. Start {browser} with --remote-debugging-port and its own --user-data-dir, or clear Debugger Address to use your everyday {browser} after enabling chrome://inspect/#remote-debugging."
+    ))
+}
+
 fn discovery_base(address: &str) -> crate::Result<Url> {
     let base = Url::parse(&with_http_scheme(address)).map_err(|error| {
         connect_error(format!(
@@ -244,15 +277,12 @@ fn discovery_base(address: &str) -> crate::Result<Url> {
 
 fn discovery_send_error(shown: &str, kind: BrowserKind, error: reqwest::Error) -> BrowserError {
     if is_connection_refused(&error) {
-        let browser = browser_name(kind);
-        return connect_error(format!(
-            "Nothing is listening on {shown}. Start {browser} with --remote-debugging-port and its own --user-data-dir, or clear Debugger Address to use your everyday {browser} after enabling chrome://inspect/#remote-debugging."
-        ));
+        return refused_error(shown, kind);
     }
     if error.is_timeout() {
         return connect_error(format!(
             "{shown} did not answer GET /json/version within {} s",
-            DISCOVERY_TIMEOUT.as_secs()
+            DISCOVERY_REPLY_TIMEOUT.as_secs()
         ));
     }
     connect_error(format!(

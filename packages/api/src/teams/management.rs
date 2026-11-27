@@ -126,18 +126,83 @@ pub struct TeamsPackage {
     base64: String,
 }
 
-fn connection_id(app: &str, event: &str) -> String {
-    let hash = blake3::hash(format!("teams\0{app}\0{event}").as_bytes());
+fn uuid_of(seed: &str) -> String {
+    let hash = blake3::hash(seed.as_bytes());
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&hash.as_bytes()[..16]);
     uuid::Uuid::from_bytes(bytes).to_string()
 }
 
+pub(super) fn connection_id(app: &str, event: &str) -> String {
+    uuid_of(&format!("teams\0{app}\0{event}"))
+}
+
+pub(super) fn bot_connection_id(bot: &str) -> String {
+    uuid_of(&format!("teams-bot\0{bot}"))
+}
+
+/// What a Teams connection hangs off, already authorized by the caller: an app event, or a
+/// bot (then `app` is the bot's workspace and `event` the bot id).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Target {
+    pub app: String,
+    pub event: String,
+    pub id: String,
+    pub bot: Option<String>,
+}
+
+impl Target {
+    pub(super) fn event(app: &str, event: &str) -> Self {
+        Self {
+            app: app.into(),
+            event: event.into(),
+            id: connection_id(app, event),
+            bot: None,
+        }
+    }
+
+    pub(super) fn bot(workspace_app: &str, bot: &str) -> Self {
+        Self {
+            app: workspace_app.into(),
+            event: bot.into(),
+            id: bot_connection_id(bot),
+            bot: Some(bot.into()),
+        }
+    }
+
+    fn owns(&self, c: &Connection) -> bool {
+        match &self.bot {
+            Some(bot) => c.bot_id.as_ref() == Some(bot),
+            None => c.bot_id.is_none() && c.app_id == self.app,
+        }
+    }
+
+    async fn connection(&self, state: &AppState) -> Result<Option<(Connection, i32)>, ApiError> {
+        let stored = match self.bot {
+            Some(_) => store::connection(state, &self.id).await?,
+            None => store::event_connection(state, &self.event).await?,
+        };
+        match stored {
+            Some((c, _)) if !self.owns(&c) => Err(ApiError::FORBIDDEN),
+            other => Ok(other),
+        }
+    }
+
+    async fn existing(&self, state: &AppState) -> Result<(Connection, i32), ApiError> {
+        self.connection(state).await?.ok_or(ApiError::NOT_FOUND)
+    }
+}
+
+#[cfg(test)]
 fn new_connection(app: &str, event: &str, mode: AuthMode) -> Connection {
+    new_target_connection(&Target::event(app, event), mode)
+}
+
+fn new_target_connection(target: &Target, mode: AuthMode) -> Connection {
     Connection {
-        id: connection_id(app, event),
-        app_id: app.into(),
-        event_id: event.into(),
+        id: target.id.clone(),
+        app_id: target.app.clone(),
+        event_id: target.event.clone(),
         mode,
         name: String::new(),
         description: String::new(),
@@ -154,6 +219,7 @@ fn new_connection(app: &str, event: &str, mode: AuthMode) -> Connection {
         allowed_responders: vec![],
         permissions: vec![],
         operation_until: 0,
+        bot_id: target.bot.clone(),
     }
 }
 
@@ -187,11 +253,10 @@ async fn authorize(
 
 async fn view(
     state: &AppState,
-    app: &str,
-    event: &str,
+    target: &Target,
     connection: Option<Connection>,
 ) -> Result<TeamsConnectionView, ApiError> {
-    let id = connection_id(app, event);
+    let id = target.id.clone();
     let c = connection.as_ref();
     Ok(TeamsConnectionView {
         managed_available: match ManagedConfig::load(&state.secrets).await {
@@ -246,21 +311,24 @@ pub async fn get(
     Path((app, event)): Path<(String, String)>,
 ) -> Result<Json<TeamsConnectionView>, ApiError> {
     authorize(&state, &user, &app, &event, false).await?;
-    let mut result = view(
-        &state,
-        &app,
-        &event,
-        store::event_connection(&state, &event).await?.map(|c| c.0),
-    )
-    .await?;
+    get_inner(&state, &Target::event(&app, &event))
+        .await
+        .map(Json)
+}
+
+pub(super) async fn get_inner(
+    state: &AppState,
+    target: &Target,
+) -> Result<TeamsConnectionView, ApiError> {
+    let mut result = view(state, target, target.connection(state).await?.map(|c| c.0)).await?;
     if let Some((health, _)) =
-        store::get::<Value>(&state, &format!("health:{}", result.connection_id)).await?
+        store::get::<Value>(state, &format!("health:{}", result.connection_id)).await?
         && health["client_id"] == result.client_id
         && health["tenant_id"] == result.customer_tenant_id
     {
         result.last_activity_at = health["at"].as_i64();
     }
-    Ok(Json(result))
+    Ok(result)
 }
 
 #[utoipa::path(
@@ -287,14 +355,22 @@ pub async fn access(
     Path((app, event)): Path<(String, String)>,
 ) -> Result<Json<TeamsAccessView>, ApiError> {
     authorize(&state, &user, &app, &event, false).await?;
-    let connection = store::event_connection(&state, &event).await?.map(|c| c.0);
-    Ok(Json(match connection {
-        Some(c) if c.app_id != app => return Err(ApiError::FORBIDDEN),
+    access_inner(&state, &Target::event(&app, &event))
+        .await
+        .map(Json)
+}
+
+pub(super) async fn access_inner(
+    state: &AppState,
+    target: &Target,
+) -> Result<TeamsAccessView, ApiError> {
+    let connection = target.connection(state).await?.map(|c| c.0);
+    Ok(match connection {
         Some(c) if c.permissions.is_empty() => TeamsAccessView::of(TeamsAccessStatus::NotNeeded),
-        Some(c) if c.status == "ready" => graph_access(&state, &c).await,
+        Some(c) if c.status == "ready" => graph_access(state, &c).await,
         Some(_) => TeamsAccessView::of(TeamsAccessStatus::NotConnected),
         None => TeamsAccessView::of(TeamsAccessStatus::NotNeeded),
-    }))
+    })
 }
 
 async fn graph_access(state: &AppState, c: &Connection) -> TeamsAccessView {
@@ -440,7 +516,27 @@ pub async fn setup(
     Json(input): Json<TeamsSetupRequest>,
 ) -> Result<Json<TeamsConnectionView>, ApiError> {
     authorize(&state, &user, &app, &event, true).await?;
-    super::ensure_enabled(&state)?;
+    let target = Target::event(&app, &event);
+    let c = setup_inner(&state, &target, input).await?;
+    crate::audit_branch!(state, user, app, "event.teams.setup", "Event", event);
+    Ok(Json(view(&state, &target, Some(c)).await?))
+}
+
+pub(super) async fn setup_view(
+    state: &AppState,
+    target: &Target,
+    input: TeamsSetupRequest,
+) -> Result<TeamsConnectionView, ApiError> {
+    let c = setup_inner(state, target, input).await?;
+    view(state, target, Some(c)).await
+}
+
+async fn setup_inner(
+    state: &AppState,
+    target: &Target,
+    input: TeamsSetupRequest,
+) -> Result<Connection, ApiError> {
+    super::ensure_enabled(state)?;
     let (customer_tenant_id, allowed_responders, permissions) = validate_setup(&input)?;
     if input.mode == AuthMode::FlowLikeManaged
         && ManagedConfig::load(&state.secrets).await?.is_none()
@@ -449,29 +545,27 @@ pub async fn setup(
             "Flow-Like-managed bots are not enabled on this server. Choose a customer-managed bot or ask your administrator.",
         ));
     }
-    let (previous, revision) = match store::event_connection(&state, &event).await? {
+    let (previous, revision) = match target.connection(state).await? {
         Some((c, revision)) => {
-            ensure_editable(&c, &app, &input.mode)?;
+            ensure_editable(&c, &input.mode)?;
             (Some(c), revision)
         }
         None => (None, 0),
     };
     let mut c = previous
         .clone()
-        .unwrap_or_else(|| new_connection(&app, &event, input.mode.clone()));
+        .unwrap_or_else(|| new_target_connection(target, input.mode.clone()));
     c.name = input.name.trim().into();
     c.description = input.description.clone();
     c.customer_tenant_id = customer_tenant_id;
     c.allowed_responders = allowed_responders;
     c.permissions = permissions;
     c.mode = input.mode.clone();
-    let c = if c.mode == AuthMode::FlowLikeManaged {
-        setup_managed(&state, previous, c, revision).await?
+    if c.mode == AuthMode::FlowLikeManaged {
+        setup_managed(state, previous, c, revision).await
     } else {
-        setup_customer(&state, previous, c, revision, &input).await?
-    };
-    crate::audit_branch!(state, user, app, "event.teams.setup", "Event", event);
-    Ok(Json(view(&state, &app, &event, Some(c)).await?))
+        setup_customer(state, previous, c, revision, &input).await
+    }
 }
 
 /// Manifest order. The exhaustive match makes a new permission choose its place.
@@ -516,10 +610,7 @@ fn validate_setup(
     ))
 }
 
-fn ensure_editable(c: &Connection, app: &str, mode: &AuthMode) -> Result<(), ApiError> {
-    if c.app_id != app {
-        return Err(ApiError::FORBIDDEN);
-    }
+fn ensure_editable(c: &Connection, mode: &AuthMode) -> Result<(), ApiError> {
     if c.operation_until > now() {
         return Err(ApiError::conflict(
             "Teams setup is already running. Refresh its status shortly.",
@@ -712,12 +803,22 @@ pub async fn rotate(
     Path((app, event)): Path<(String, String)>,
 ) -> Result<Json<TeamsConnectionView>, ApiError> {
     authorize(&state, &user, &app, &event, true).await?;
-    let (mut c, mut revision) = store::event_connection(&state, &event)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-    if c.app_id != app {
-        return Err(ApiError::FORBIDDEN);
-    }
+    let target = Target::event(&app, &event);
+    let c = rotate_inner(&state, &target).await?;
+    crate::audit_branch!(state, user, app, "event.teams.rotate", "Event", event);
+    Ok(Json(view(&state, &target, Some(c)).await?))
+}
+
+pub(super) async fn rotate_view(
+    state: &AppState,
+    target: &Target,
+) -> Result<TeamsConnectionView, ApiError> {
+    let c = rotate_inner(state, target).await?;
+    view(state, target, Some(c)).await
+}
+
+async fn rotate_inner(state: &AppState, target: &Target) -> Result<Connection, ApiError> {
+    let (mut c, mut revision) = target.existing(state).await?;
     if c.mode != AuthMode::FlowLikeManaged {
         return Err(ApiError::bad_request(
             "Create a secret in your Entra app, then save it in the bot setup",
@@ -727,14 +828,13 @@ pub async fn rotate(
         return Err(ApiError::conflict("Another Teams operation is running"));
     }
     c.operation_until = now() + OPERATION_MS;
-    store::save_connection(&state, &c, revision).await?;
+    store::save_connection(state, &c, revision).await?;
     revision += 1;
-    let result = provision::rotate(&state, &mut c, &mut revision).await;
+    let result = provision::rotate(state, &mut c, &mut revision).await;
     c.operation_until = 0;
-    store::save_connection(&state, &c, revision).await?;
+    store::save_connection(state, &c, revision).await?;
     result?;
-    crate::audit_branch!(state, user, app, "event.teams.rotate", "Event", event);
-    Ok(Json(view(&state, &app, &event, Some(c)).await?))
+    Ok(c)
 }
 
 #[utoipa::path(
@@ -765,15 +865,24 @@ pub async fn disconnect(
 ) -> Result<Json<TeamsConnectionView>, ApiError> {
     // Keep cleanup available after an event changes type.
     ensure_fresh_permission!(user, &app, &state, RolePermissions::WriteEvents);
-    let (mut c, mut revision) = store::event_connection(&state, &event)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-    if c.app_id != app {
-        return Err(ApiError::FORBIDDEN);
-    }
-    disconnect_connection(&state, &mut c, &mut revision).await?;
+    let target = Target::event(&app, &event);
+    let c = disconnect_inner(&state, &target).await?;
     crate::audit_branch!(state, user, app, "event.teams.disconnect", "Event", event);
-    Ok(Json(view(&state, &app, &event, Some(c)).await?))
+    Ok(Json(view(&state, &target, Some(c)).await?))
+}
+
+pub(super) async fn disconnect_view(
+    state: &AppState,
+    target: &Target,
+) -> Result<TeamsConnectionView, ApiError> {
+    let c = disconnect_inner(state, target).await?;
+    view(state, target, Some(c)).await
+}
+
+async fn disconnect_inner(state: &AppState, target: &Target) -> Result<Connection, ApiError> {
+    let (mut c, mut revision) = target.existing(state).await?;
+    disconnect_connection(state, &mut c, &mut revision).await?;
+    Ok(c)
 }
 
 async fn disconnect_connection(
@@ -824,9 +933,24 @@ pub(crate) async fn cleanup_event(
     app: &str,
     event: &str,
 ) -> Result<(), ApiError> {
-    let Some((mut c, mut revision)) = store::app_event_connection(state, app, event).await? else {
+    let Some(found) = store::app_event_connection(state, app, event).await? else {
         return Ok(());
     };
+    remove_connection_best_effort(state, found).await
+}
+
+/// Removes the connection of a deleted bot like [`cleanup_event`] does for an event.
+pub(crate) async fn cleanup_bot_connection(state: &AppState, bot: &str) -> Result<(), ApiError> {
+    let Some(found) = store::connection(state, &bot_connection_id(bot)).await? else {
+        return Ok(());
+    };
+    remove_connection_best_effort(state, found).await
+}
+
+async fn remove_connection_best_effort(
+    state: &AppState,
+    (mut c, mut revision): (Connection, i32),
+) -> Result<(), ApiError> {
     if let Err(error) = disconnect_connection(state, &mut c, &mut revision).await {
         let details = json!({
             "connection_id": c.id,
@@ -924,12 +1048,16 @@ pub async fn package(
     Path((app, event)): Path<(String, String)>,
 ) -> Result<Json<TeamsPackage>, ApiError> {
     authorize(&state, &user, &app, &event, false).await?;
-    let (c, revision) = store::event_connection(&state, &event)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-    if c.app_id != app {
-        return Err(ApiError::FORBIDDEN);
-    }
+    package_inner(&state, &Target::event(&app, &event))
+        .await
+        .map(Json)
+}
+
+pub(super) async fn package_inner(
+    state: &AppState,
+    target: &Target,
+) -> Result<TeamsPackage, ApiError> {
+    let (c, revision) = target.existing(state).await?;
     if c.status != "ready" {
         return Err(ApiError::bad_request(
             "Complete bot setup before downloading the Teams app",
@@ -937,10 +1065,10 @@ pub async fn package(
     }
     let filename = package_filename(&c.name);
     let bytes = app_package(c, revision)?;
-    Ok(Json(TeamsPackage {
+    Ok(TeamsPackage {
         filename,
         base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-    }))
+    })
 }
 
 fn package_filename(name: &str) -> String {

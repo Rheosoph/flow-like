@@ -9,6 +9,7 @@ import {
 	FileIcon,
 	type LucideIcon,
 	MailIcon,
+	MessagesSquareIcon,
 	ShieldAlertIcon,
 	ShieldCheckIcon,
 	WebhookIcon,
@@ -50,6 +51,7 @@ import {
 	type MailAddress,
 	type MailFacts,
 	addressLabel,
+	channelFacts,
 	mailFacts,
 	payloadText,
 	triggerPreview,
@@ -62,18 +64,36 @@ const SOURCE_ICONS: Readonly<Record<TriggerSource, LucideIcon>> = {
 	webhook: WebhookIcon,
 	email: MailIcon,
 	event: WorkflowIcon,
+	channel: MessagesSquareIcon,
 };
 
 const PILL =
 	"inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
+const CHANNEL_PREVIEW = 80;
+
 function senderOf(address: MailAddress | undefined): string | undefined {
 	return address ? (address.name ?? address.email) : undefined;
+}
+
+function useProviderName() {
+	const { t } = useTranslation("bots");
+	return useCallback(
+		(provider?: string): string => {
+			if (provider === "teams")
+				return t("crew.note.provider.teams", "Microsoft Teams");
+			if (provider === "discord")
+				return t("crew.note.provider.discord", "Discord");
+			return provider || t("crew.note.source.channel", "Chat");
+		},
+		[t],
+	);
 }
 
 /** One line naming a note, e.g. "Scheduled: Morning brief" or "Scout asked Pebble". */
 export function useNoteText() {
 	const { t } = useTranslation("bots");
+	const providerName = useProviderName();
 	return useCallback(
 		(
 			note: ConversationNote,
@@ -111,13 +131,27 @@ export function useNoteText() {
 						})
 					: t("crew.trigger.email", "Email: {{title}}", { title });
 			}
+			if (note.source === "channel") {
+				const facts = channelFacts(note);
+				const preview = (note.text.trim() || title).slice(0, CHANNEL_PREVIEW);
+				return t(
+					"crew.trigger.channel",
+					"{{sender}} on {{provider}}: {{text}}",
+					{
+						sender:
+							facts?.sender || t("crew.trigger.channelSomeone", "Someone"),
+						provider: providerName(facts?.provider),
+						text: preview,
+					},
+				);
+			}
 			return {
 				schedule: t("crew.trigger.schedule", "Scheduled: {{title}}", { title }),
 				webhook: t("crew.trigger.webhook", "Webhook: {{title}}", { title }),
 				event: t("crew.trigger.event", "Event: {{title}}", { title }),
 			}[note.source];
 		},
-		[t],
+		[t, providerName],
 	);
 }
 
@@ -130,6 +164,7 @@ function useSourceName() {
 				webhook: t("crew.note.source.webhook", "Webhook"),
 				email: t("crew.note.source.email", "Email"),
 				event: t("crew.note.source.event", "Event"),
+				channel: t("crew.note.source.channel", "Chat"),
 			})[source],
 		[t],
 	);
@@ -390,7 +425,8 @@ function TriggerDetails({
 	const mail = mailFacts(trigger);
 	const hook = webhookFacts(trigger);
 	const Icon = SOURCE_ICONS[trigger.source];
-	const otherPayload = !mail && !hook && trigger.payload !== undefined;
+	const chat = channelFacts(trigger);
+	const otherPayload = !mail && !hook && !chat && trigger.payload !== undefined;
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="sm:max-w-xl" data-slot="trigger-details">
@@ -405,7 +441,11 @@ function TriggerDetails({
 					{mail && <MailSection mail={mail} />}
 					{!mail && trigger.text.trim() && (
 						<DetailSection
-							title={t("crew.note.instruction", "What the bot was asked")}
+							title={
+								chat
+									? t("crew.note.channelMessage", "Message")
+									: t("crew.note.instruction", "What the bot was asked")
+							}
 						>
 							<p className="whitespace-pre-wrap break-words text-sm">
 								{trigger.text}

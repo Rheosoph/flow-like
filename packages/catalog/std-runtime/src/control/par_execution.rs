@@ -96,8 +96,13 @@ impl NodeLogic for ParallelExecutionNode {
             return Ok(());
         }
 
-        // cap concurrency to keep stacks / memory in check
-        let max_concurrency = std::cmp::max(1, num_cpus::get());
+        // Threads need a core cap. Tasks share this node's runtime thread, where a core cap only
+        // serialises branches that wait on storage or the network; every wired branch may run.
+        let max_concurrency = if use_threads {
+            std::cmp::max(1, num_cpus::get())
+        } else {
+            to_run.len()
+        };
         let sem = Arc::new(Semaphore::new(max_concurrency));
 
         #[allow(clippy::large_enum_variant)] // output type of an already-boxed future; boxing would add one alloc per parallel branch

@@ -8,6 +8,7 @@
 //! - `POST /execute` - Execute with callback (async)
 //! - `POST /execute/stream` - Execute with NDJSON streaming
 //! - `POST /execute/sse` - Execute with Server-Sent Events
+//! - `POST /warm` - Ready a fresh environment (node registry) for an expected run
 //! - `GET /health` - Health check
 
 #[global_allocator]

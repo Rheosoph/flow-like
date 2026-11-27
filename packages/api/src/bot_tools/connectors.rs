@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use flow_like_bot_tools::calendar::CalendarJobs;
 use flow_like_bot_tools::calendar::caldav::{account_hosts, basic_credential};
+use flow_like_bot_tools::calendar::{CalendarJobs, calendar_provider};
 use flow_like_bot_tools::services::{
     CallAudit, CallBudget, ConnectorEntry, ConnectorSource, Credential,
 };
@@ -144,14 +144,29 @@ pub(crate) fn entry_of(state: &AppState, row: &bot_connector::Model) -> Option<C
         (_, ConnectorKind::Caldav) => account_hosts(connector.url.as_deref().unwrap_or_default()),
         _ => Vec::new(),
     };
-    Some(ConnectorEntry {
+    Some(entry_from(connector, provider_id, api_hosts))
+}
+
+fn entry_from(
+    connector: BotConnector,
+    provider_id: Option<String>,
+    api_hosts: Vec<String>,
+) -> ConnectorEntry {
+    ConnectorEntry {
         rule: connector.rule(),
         kind: connector.kind,
         calendar: connector.calendar().cloned(),
         url: connector.url,
         provider_id,
         api_hosts,
-    })
+    }
+}
+
+/// The provider of the calendar this connector connects (`google`, `microsoft`, `caldav`), when
+/// the bot's calendar tools would read it.
+pub(crate) fn calendar_provider_of(row: &bot_connector::Model) -> Option<&'static str> {
+    let connector = to_contract(row)?;
+    calendar_provider(entry_from(connector, row.provider_id.clone(), Vec::new()))
 }
 
 /// The `Authorization` value for one call, resolved now. Errors never carry a token.

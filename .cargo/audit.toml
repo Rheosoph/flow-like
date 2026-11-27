@@ -38,4 +38,10 @@ ignore = [
     # (p256/p384/k256/ecdsa) and by aws-sigv4's SigV4a signer. Moving needs the
     # RustCrypto 0.14 elliptic-curve stack across those crates and the AWS SDK.
     "RUSTSEC-2026-0387",
+
+    # kube-client 0.98/0.99: the `openssl-tls` connector also trusts OpenSSL's default CA store
+    # (RUSTSEC-2026-0600). Fixed only in kube 4.2.1. Not exposed: flow-like-api (kube 0.98
+    # defaults) and flow-like-sinks (kube 0.99, `rustls-tls`) build only the rustls connector, and
+    # hyper-openssl is absent from Cargo.lock.
+    "RUSTSEC-2026-0600",
 ]

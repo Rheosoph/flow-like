@@ -23,8 +23,8 @@ pub mod management;
 pub mod models;
 pub(crate) mod operational;
 pub mod outbox;
-pub mod playground;
 pub mod placement_data;
+pub mod playground;
 pub(crate) mod process_spawner;
 pub mod project_artifacts;
 pub mod release;
@@ -39,10 +39,10 @@ pub mod transport;
 pub mod usage;
 pub mod vault;
 
-#[cfg(all(feature = "runtime", feature = "bots"))]
-pub mod bots;
 #[cfg(all(feature = "runtime", feature = "bot-host"))]
 pub mod bot_host;
+#[cfg(all(feature = "runtime", feature = "bots"))]
+pub mod bots;
 #[cfg(feature = "runtime")]
 pub mod dependencies;
 #[cfg(feature = "runtime")]

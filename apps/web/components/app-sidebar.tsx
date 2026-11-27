@@ -229,12 +229,7 @@ export function AppSidebar({
 									"var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px))",
 							}}
 						>
-							<FlowBackground
-								intensity="subtle"
-								interactive
-								active={!chromeless}
-								className="flex flex-col flex-1 min-h-0"
-							>
+							<FlowBackground className="flex flex-col flex-1 min-h-0">
 								{children}
 							</FlowBackground>
 						</SidebarInset>

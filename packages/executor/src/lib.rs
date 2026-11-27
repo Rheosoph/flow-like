@@ -48,9 +48,9 @@ pub mod jwt;
 pub mod quota;
 pub mod resolve;
 pub mod router;
-pub mod streaming;
 #[cfg(feature = "bot-tools")]
 pub(crate) mod skill_host;
+pub mod streaming;
 #[cfg(feature = "bot-tools")]
 pub(crate) mod tool;
 pub mod types;

@@ -43,8 +43,15 @@ mod pins {
     #[test]
     fn quickjs_pin_is_a_wellformed_sha256_with_a_cdn_then_upstream_url() {
         assert_eq!(QUICKJS_ARTIFACT.sha256.len(), 64);
-        assert!(QUICKJS_ARTIFACT.sha256.chars().all(|c| c.is_ascii_hexdigit()));
-        assert!(QUICKJS_ARTIFACT.urls[0].starts_with("https://cdn.flow-like.com/runtimes/quickjs/"));
+        assert!(
+            QUICKJS_ARTIFACT
+                .sha256
+                .chars()
+                .all(|c| c.is_ascii_hexdigit())
+        );
+        assert!(
+            QUICKJS_ARTIFACT.urls[0].starts_with("https://cdn.flow-like.com/runtimes/quickjs/")
+        );
         assert!(QUICKJS_ARTIFACT.urls[1].starts_with("https://github.com/quickjs-ng/quickjs/"));
     }
 
@@ -134,8 +141,14 @@ mod bundle_integrity {
         let store = ArtifactStore::new(dir.path(), Arc::new(Fixed(f.archive.clone())));
         assert!(!store.is_bundle_installed(&f.bundle));
         let root = store.ensure_bundle(&f.bundle).await.unwrap();
-        assert_eq!(std::fs::read(root.join("engine.bin")).unwrap(), b"pretend interpreter");
-        assert_eq!(std::fs::read(root.join("lib/stdlib.zip")).unwrap(), b"pretend stdlib");
+        assert_eq!(
+            std::fs::read(root.join("engine.bin")).unwrap(),
+            b"pretend interpreter"
+        );
+        assert_eq!(
+            std::fs::read(root.join("lib/stdlib.zip")).unwrap(),
+            b"pretend stdlib"
+        );
         assert!(store.is_bundle_installed(&f.bundle));
 
         let offline = ArtifactStore::new(dir.path(), Arc::new(Offline));
@@ -187,7 +200,10 @@ mod bundle_integrity {
         std::fs::write(root.join("engine.bin"), b"pretend interpreteR").unwrap();
 
         store.ensure_bundle(&f.bundle).await.unwrap();
-        assert_eq!(std::fs::read(root.join("engine.bin")).unwrap(), b"pretend interpreter");
+        assert_eq!(
+            std::fs::read(root.join("engine.bin")).unwrap(),
+            b"pretend interpreter"
+        );
 
         std::fs::write(root.join("engine.bin"), b"pretend interpreteR").unwrap();
         let offline = ArtifactStore::new(dir.path(), Arc::new(Offline));
@@ -218,7 +234,12 @@ mod bundle_integrity {
         let bytes = vec![0u8; SCIENTIFIC_PYTHON_BUNDLE.archive.size as usize];
         let dir = tempfile::tempdir().unwrap();
         let store = ArtifactStore::new(dir.path(), Arc::new(Fixed(bytes)));
-        assert!(store.ensure_bundle(&SCIENTIFIC_PYTHON_BUNDLE).await.is_err());
+        assert!(
+            store
+                .ensure_bundle(&SCIENTIFIC_PYTHON_BUNDLE)
+                .await
+                .is_err()
+        );
         assert!(!store.is_bundle_installed(&SCIENTIFIC_PYTHON_BUNDLE));
     }
 }
@@ -240,7 +261,10 @@ mod request_validation {
         let response = offline_runtime().run(request).await;
         assert_eq!(response.status, SandboxStatus::Error);
         let error = response.error.unwrap();
-        assert!(error.contains("'requests'") && error.contains("numpy"), "{error}");
+        assert!(
+            error.contains("'requests'") && error.contains("numpy"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
@@ -308,15 +332,28 @@ mod javascript {
     #[tokio::test]
     async fn hello_world_with_inputs_and_outputs() {
         let runtime = runtime_or_skip!(false);
-        let mut request = js("console.log('hello', inputs.xs.length); outputs.sum = inputs.xs.reduce((a, b) => a + b, 0);");
+        let mut request = js(
+            "console.log('hello', inputs.xs.length); outputs.sum = inputs.xs.reduce((a, b) => a + b, 0);",
+        );
         request.inputs = json!({"xs": [1, 2, 3]});
         let response = runtime.run(request).await;
 
-        assert_eq!(response.status, SandboxStatus::Ok, "{:?} {}", response.error, response.stderr);
+        assert_eq!(
+            response.status,
+            SandboxStatus::Ok,
+            "{:?} {}",
+            response.error,
+            response.stderr
+        );
         assert_eq!(response.stdout.trim(), "hello 3");
         assert_eq!(response.outputs["sum"], 6);
         let info = runtime.languages();
-        assert!(info.iter().find(|l| l.id == "javascript").unwrap().installed);
+        assert!(
+            info.iter()
+                .find(|l| l.id == "javascript")
+                .unwrap()
+                .installed
+        );
     }
 
     #[tokio::test]
@@ -331,7 +368,9 @@ mod javascript {
     async fn console_error_goes_to_stderr_and_top_level_await_works() {
         let runtime = runtime_or_skip!(false);
         let response = runtime
-            .run(js("console.error('warned'); outputs.v = await Promise.resolve(41) + 1;"))
+            .run(js(
+                "console.error('warned'); outputs.v = await Promise.resolve(41) + 1;",
+            ))
             .await;
         assert_eq!(response.status, SandboxStatus::Ok, "{:?}", response.error);
         assert_eq!(response.stderr.trim(), "warned");
@@ -353,7 +392,13 @@ out.close();
             SandboxFile::new("untouched.txt", "same"),
         ];
         let response = runtime.run(request).await;
-        assert_eq!(response.status, SandboxStatus::Ok, "{:?} {}", response.error, response.stderr);
+        assert_eq!(
+            response.status,
+            SandboxStatus::Ok,
+            "{:?} {}",
+            response.error,
+            response.stderr
+        );
         let file = |p: &str| response.files.iter().find(|f| f.path == p);
         assert_eq!(file("out/result.txt").unwrap().bytes, b"3");
         assert!(file("in/untouched.txt").is_none());
@@ -374,14 +419,18 @@ out.close();
     #[tokio::test]
     async fn memory_limit_turns_a_large_allocation_into_an_error() {
         let runtime = runtime_or_skip!(false);
-        let mut request = js("const a = []; for (let i = 0; i < 1e9; i++) a.push(new Array(1e6).fill(i));");
+        let mut request =
+            js("const a = []; for (let i = 0; i < 1e9; i++) a.push(new Array(1e6).fill(i));");
         request.limits = SandboxLimits {
             memory_bytes: 64 * 1024 * 1024,
             ..SandboxLimits::default()
         };
         let response = runtime.run(request).await;
         assert!(
-            matches!(response.status, SandboxStatus::OutOfMemory | SandboxStatus::Error),
+            matches!(
+                response.status,
+                SandboxStatus::OutOfMemory | SandboxStatus::Error
+            ),
             "{:?} {:?}",
             response.status,
             response.error
@@ -412,7 +461,11 @@ const f = std.open("/etc/passwd", "r");
 outputs.etc = f !== null;
 "#))
             .await;
-        assert_eq!(response.outputs["etc"], false, "{:?} {}", response.error, response.stderr);
+        assert_eq!(
+            response.outputs["etc"], false,
+            "{:?} {}",
+            response.error, response.stderr
+        );
     }
 
     #[tokio::test]
@@ -429,8 +482,18 @@ f.close();
 const csv = std.open("table.csv", "w"); csv.puts("a,b\n1,2\n"); csv.close();
 "#))
             .await;
-        assert_eq!(response.status, SandboxStatus::Ok, "{:?} {}", response.error, response.stderr);
-        let png = response.files.iter().find(|f| f.path == "out/plot.png").unwrap();
+        assert_eq!(
+            response.status,
+            SandboxStatus::Ok,
+            "{:?} {}",
+            response.error,
+            response.stderr
+        );
+        let png = response
+            .files
+            .iter()
+            .find(|f| f.path == "out/plot.png")
+            .unwrap();
         assert_eq!(&png.bytes[..4], &[0x89, 0x50, 0x4e, 0x47]);
         assert!(response.files.iter().any(|f| f.path == "out/table.csv"));
     }
@@ -462,11 +525,21 @@ print(df.describe().loc["max", "a"])
 "#,
             ))
             .await;
-        assert_eq!(response.status, SandboxStatus::Ok, "{:?} {}", response.error, response.stderr);
+        assert_eq!(
+            response.status,
+            SandboxStatus::Ok,
+            "{:?} {}",
+            response.error,
+            response.stderr
+        );
         assert_eq!(response.outputs["mean"], 5.0);
         assert_eq!(response.outputs["shape"], json!([3, 2]));
         assert_eq!(response.stdout.trim(), "3.0");
-        let csv = response.files.iter().find(|f| f.path == "out/out.csv").unwrap();
+        let csv = response
+            .files
+            .iter()
+            .find(|f| f.path == "out/out.csv")
+            .unwrap();
         assert_eq!(csv.bytes, b"a,b\n1,4.0\n2,5.0\n3,6.0\n");
         assert!(runtime.languages()[0].packages_installed);
     }
@@ -486,8 +559,18 @@ plt.savefig("fig.png")
 "#,
             ))
             .await;
-        assert_eq!(response.status, SandboxStatus::Ok, "{:?} {}", response.error, response.stderr);
-        let png = response.files.iter().find(|f| f.path == "out/fig.png").unwrap();
+        assert_eq!(
+            response.status,
+            SandboxStatus::Ok,
+            "{:?} {}",
+            response.error,
+            response.stderr
+        );
+        let png = response
+            .files
+            .iter()
+            .find(|f| f.path == "out/fig.png")
+            .unwrap();
         assert_eq!(&png.bytes[..4], &[0x89, 0x50, 0x4e, 0x47]);
     }
 

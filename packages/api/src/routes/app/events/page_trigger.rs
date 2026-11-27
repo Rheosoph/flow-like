@@ -16,8 +16,10 @@ use flow_like::{
         },
         event::Event,
     },
+    utils::compression::{ConditionalRead, from_compressed_if_changed},
 };
-use flow_like_storage::object_store::ObjectStoreExt;
+use flow_like_storage::object_store::{ObjectStore, ObjectStoreExt};
+use flow_like_types::proto;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use utoipa::ToSchema;
@@ -37,7 +39,7 @@ use crate::{
         page_contract_facts, remember_page_contract_facts, stored_version_prerun_manifest,
         trusted_draft_prerun_manifest,
     },
-    state::{AppState, CachedBoard, CachedPageContractFacts},
+    state::{AppState, CachedBoard, CachedDraftPage, CachedPageContractFacts},
 };
 
 /// A Page lifecycle hook. These names live outside the user-authored action
@@ -254,8 +256,9 @@ async fn pinned_page(
     Ok(page)
 }
 
-/// A draft Page is saved independently of the board's ETag, so it is read on
-/// every call. Its path depends only on the board id, not on the board value.
+/// A draft Page is saved independently of the board's ETag, so every call
+/// confirms it with storage. Its path depends only on the board id, not on the
+/// board value.
 async fn draft_page(
     state: &AppState,
     app_id: &str,
@@ -266,12 +269,51 @@ async fn draft_page(
         let master = state.master_state(state).await?;
         let store = Board::meta_store(&master).await?;
         let storage_root = flow_like_storage::Path::from("apps").join(app_id.to_string());
-        Board::new_detached(Some(board_id.to_string()), storage_root)
-            .load_page(page_id, Some(store))
-            .await
+        let board = Board::new_detached(Some(board_id.to_string()), storage_root);
+        let key = format!("{app_id}:{board_id}:{page_id}");
+        if let Some(page) =
+            revalidated_draft_page(&state.draft_pages, store.clone(), &board, &key, page_id).await
+        {
+            return Ok(page);
+        }
+        board.load_page(page_id, Some(store)).await
     }
     .instrument(page_load_span())
     .await
+}
+
+/// The canonical draft page, from `cache` when one conditional read confirms
+/// its ETag. `None` leaves the read to [`Board::load_page`], which owns the
+/// legacy location and the errors.
+async fn revalidated_draft_page(
+    cache: &moka::sync::Cache<String, Arc<CachedDraftPage>>,
+    store: Arc<dyn ObjectStore>,
+    board: &Board,
+    key: &str,
+    page_id: &str,
+) -> Option<Page> {
+    let cached = cache.get(key);
+    let read = from_compressed_if_changed::<proto::Page>(
+        store,
+        board.page_path(page_id),
+        cached.as_ref().map(|entry| entry.e_tag.as_str()),
+    )
+    .await
+    .ok()?;
+    match read {
+        ConditionalRead::NotModified => cached.map(|entry| entry.page.clone()),
+        ConditionalRead::Fresh(proto, meta) => {
+            let page = Page::from(proto);
+            match meta.e_tag.filter(|e_tag| !e_tag.trim().is_empty()) {
+                Some(e_tag) => cache.insert(
+                    key.to_string(),
+                    Arc::new(CachedDraftPage::new(e_tag, page.clone(), meta.size)),
+                ),
+                None => cache.invalidate(key),
+            }
+            Some(page)
+        }
+    }
 }
 
 #[tracing::instrument(
@@ -523,11 +565,13 @@ async fn draft_contract_from_facts(
     invalid: &impl Fn() -> ApiError,
 ) -> Result<Option<ResolvedPageContract>, ApiError> {
     let board_id = event.board_id.as_str();
-    let Some(e_tag) = board_source_etag(state, app_id, board_id, None).await else {
-        return Ok(None);
-    };
+    // The page path depends only on the board id, so the page is read while the
+    // board's revision and the facts stored for it are.
     let (stored, page) = flow_like_types::tokio::join!(
         async {
+            let Some(e_tag) = board_source_etag(state, app_id, board_id, None).await else {
+                return Ok(None);
+            };
             let revision = BoardRevision::Draft { e_tag: &e_tag };
             let Some(facts) = page_contract_facts(state, app_id, board_id, revision).await else {
                 return Ok(None);
@@ -540,11 +584,11 @@ async fn draft_contract_from_facts(
                 &facts.draft_authority,
             )
             .await?;
-            Ok::<_, ApiError>(authority.map(|authority| (facts, authority)))
+            Ok::<_, ApiError>(authority.map(|authority| (e_tag, facts, authority)))
         },
         draft_page(state, app_id, board_id, page_id)
     );
-    let Some((facts, authority)) = stored? else {
+    let Some((e_tag, facts, authority)) = stored? else {
         return Ok(None);
     };
     if !facts_describe(&facts, board_id, None, &authority) {
@@ -1192,6 +1236,61 @@ mod tests {
         let authority = PrerunManifest::from_board(board);
         let facts = PageContractFacts::from_board(board, &authority, board.content_hash());
         (CachedPageContractFacts::new(facts), authority)
+    }
+
+    #[tokio::test]
+    async fn a_draft_page_comes_from_the_instance_only_while_storage_confirms_it() {
+        use flow_like::utils::compression::compress_to_file;
+        use flow_like_storage::object_store::memory::InMemory;
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let board = Board::new_detached(
+            Some("board-1".into()),
+            flow_like_storage::Path::from("apps").join("app-1"),
+        );
+        let path = board.page_path("page-1");
+        let save = |name: &'static str| {
+            let (store, path) = (store.clone(), path.clone());
+            async move {
+                let page: proto::Page = Page::new("page-1", name, "/").into();
+                compress_to_file(store, path, &page).await.unwrap();
+            }
+        };
+        let cache: moka::sync::Cache<String, Arc<CachedDraftPage>> = moka::sync::Cache::new(16);
+        let key = "app-1:board-1:page-1";
+
+        save("Stored").await;
+        let read = revalidated_draft_page(&cache, store.clone(), &board, key, "page-1").await;
+        assert_eq!(read.unwrap().name, "Stored");
+
+        let e_tag = store.head(&path).await.unwrap().e_tag.unwrap();
+        let held = Page::new("page-1", "Held", "/");
+        cache.insert(
+            key.to_string(),
+            Arc::new(CachedDraftPage::new(e_tag, held, 1)),
+        );
+        let read = revalidated_draft_page(&cache, store.clone(), &board, key, "page-1").await;
+        assert_eq!(
+            read.unwrap().name,
+            "Held",
+            "storage confirmed the held copy"
+        );
+
+        save("Saved again").await;
+        let read = revalidated_draft_page(&cache, store.clone(), &board, key, "page-1").await;
+        assert_eq!(
+            read.unwrap().name,
+            "Saved again",
+            "a save replaces the copy"
+        );
+        assert_eq!(cache.get(key).unwrap().page.name, "Saved again");
+
+        assert!(
+            revalidated_draft_page(&cache, store, &board, "app-1:board-1:page-2", "page-2")
+                .await
+                .is_none(),
+            "a page missing from the canonical path is left to the loader"
+        );
     }
 
     #[test]

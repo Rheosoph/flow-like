@@ -67,7 +67,11 @@ pub(super) async fn stage(
             .await
             .with_context(|| format!("write {name}"))
     };
-    write(scripts.bootstrap_name, scripts.bootstrap.as_bytes().to_vec()).await?;
+    write(
+        scripts.bootstrap_name,
+        scripts.bootstrap.as_bytes().to_vec(),
+    )
+    .await?;
     write(scripts.code_name, request.code.clone().into_bytes()).await?;
     write("inputs.json", serde_json::to_vec(&request.inputs)?).await?;
     write(

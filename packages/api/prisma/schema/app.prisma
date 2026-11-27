@@ -73,6 +73,7 @@ model App {
 
   technicalUsers TechnicalUser[]
   botApps        BotApp[]
+  teamPins       BotTeamApp[]
 
   outgoingAppConnections AppConnection[]  @relation("outgoingAppConnections")
   incomingAppConnections AppConnection[]  @relation("incomingAppConnections")

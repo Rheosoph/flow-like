@@ -11,7 +11,10 @@ use async_trait::async_trait;
 use flow_like::flow::copilot::bot_talk::{
     BotTalkHost, CrewMember, HeadlessPermission, NestedBotTurn, PendingAnswer,
 };
-use flow_like_types::{anyhow, bot_team::TeamBrief};
+use flow_like_types::{
+    anyhow,
+    bot_team::{OrgLookup, TeamBrief},
+};
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -33,6 +36,12 @@ struct Roster {
     members: Vec<CrewMember>,
     #[serde(default)]
     team: Option<TeamBrief>,
+}
+
+#[derive(Deserialize)]
+struct OrgAnswer {
+    #[serde(default)]
+    lookup: Option<OrgLookup>,
 }
 
 #[derive(Deserialize)]
@@ -79,8 +88,12 @@ impl AccountTalkHost {
     }
 
     async fn fetch_roster(&self, caller: &CrewMember) -> flow_like_types::Result<Roster> {
-        self.call(Method::GET, format!("bots/{}/talk/roster", caller.id), None)
-            .await
+        let path = format!(
+            "bots/{}/talk/roster?run_id={}",
+            caller.id,
+            urlencoding::encode(&self.run_id)
+        );
+        self.call(Method::GET, path, None).await
     }
 
     async fn settle_card_answer(
@@ -147,6 +160,21 @@ impl BotTalkHost for AccountTalkHost {
             Some(brief) => Ok(brief),
             None => Ok(self.fetch_roster(caller).await?.team),
         }
+    }
+
+    async fn org_lookup(
+        &self,
+        caller: &CrewMember,
+        query: &str,
+    ) -> flow_like_types::Result<Option<OrgLookup>> {
+        let path = format!(
+            "bots/{}/talk/org?run_id={}&q={}",
+            caller.id,
+            urlencoding::encode(&self.run_id),
+            urlencoding::encode(query)
+        );
+        let answer: OrgAnswer = self.call(Method::GET, path, None).await?;
+        Ok(answer.lookup)
     }
 
     async fn has_grant(&self, from: &CrewMember, to: &CrewMember) -> flow_like_types::Result<bool> {

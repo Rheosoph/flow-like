@@ -12,7 +12,7 @@ const browser =
 	kind === "webkit"
 		? await webkit.launch()
 		: await chromium.launch({
-				executablePath: puppeteer.executablePath(),
+				executablePath: await puppeteer.executablePath(),
 				args: ["--enable-webgl", "--enable-unsafe-swiftshader"],
 			});
 const results = [];

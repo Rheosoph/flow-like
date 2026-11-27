@@ -8,6 +8,7 @@ import {
 	click,
 	installDom,
 	queryByRole,
+	settleUntil,
 	typeInto,
 } from "../testing/dom-harness";
 import type { MountDevicesOptions } from "../testing/mount-devices";
@@ -143,6 +144,7 @@ describe("account backup sheet (inherits device-account-recovery 1–8)", () => 
 
 		release();
 		await view.settle();
+		await settleUntil(() => vaultIds(view).length > 0);
 		expect(vaultIds(view)).toEqual([SAMPLE_IDS.edge]);
 		expect(byRole("dialog").textContent).toContain("Restored v3 · locked");
 		expect(byRole("dialog").textContent).toContain(
@@ -169,6 +171,9 @@ describe("account backup sheet (inherits device-account-recovery 1–8)", () => 
 		const view = await mountDevices(<RestoreHarness />, newComputer());
 		await submitRestore(view, "not-the-right-password");
 		await view.settle();
+		await settleUntil(() =>
+			(byRole("dialog").textContent ?? "").includes("Nothing was restored"),
+		);
 		const dialog = byRole("dialog");
 		expect(dialog.textContent).toContain(
 			"That password doesn't open this backup, or the backup was changed.",

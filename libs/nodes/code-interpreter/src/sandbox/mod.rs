@@ -348,7 +348,9 @@ impl SandboxRuntime {
                 installed: self.store.is_installed(&self.config.python_artifact),
                 download_bytes: self.config.python_artifact.size,
                 packages: SCIENTIFIC_PACKAGES,
-                packages_installed: self.store.is_bundle_installed(&self.config.scientific_bundle),
+                packages_installed: self
+                    .store
+                    .is_bundle_installed(&self.config.scientific_bundle),
                 packages_download_bytes: self.config.scientific_bundle.archive.size,
             },
             LanguageInfo {
@@ -407,11 +409,12 @@ impl SandboxRuntime {
                     },
                 ),
                 Interpreter::Scientific => {
-                    let dir = self.store.ensure_bundle(&self.config.scientific_bundle).await?;
-                    let mut spec = GuestSpec::command(&[
-                        "/usr/local/bin/python.wasm",
-                        "/flow/bootstrap.py",
-                    ]);
+                    let dir = self
+                        .store
+                        .ensure_bundle(&self.config.scientific_bundle)
+                        .await?;
+                    let mut spec =
+                        GuestSpec::command(&["/usr/local/bin/python.wasm", "/flow/bootstrap.py"]);
                     spec.reactor = true;
                     spec.env = vec![
                         ("TMPDIR".to_string(), "/tmp".to_string()),
@@ -455,10 +458,8 @@ impl SandboxRuntime {
             Err(message) => return SandboxResponse::failed(SandboxStatus::Error, message, started),
         };
         if interpreter == Interpreter::Scientific {
-            request.limits.memory_bytes = request
-                .limits
-                .memory_bytes
-                .max(SCIENTIFIC_MIN_MEMORY_BYTES);
+            request.limits.memory_bytes =
+                request.limits.memory_bytes.max(SCIENTIFIC_MIN_MEMORY_BYTES);
         }
         let prepared = match self.prepared(interpreter).await {
             Ok(prepared) => prepared,
@@ -489,9 +490,9 @@ impl SandboxRuntime {
 
 fn resolve_interpreter(request: &SandboxRequest) -> std::result::Result<Interpreter, String> {
     match request.language {
-        Language::JavaScript if !request.packages.is_empty() => Err(
-            "JavaScript has no packages; remove 'packages' or use language python".to_string(),
-        ),
+        Language::JavaScript if !request.packages.is_empty() => {
+            Err("JavaScript has no packages; remove 'packages' or use language python".to_string())
+        }
         Language::JavaScript => Ok(Interpreter::JavaScript),
         Language::Python if request.packages.is_empty() => Ok(Interpreter::Python),
         Language::Python => {

@@ -1039,6 +1039,55 @@ pub(crate) async fn remember_page_contract_facts(
     state.page_contract_facts.insert(cache_key, Arc::new(entry));
 }
 
+/// Persist what Page requests of a freshly written draft read, while the writer still holds the
+/// board it saved: the exact source snapshot, the board's prerun authority and its page contract
+/// facts. Without them the first bootstrap and prerun after every save each hydrate the whole
+/// board on whichever cold instance they reach. Best effort: a failure only costs the next request
+/// that hydration, so the write never fails for it.
+pub(crate) async fn prewarm_draft_revision(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    cached: &crate::state::CachedBoard,
+) {
+    if cached.board.page_ids.is_empty() {
+        return;
+    }
+    let prewarm = async {
+        let (snapshot, authority) = flow_like_types::tokio::join!(
+            ensure_draft_board_snapshot(state, app_id, board_id, cached),
+            ensure_draft_prerun_manifest(state, app_id, board_id, cached),
+        );
+        if let Err(error) = snapshot {
+            tracing::warn!(app_id, board_id, error = ?error, "Draft snapshot prewarm failed");
+        }
+        match authority {
+            Ok(authority) => {
+                remember_page_contract_facts(
+                    state,
+                    app_id,
+                    board_id,
+                    BoardRevision::Draft {
+                        e_tag: cached.e_tag.trim(),
+                    },
+                    cached,
+                    &authority,
+                )
+                .await;
+            }
+            Err(error) => {
+                tracing::warn!(app_id, board_id, error = ?error, "Draft prerun authority prewarm failed");
+            }
+        }
+    };
+    prewarm
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "board.revision.prewarm"
+        ))
+        .await;
+}
+
 #[cfg(test)]
 mod draft_manifest_cache_tests {
     use super::{

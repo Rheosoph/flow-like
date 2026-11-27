@@ -1,4 +1,5 @@
 "use client";
+import type { IBotDiscordState } from "@flow-like/flow-like-ui/state/backend-state/bot-channels-state";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -86,6 +87,8 @@ import { accountSession } from "../lib/local-bots/account";
 import { isIOSDevice, isMobileDevice } from "../lib/platform";
 import {
 	type OnlineProfile,
+	PROFILE_BIT_CHECK_INTERVAL_MS,
+	createIntervalGate,
 	createProfileSyncQueue,
 	mergeRemoteProfileMetadata,
 	storedSignedImageIsCurrent,
@@ -112,6 +115,7 @@ import { AppState } from "./tauri-provider/app-state";
 import { AudioState } from "./tauri-provider/audio-state";
 import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
+import { BotDiscordState } from "./tauri-provider/bot-discord-state";
 import { BotState } from "./tauri-provider/bot-state";
 import { BotTeamState } from "./tauri-provider/bot-team-state";
 import type { CommandSyncRemoteIdentity } from "./tauri-provider/command-sync";
@@ -203,6 +207,7 @@ export class TauriBackend implements IBackendState {
 	salesState: ISalesState;
 	botState: IBotState;
 	botTeamState: IBotTeamState;
+	botDiscordState: IBotDiscordState;
 	inboxState: IInboxState;
 	meetingClient: MeetingClient;
 	usageState: IUsageState;
@@ -260,6 +265,7 @@ export class TauriBackend implements IBackendState {
 		this.salesState = new SalesState(this);
 		this.botState = new BotState(this);
 		this.botTeamState = new BotTeamState(this);
+		this.botDiscordState = new BotDiscordState(this);
 		this.inboxState = withEndToEnd(
 			new InboxState(this),
 			tauriInboxCrypto,
@@ -1274,6 +1280,9 @@ export function ProfileSyncer({
 	const profileSecure = profile.data?.secure;
 
 	const syncQueueRef = useRef(createProfileSyncQueue());
+	const bitCheckDueRef = useRef(
+		createIntervalGate(PROFILE_BIT_CHECK_INTERVAL_MS),
+	);
 	const profileRef = useRef(profile.data);
 
 	useEffect(() => {
@@ -2350,42 +2359,46 @@ export function ProfileSyncer({
 					}
 
 					if (disposed) return;
-					try {
-						const customBitsResponse = await fetchWithDeadline(
-							`${apiBase}/api/v1/user/bits?device_models=true`,
-							{
-								method: "GET",
-								headers: { Authorization: `Bearer ${accessToken}` },
-							},
-						);
-						if (!customBitsResponse.ok) {
-							throw new Error("Could not check the custom bit library.");
-						}
-						const customBits: unknown = await customBitsResponse.json();
-						if (!Array.isArray(customBits)) {
-							throw new Error("The custom bit library response is invalid.");
-						}
-						const remoteCustomBitIds = customBits.map((bit: unknown) => {
-							if (
-								!isRecord(bit) ||
-								typeof bit.id !== "string" ||
-								!bit.id.trim()
-							) {
+					if (bitCheckDueRef.current()) {
+						try {
+							const customBitsResponse = await fetchWithDeadline(
+								`${apiBase}/api/v1/user/bits?device_models=true`,
+								{
+									method: "GET",
+									headers: { Authorization: `Bearer ${accessToken}` },
+								},
+							);
+							if (!customBitsResponse.ok) {
+								throw new Error("Could not check the custom bit library.");
+							}
+							const customBits: unknown = await customBitsResponse.json();
+							if (!Array.isArray(customBits)) {
 								throw new Error("The custom bit library response is invalid.");
 							}
-							return bit.id;
-						});
-						if (disposed) return;
-						const prunedBits = await invoke<boolean>(
-							"prune_missing_profile_bits",
-							{ hub: apiBase, remoteCustomBitIds },
-						);
-						if (prunedBits) changed = true;
-						if (prunedBits && !disposed) {
-							void syncQueueRef.current.request(syncProfiles, true);
+							const remoteCustomBitIds = customBits.map((bit: unknown) => {
+								if (
+									!isRecord(bit) ||
+									typeof bit.id !== "string" ||
+									!bit.id.trim()
+								) {
+									throw new Error(
+										"The custom bit library response is invalid.",
+									);
+								}
+								return bit.id;
+							});
+							if (disposed) return;
+							const prunedBits = await invoke<boolean>(
+								"prune_missing_profile_bits",
+								{ hub: apiBase, remoteCustomBitIds },
+							);
+							if (prunedBits) changed = true;
+							if (prunedBits && !disposed) {
+								void syncQueueRef.current.request(syncProfiles, true);
+							}
+						} catch (error) {
+							console.warn("Failed to remove missing profile bits:", error);
 						}
-					} catch (error) {
-						console.warn("Failed to remove missing profile bits:", error);
 					}
 
 					console.log("[ProfileSync] Profile sync complete");

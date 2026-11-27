@@ -46,6 +46,8 @@ model Bot {
   calendarWake    Json?
   /// When a host last planned the wake-ups of the bot's connected calendars.
   calendarSyncedAt DateTime? @db.Timestamptz(3)
+  /// People who share an app with the owner may find and invite the bot (the owner accepts each invitation); null or false keeps it hidden.
+  othersCanInvite Boolean?
   permissionsFrom BotPermission[]       @relation("BotPermissionFrom")
   permissionsTo   BotPermission[]       @relation("BotPermissionTo")
   hostHeartbeats  BotHostHeartbeat[]
@@ -63,6 +65,10 @@ model Bot {
   calendarFeed    BotCalendarFeed?
   teamBots        BotTeamBot[]
   ledTeams        BotTeam[]             @relation("BotTeamLead")
+  leadOffers      BotTeam[]             @relation("BotTeamLeadOffer")
+  teamChats       BotTeamChat[]
+  channelLinks    BotChannelLink[]
+  channelSenders  BotChannelSender[]
 
   @@unique([ownerId, systemKey])
   @@unique([ownerId, importKey])

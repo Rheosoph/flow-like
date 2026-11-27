@@ -3,15 +3,18 @@
 use super::{
     access::{Org, TEAM_CYCLE, active, admin_team, limit, org_of},
     bots::prune_outsiders,
+    chats::sync_chats_of,
+    classification::{drop_classifications, prune_classifications},
     effects::{Effects, settle},
     lock_org_scope, lock_scope,
     model::{CreateTeamRequest, PatchTeamRequest},
+    org_apps::sign_org_apps,
     room::sync_room,
     threads::{release_team_threads, sync_team_threads},
-    view::{org_view, team_view},
+    view::{org_view, sign_team_images, team_view},
 };
 use crate::{
-    entity::{bot_team, bot_team_bot, bot_team_person},
+    entity::{bot, bot_team, bot_team_app, bot_team_bot, bot_team_person},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::inbox::{now_millis, team_room},
@@ -96,6 +99,9 @@ pub(crate) async fn create_team_in<C: ConnectionTrait>(
         purpose: Set(purpose),
         parent_id: Set(request.parent_id.clone()),
         lead_bot_id: Set(None),
+        lead_offer_bot_id: Set(None),
+        lead_offer_by: Set(None),
+        lead_offer_at: Set(None),
         direct_asks: Set(false),
         conversation_id: Set(Some(room_id)),
         created_by: Set(sub.to_string()),
@@ -151,7 +157,7 @@ pub async fn create_team(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
 #[utoipa::path(
@@ -170,7 +176,10 @@ pub async fn list_org(
     Extension(user): Extension<AppUser>,
 ) -> Result<Json<OrgView>, ApiError> {
     let sub = user.sub()?;
-    Ok(Json(org_view(&state.db, &sub).await?))
+    let mut view = org_view(&state.db, &sub).await?;
+    sign_team_images(&state, &mut view.teams).await?;
+    sign_org_apps(&state, &mut view.apps).await;
+    Ok(Json(view))
 }
 
 async fn set_parent<C: ConnectionTrait>(
@@ -229,8 +238,8 @@ async fn set_direct_asks<C: ConnectionTrait>(
             .await?;
         return Ok(());
     }
-    let own: Vec<String> = crate::entity::bot::Entity::find()
-        .filter(crate::entity::bot::Column::OwnerId.eq(sub))
+    let own: Vec<String> = bot::Entity::find()
+        .filter(bot::Column::OwnerId.eq(sub))
         .all(db)
         .await?
         .into_iter()
@@ -248,17 +257,31 @@ async fn ensure_lead<C: ConnectionTrait>(
     db: &C,
     team: &bot_team::Model,
     bot_id: &str,
-) -> Result<(), ApiError> {
+) -> Result<String, ApiError> {
     let row = bot_team_bot::Entity::find_by_id((team.id.clone(), bot_id.to_string()))
         .one(db)
         .await?;
-    match row {
-        Some(row) if row.status == active() => Ok(()),
-        _ => Err(ApiError::bad_request(format!(
+    let not_active = || {
+        ApiError::bad_request(format!(
             "'{bot_id}' is not an active bot of team '{}' and can't lead it",
             team.name
-        ))),
+        ))
+    };
+    if row.is_none_or(|row| row.status != active()) {
+        return Err(not_active());
     }
+    bot::Entity::find_by_id(bot_id)
+        .filter(bot::Column::DeletedAt.is_null())
+        .one(db)
+        .await?
+        .map(|bot| bot.owner_id)
+        .ok_or_else(not_active)
+}
+
+pub(crate) fn clear_offer(update: &mut bot_team::ActiveModel) {
+    update.lead_offer_bot_id = Set(None);
+    update.lead_offer_by = Set(None);
+    update.lead_offer_at = Set(None);
 }
 
 /// Applies the changes of `request` to the team; the caller must be its admin.
@@ -293,11 +316,28 @@ pub(crate) async fn patch_team_in<C: ConnectionTrait>(
         update.parent_id = Set(parent_id.clone());
     }
     if let Some(lead) = &request.lead_bot_id {
-        if let Some(bot_id) = lead.as_deref() {
-            ensure_lead(db, &team, bot_id).await?;
+        match lead.as_deref() {
+            None => {
+                lead_changed = team.lead_bot_id.is_some();
+                update.lead_bot_id = Set(None);
+                clear_offer(&mut update);
+            }
+            Some(bot_id) if team.lead_bot_id.as_deref() == Some(bot_id) => {
+                ensure_lead(db, &team, bot_id).await?;
+            }
+            Some(bot_id) => {
+                let owner = ensure_lead(db, &team, bot_id).await?;
+                if owner == sub {
+                    lead_changed = true;
+                    update.lead_bot_id = Set(Some(bot_id.to_string()));
+                    clear_offer(&mut update);
+                } else {
+                    update.lead_offer_bot_id = Set(Some(bot_id.to_string()));
+                    update.lead_offer_by = Set(Some(sub.to_string()));
+                    update.lead_offer_at = Set(Some(now));
+                }
+            }
         }
-        lead_changed = lead != &team.lead_bot_id;
-        update.lead_bot_id = Set(lead.clone());
     }
     if let Some(on) = request.direct_asks {
         set_direct_asks(db, sub, &team, on).await?;
@@ -309,8 +349,13 @@ pub(crate) async fn patch_team_in<C: ConnectionTrait>(
         if new_root != org.root.id {
             if org.root.id != team.id {
                 prune_outsiders(db, &org.root.id, sub, now, &mut effects).await?;
+                prune_classifications(db, &org.root.id).await?;
             }
             prune_outsiders(db, &new_root, sub, now, &mut effects).await?;
+            prune_classifications(db, &new_root).await?;
+        }
+        if org.root.id == team.id && team.parent_id.is_some() {
+            drop_classifications(db, &team.id).await?;
         }
     }
     if let (Some(name), Some(room)) = (renamed, team.conversation_id.as_deref()) {
@@ -358,7 +403,7 @@ pub async fn patch_team(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &team_id).await?))
+    Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
 /// Deletes the team's rows; its child teams move up to its parent.
@@ -370,6 +415,13 @@ pub(crate) async fn remove_team_rows<C: ConnectionTrait>(
     effects: &mut Effects,
 ) -> Result<(), ApiError> {
     release_team_threads(db, team, by, now, effects).await?;
+    let team_bots: Vec<String> = bot_team_bot::Entity::find()
+        .filter(bot_team_bot::Column::TeamId.eq(&team.id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|row| row.bot_id)
+        .collect();
     bot_team::Entity::update_many()
         .col_expr(
             bot_team::Column::ParentId,
@@ -382,6 +434,10 @@ pub(crate) async fn remove_team_rows<C: ConnectionTrait>(
         .filter(bot_team_bot::Column::TeamId.eq(&team.id))
         .exec(db)
         .await?;
+    bot_team_app::Entity::delete_many()
+        .filter(bot_team_app::Column::TeamId.eq(&team.id))
+        .exec(db)
+        .await?;
     bot_team_person::Entity::delete_many()
         .filter(bot_team_person::Column::TeamId.eq(&team.id))
         .exec(db)
@@ -389,7 +445,7 @@ pub(crate) async fn remove_team_rows<C: ConnectionTrait>(
     bot_team::Entity::delete_by_id(team.id.clone())
         .exec(db)
         .await?;
-    Ok(())
+    sync_chats_of(db, &team_bots, &[], by, now, effects).await
 }
 
 /// Deletes the team, then detaches the bots whose owners are no longer in the org they sit in:
@@ -409,12 +465,14 @@ pub(crate) async fn remove_team_and_prune<C: ConnectionTrait>(
         .map(|child| child.id.clone())
         .collect();
     remove_team_rows(db, team, by, now, effects).await?;
+    drop_classifications(db, &team.id).await?;
     let roots = match team.parent_id {
         Some(_) => vec![org.root.id.clone()],
         None => children,
     };
     for root in roots {
         prune_outsiders(db, &root, by, now, effects).await?;
+        prune_classifications(db, &root).await?;
     }
     Ok(())
 }

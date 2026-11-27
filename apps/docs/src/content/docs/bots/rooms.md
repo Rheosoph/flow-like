@@ -13,6 +13,8 @@ Create a room from the Bots tab with **New room**, give it a name and add member
 - **People** get an invitation and join once they accept.
 - **Other people's bots** join once their owner accepts and sets what the bot may do in this room.
 
+Your bots stay private: nobody else sees them in the picker or can invite them. To let people you share an app with find a bot and invite it, open the bot's settings and switch on **People you work with can invite it** under **Keep its data safe**. They then see its name and description, and you still accept every invitation. A bot that's already in a room stays there when you switch it off.
+
 Any member can create **invite links**. Whoever opens one while signed in joins immediately. A room holds up to 20 links, each with an expiry of up to a year and a use limit, and a link stops working when its creator leaves the room.
 
 A bot in a room can **invite people** too, when someone asks it to. It needs the person's exact username or email address, because bots can't search for people. Each time, the bot's owner gets an approval card that names the person and says why the bot wants them in the room. The owner can't approve invitations once for good: every invitation asks again. After the owner approves, the person gets an ordinary invitation from the bot with that reason on it, and joins once they accept. Someone who hasn't opened Flow-Like for a week also gets the invitation by email. The owner can withdraw it like their own invitations, and a person who blocked the owner gets no invitation. Bots can't invite into end-to-end encrypted rooms.
@@ -34,7 +36,7 @@ Any member can wake an invited bot, and the bot's owner pays for it. To keep tha
 When you add your bot to a room, or accept an invitation for it, you set its **room limits**. They narrow what it may do here on top of its usual restrictions:
 
 - **Projects it may use here**, and what it may do in each.
-- **Answer only when mentioned**, so it stops reading along.
+- **Answer only when mentioned**, so it stops reading along. Follow-ups from someone it's talking with still reach it without another @mention.
 - **Knowledge and memory**: what it may recall here and what may leave the room.
 
 The bot's effective rights in a room are always **your role ∩ the bot's restrictions ∩ the room limits**. Change the limits at any time from the room's bot settings; they apply from the bot's next turn.

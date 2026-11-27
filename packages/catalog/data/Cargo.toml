@@ -123,7 +123,7 @@ tempfile = { version = "3", optional = true }
 
 # Database providers retain our rustls and SQLite compatibility patches.
 # Arrow 58 and DataFusion 54 are shared by every provider.
-datafusion-table-providers = { git = "https://github.com/Rheosoph/datafusion-table-providers.git", rev = "05025aa10c8e5ff83f01adb0a0d0218d9e5f2e67", default-features = false, optional = true }
+datafusion-table-providers = { git = "https://github.com/Rheosoph/datafusion-table-providers.git", rev = "47403835992bca2aa11946a95e388f469b9cc252", default-features = false, optional = true }
 
 # Only to install a process-wide crypto provider before the PostgreSQL/MySQL drivers build TLS configs.
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"], optional = true }
@@ -138,7 +138,7 @@ aws-sdk-athena = { version = "~1.116", default-features = false, features = ["de
 reqwest.workspace = true
 uuid = { version = "1.11", features = ["v4"] }
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-chrono-0_4"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "mysql", "sqlite"] }
+sqlx = { version = "0.9.1", features = ["runtime-tokio", "postgres", "mysql", "sqlite"] }
 rand = "0.8"
 futures = "0.3"
 

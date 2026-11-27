@@ -1074,7 +1074,7 @@ async function runStep(
 				await withKeyboardModifiers(runtime, step.modifiers ?? [], () =>
 					handle.click({
 						button: step.button,
-						clickCount: step.clickCount,
+						count: step.clickCount,
 					}),
 				);
 			} finally {

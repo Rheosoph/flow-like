@@ -61,7 +61,7 @@ fn is_external_trigger(body: &Value) -> bool {
     TriggerBody::parse(body).is_ok_and(|trigger| {
         matches!(
             trigger.source,
-            TriggerSource::Email | TriggerSource::Webhook
+            TriggerSource::Email | TriggerSource::Webhook | TriggerSource::Channel
         )
     })
 }

@@ -8,7 +8,7 @@ use crate::{
     bot_host::{
         talk::{
             AnsweredAsk, ServerTalkHost, answered_ask, askable_bot, bot_name, crew_member,
-            remote_context, roster_in,
+            remote_context, roster_in, turn_conversation,
         },
         teams,
     },
@@ -20,14 +20,14 @@ use crate::{
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use flow_like::flow::copilot::bot_talk::{
     BotPresence, BotTalkHost, CrewMember, MAX_EXCHANGE_ROUNDS, PendingAnswer,
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 const MAX_QUESTION_CHARS: usize = 8_000;
 
@@ -40,6 +40,34 @@ pub struct TalkRoster {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>)]
     pub team: Option<flow_like_types::bot_team::TeamBrief>,
+}
+
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+pub struct RosterQuery {
+    /// The asking run. Its conversation bounds the team context in the answer: a team's brief and
+    /// roster reach only conversations whose people all belong to the bot's org. Absent or
+    /// unknown: the owner's own chat.
+    #[serde(default)]
+    pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TalkOrg {
+    /// The teams, bots and people of the bot's org that match the query; absent for a bot in no
+    /// team, or for a run whose conversation has people outside the org.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub lookup: Option<flow_like_types::bot_team::OrgLookup>,
+}
+
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+pub struct OrgQuery {
+    /// A name, or words from a team's purpose or a bot's job. Empty: every team.
+    #[serde(default)]
+    pub q: Option<String>,
+    /// The asking run; its conversation bounds the answer like the roster's.
+    #[serde(default)]
+    pub run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -111,8 +139,11 @@ pub struct AskResult {
     get,
     path = "/bots/{bot_id}/talk/roster",
     tag = "Bots",
-    description = "The bots this bot may ask: your other bots with where they run and whether they are online.",
-    params(("bot_id" = String, Path, description = "The asking bot; yours")),
+    description = "The bots this bot may ask: your other bots with where they run and whether they are online, plus its team's context. Teammates, other teams' leads and the team brief are left out when the run's conversation has people outside the bot's org.",
+    params(
+        ("bot_id" = String, Path, description = "The asking bot; yours"),
+        RosterQuery
+    ),
     responses(
         (status = 200, description = "The crew", body = TalkRoster),
         (status = 401, description = "Not signed in"),
@@ -125,12 +156,59 @@ pub async fn talk_roster(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(bot_id): Path<String>,
+    Query(query): Query<RosterQuery>,
 ) -> Result<Json<TalkRoster>, ApiError> {
     let sub = user.sub()?;
     owned_bot(&state.db, &sub, &bot_id).await?;
-    let members = roster_in(&state.db, &sub, &bot_id, now_millis()).await?;
-    let team = teams::team_brief_for(&state, &bot_id).await?;
+    let run_id = query.run_id.as_deref().map(str::trim).unwrap_or_default();
+    let conversation = turn_conversation(&state.db, &sub, &bot_id, run_id).await?;
+    let members = roster_in(
+        &state.db,
+        &sub,
+        &bot_id,
+        conversation.as_deref(),
+        now_millis(),
+    )
+    .await?;
+    let team = teams::team_brief_in(&state, &bot_id, conversation.as_deref()).await?;
     Ok(Json(TalkRoster { members, team }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/bots/{bot_id}/talk/org",
+    tag = "Bots",
+    description = "Searches the organization of this bot's team: its teams with their purpose, lead, bots and people, its bots with their job, and its people with the teams they are in. People's classifications are never included. Empty when the bot is in no team or the run's conversation has people outside the organization.",
+    params(
+        ("bot_id" = String, Path, description = "The searching bot; yours"),
+        OrgQuery
+    ),
+    responses(
+        (status = 200, description = "What matches", body = TalkOrg),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no bot with this id")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "GET /bots/{bot_id}/talk/org", skip(state, user))]
+pub async fn talk_org(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(bot_id): Path<String>,
+    Query(query): Query<OrgQuery>,
+) -> Result<Json<TalkOrg>, ApiError> {
+    let sub = user.sub()?;
+    owned_bot(&state.db, &sub, &bot_id).await?;
+    let run_id = query.run_id.as_deref().map(str::trim).unwrap_or_default();
+    let conversation = turn_conversation(&state.db, &sub, &bot_id, run_id).await?;
+    let lookup = teams::org_lookup_in(
+        &state,
+        &bot_id,
+        conversation.as_deref(),
+        query.q.as_deref().unwrap_or_default(),
+    )
+    .await?;
+    Ok(Json(TalkOrg { lookup }))
 }
 
 #[utoipa::path(
@@ -164,7 +242,7 @@ pub async fn talk_exchange(
         BotPresence::Online,
     );
     let callee = crew_member(
-        &askable_bot(&state.db, &sub, &bot_id, &body.callee_id).await?,
+        &askable_bot(&state.db, &sub, &bot_id, &body.callee_id, None).await?,
         BotPresence::Unknown,
     );
     let host = ServerTalkHost::for_chat(state.clone(), &sub, "");
@@ -223,12 +301,27 @@ pub async fn talk(
         &owned_bot(&state.db, &sub, &bot_id).await?,
         BotPresence::Online,
     );
-    let callee_row = askable_bot(&state.db, &sub, &bot_id, &body.callee_id).await?;
-    let presence = roster_in(&state.db, &sub, &bot_id, now_millis())
-        .await?
-        .into_iter()
-        .find(|member| member.id == callee_row.id)
-        .map_or(BotPresence::Unknown, |member| member.presence);
+    let run_id = body.run_id.trim();
+    let conversation = turn_conversation(&state.db, &sub, &bot_id, run_id).await?;
+    let callee_row = askable_bot(
+        &state.db,
+        &sub,
+        &bot_id,
+        &body.callee_id,
+        conversation.as_deref(),
+    )
+    .await?;
+    let presence = roster_in(
+        &state.db,
+        &sub,
+        &bot_id,
+        conversation.as_deref(),
+        now_millis(),
+    )
+    .await?
+    .into_iter()
+    .find(|member| member.id == callee_row.id)
+    .map_or(BotPresence::Unknown, |member| member.presence);
     let callee = crew_member(&callee_row, presence);
     let context =
         remote_context(&state.db, &sub, &caller.id, &callee.id, body.run_id.trim()).await?;

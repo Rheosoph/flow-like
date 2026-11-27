@@ -214,6 +214,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{bot_id}/talk", post(talk::talk))
         .route("/{bot_id}/talk/exchange", post(talk::talk_exchange))
         .route("/{bot_id}/talk/roster", get(talk::talk_roster))
+        .route("/{bot_id}/talk/org", get(talk::talk_org))
         .route(
             "/{bot_id}/turns/{turn_id}/ask-result",
             get(talk::turn_ask_result),
@@ -367,6 +368,8 @@ pub fn routes() -> Router<AppState> {
             "/{bot_id}/workspace/upload",
             post(workspace::upload_to_bot_workspace),
         )
+        .merge(crate::bot_channels::routes())
+        .merge(crate::teams::bot::routes())
 }
 
 /// The caller's bot `bot_id` if it is not deleted. Someone else's bot reads as 404 too, so the

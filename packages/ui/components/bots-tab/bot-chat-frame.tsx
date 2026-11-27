@@ -1,6 +1,13 @@
 "use client";
 
-import { type ReactNode, useId } from "react";
+import { useTranslation } from "@flow-like/locales";
+import {
+	type ReactNode,
+	useId,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { emitGuideEvent } from "../../lib/guide/guide-events";
 import type { DraftRelay } from "../global-chat/chat-bot-avatar";
 import type { GlobalChatBotView } from "../global-chat/use-global-chat-bot";
@@ -13,13 +20,86 @@ import {
 	shownBotPanelTab,
 } from "./bot-panel-tabs";
 import { BotPill } from "./bot-pill";
-import { BOT_PANEL_WIDTH, useDockPanelLayout } from "./crew-split-layout";
+import {
+	BOT_PANEL_WIDTH,
+	MIN_CHAT_WIDTH,
+	useDockPanelLayout,
+} from "./crew-split-layout";
+import { PaneResizeHandle, useStoredWidth } from "./pane-resize";
 import { SwipeBackLayer } from "./swipe-back-layer";
 
 /** The open tab of a bot's panel (`null` while it is closed) and how to change it. */
 export interface BotPanelControl {
 	tab: BotPanelTab | null;
 	onTabChange: (tab: BotPanelTab | null) => void;
+}
+
+const PANEL_WIDTH_KEY = "flow-like:bots:panel-width";
+const MIN_PANEL_WIDTH = 320;
+const MAX_PANEL_WIDTH = 720;
+
+function useElementWidth(element: HTMLElement | null) {
+	const [width, setWidth] = useState(0);
+	useLayoutEffect(() => {
+		if (!element) return;
+		const measure = () => setWidth(element.getBoundingClientRect().width);
+		measure();
+		if (typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(measure);
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, [element]);
+	return width;
+}
+
+/** The panel beside the chat, as wide as the reader dragged it while the chat keeps its minimum. */
+function PanelColumn({
+	frame,
+	panelId,
+	children,
+}: Readonly<{
+	frame: HTMLElement | null;
+	panelId: string;
+	children: ReactNode;
+}>) {
+	const { t } = useTranslation("bots");
+	const column = useRef<HTMLDivElement>(null);
+	const frameWidth = useElementWidth(frame);
+	const stored = useStoredWidth(
+		PANEL_WIDTH_KEY,
+		BOT_PANEL_WIDTH,
+		MIN_PANEL_WIDTH,
+		MAX_PANEL_WIDTH,
+	);
+	const max = frameWidth
+		? Math.min(MAX_PANEL_WIDTH, frameWidth - MIN_CHAT_WIDTH)
+		: MAX_PANEL_WIDTH;
+	const width = Math.max(MIN_PANEL_WIDTH, Math.min(stored.width, max));
+	return (
+		<div
+			ref={column}
+			className="relative flex min-h-0 shrink-0 flex-col border-l"
+			style={{ width }}
+		>
+			<PaneResizeHandle
+				edge="left"
+				label={t("panel.resize", "Resize details")}
+				valueText={t("panel.width", "Details width: {{width}} pixels", {
+					width: Math.round(width),
+				})}
+				controls={panelId}
+				width={width}
+				min={MIN_PANEL_WIDTH}
+				max={max}
+				initial={BOT_PANEL_WIDTH}
+				measure={() => column.current?.getBoundingClientRect().width ?? width}
+				onResize={stored.resize}
+				onCommit={stored.save}
+				className="-left-1.5"
+			/>
+			{children}
+		</div>
+	);
 }
 
 /** Floats over the top of the chat: the pill in the middle, the surface's own buttons at the sides. */
@@ -68,6 +148,7 @@ export function BotChatFrame({
 }>) {
 	const layout = useDockPanelLayout();
 	const panelId = useId();
+	const [frame, setFrame] = useState<HTMLDivElement | null>(null);
 	const tabs = botPanelTabs(view);
 	const tab = shownBotPanelTab(panel.tab, tabs);
 	const covered = tab !== null && layout === "sheet";
@@ -85,7 +166,7 @@ export function BotChatFrame({
 			/>
 		);
 	return (
-		<div className="relative flex min-h-0 min-w-0 flex-1">
+		<div ref={setFrame} className="relative flex min-h-0 min-w-0 flex-1">
 			<div
 				className="relative flex min-h-0 min-w-0 flex-1 flex-col"
 				inert={covered || undefined}
@@ -109,12 +190,9 @@ export function BotChatFrame({
 				/>
 			</div>
 			{tab && !covered && (
-				<div
-					className="flex min-h-0 shrink-0 flex-col border-l"
-					style={{ width: BOT_PANEL_WIDTH }}
-				>
+				<PanelColumn frame={frame} panelId={panelId}>
 					{overview(closePanel)}
-				</div>
+				</PanelColumn>
 			)}
 			{covered && (
 				<SwipeBackLayer onBack={closePanel}>{overview}</SwipeBackLayer>

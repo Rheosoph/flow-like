@@ -146,6 +146,9 @@ pub struct Conversation {
     pub unread_count: u64,
     /// The reader muted this conversation: its messages send no push.
     pub muted: bool,
+    /// The reader sits here beside their own bot without being addressed: they get a push only
+    /// when a message names them, and clients keep it out of the unread totals.
+    pub watching: bool,
     /// When the reader pinned it to the top of their list; null when it isn't pinned.
     pub pinned_at: Option<DateTime<FixedOffset>>,
     /// The reader's last history deletion; clients discard cached entries when it changes.

@@ -5,7 +5,7 @@ import puppeteer from "puppeteer";
 const origin = process.env.BOARD_PARITY_URL ?? "http://127.0.0.1:4339";
 const browser = await chromium.launch({
 	headless: true,
-	executablePath: process.env.CHROME_PATH ?? puppeteer.executablePath(),
+	executablePath: process.env.CHROME_PATH ?? (await puppeteer.executablePath()),
 	args: ["--enable-webgl", "--enable-unsafe-swiftshader"],
 });
 

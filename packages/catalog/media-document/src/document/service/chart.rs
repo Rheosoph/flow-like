@@ -59,7 +59,11 @@ fn column_letter(index: usize) -> String {
 /// Row 1 is the series names, column A the categories.
 pub fn workbook_rows(spec: &ChartSpec) -> Vec<Vec<WorkbookCell>> {
     let mut header = vec![WorkbookCell::Empty];
-    header.extend(spec.series.iter().map(|(name, _)| WorkbookCell::Text(name.clone())));
+    header.extend(
+        spec.series
+            .iter()
+            .map(|(name, _)| WorkbookCell::Text(name.clone())),
+    );
     let mut rows = vec![header];
     for (index, category) in spec.categories.iter().enumerate() {
         let mut row = vec![WorkbookCell::Text(category.clone())];
@@ -127,7 +131,10 @@ fn series_xml(spec: &ChartSpec, index: usize, name: &str, values: &[f64], linked
                 "<c:cat><c:strLit>{}</c:strLit></c:cat>",
                 string_cache(spec.categories.iter().cloned())
             ),
-            format!("<c:val><c:numLit>{}</c:numLit></c:val>", number_cache(values)),
+            format!(
+                "<c:val><c:numLit>{}</c:numLit></c:val>",
+                number_cache(values)
+            ),
         )
     };
     let style = match spec.kind {
@@ -148,13 +155,19 @@ fn series_xml(spec: &ChartSpec, index: usize, name: &str, values: &[f64], linked
                     )
                 })
                 .collect();
-            format!("<c:spPr><a:solidFill><a:srgbClr val=\"{color}\"/></a:solidFill></c:spPr>{slices}")
+            format!(
+                "<c:spPr><a:solidFill><a:srgbClr val=\"{color}\"/></a:solidFill></c:spPr>{slices}"
+            )
         }
         ChartKind::Bar => format!(
             "<c:spPr><a:solidFill><a:srgbClr val=\"{color}\"/></a:solidFill></c:spPr><c:invertIfNegative val=\"0\"/>"
         ),
     };
-    let smooth = if spec.kind == ChartKind::Line { "<c:smooth val=\"0\"/>" } else { "" };
+    let smooth = if spec.kind == ChartKind::Line {
+        "<c:smooth val=\"0\"/>"
+    } else {
+        ""
+    };
     format!(
         "<c:ser><c:idx val=\"{index}\"/><c:order val=\"{index}\"/>{tx}{style}{cat}{val}{smooth}</c:ser>"
     )
@@ -174,7 +187,11 @@ pub fn chart_xml(spec: &ChartSpec, linked: bool) -> String {
             let (direction, grouping, overlap) = (
                 if spec.horizontal { "bar" } else { "col" },
                 if spec.stacked { "stacked" } else { "clustered" },
-                if spec.stacked { "<c:overlap val=\"100\"/>" } else { "" },
+                if spec.stacked {
+                    "<c:overlap val=\"100\"/>"
+                } else {
+                    ""
+                },
             );
             format!(
                 "<c:barChart><c:barDir val=\"{direction}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{series}<c:gapWidth val=\"80\"/>{overlap}{axes}</c:barChart>"

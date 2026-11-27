@@ -91,6 +91,14 @@ pub(crate) async fn database() -> DatabaseConnection {
     db.execute(&schema.create_table_from_entity(crate::entity::bot_note::Entity))
         .await
         .unwrap();
+    for source in [
+        schema.create_table_from_entity(crate::entity::bot_team::Entity),
+        schema.create_table_from_entity(crate::entity::bot_team_thread::Entity),
+        schema.create_table_from_entity(crate::entity::bot_team_chat::Entity),
+        schema.create_table_from_entity(crate::entity::bot_org_classification::Entity),
+    ] {
+        db.execute(&source).await.unwrap();
+    }
     for statement in TABLES
         .iter()
         .chain(&super::marks::TEST_TABLES)
@@ -186,6 +194,7 @@ pub(crate) async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str
         subtask_model: Set(None),
         calendar_wake: Set(None),
         calendar_synced_at: Set(None),
+        others_can_invite: Set(None),
     }
     .insert(db)
     .await
@@ -211,6 +220,19 @@ pub(crate) async fn delete_bot(db: &DatabaseConnection, id: &str) {
         .col_expr(
             bot::Column::DeletedAt,
             sea_orm::sea_query::Expr::value(at(1)),
+        )
+        .filter(bot::Column::Id.eq(id))
+        .exec(db)
+        .await
+        .unwrap();
+}
+
+/// Lets people other than its owner find and invite `id`.
+pub(crate) async fn let_others_invite(db: &DatabaseConnection, id: &str) {
+    bot::Entity::update_many()
+        .col_expr(
+            bot::Column::OthersCanInvite,
+            sea_orm::sea_query::Expr::value(true),
         )
         .filter(bot::Column::Id.eq(id))
         .exec(db)

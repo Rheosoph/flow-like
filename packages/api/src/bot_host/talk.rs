@@ -46,7 +46,7 @@ use flow_like::flow::copilot::{
 use flow_like_types::{
     bot::{BotLocation, BotSystemKind},
     bot_message::{ApprovalRequest, MessageBody},
-    bot_team::TeamBrief,
+    bot_team::{OrgLookup, TeamBrief},
     bot_turn::{MAX_HOPS, STORED_QUEUED, turn_id},
     data_classification::{DataClassification, DataSensitivity},
     inbox::{ActivityBody, ConversationKind, TOMBSTONE_FIELD},
@@ -250,13 +250,15 @@ pub(crate) async fn roster_in<C: ConnectionTrait>(
     db: &C,
     owner_id: &str,
     caller_id: &str,
+    conversation_id: Option<&str>,
     now: DateTime<FixedOffset>,
 ) -> Result<Vec<CrewMember>, ApiError> {
-    let mut reach: HashMap<String, teams::TeamReach> = teams::team_reach(db, caller_id)
-        .await?
-        .into_iter()
-        .map(|reach| (reach.bot.id.clone(), reach))
-        .collect();
+    let mut reach: HashMap<String, teams::TeamReach> =
+        teams::team_reach(db, caller_id, conversation_id)
+            .await?
+            .into_iter()
+            .map(|reach| (reach.bot.id.clone(), reach))
+            .collect();
     let mut roster = own_roster(db, owner_id, caller_id, now, &mut reach).await?;
     if reach.is_empty() {
         return Ok(roster);
@@ -363,6 +365,7 @@ pub(crate) async fn askable_bot<C: ConnectionTrait>(
     owner_id: &str,
     caller_id: &str,
     callee_id: &str,
+    conversation_id: Option<&str>,
 ) -> Result<bot::Model, ApiError> {
     let row = bot::Entity::find_by_id(callee_id)
         .filter(bot::Column::DeletedAt.is_null())
@@ -372,7 +375,7 @@ pub(crate) async fn askable_bot<C: ConnectionTrait>(
     if row.owner_id == owner_id {
         return Ok(row);
     }
-    let reachable = teams::team_reach(db, caller_id)
+    let reachable = teams::team_reach(db, caller_id, conversation_id)
         .await?
         .iter()
         .any(|found| found.bot.id == row.id);
@@ -614,6 +617,20 @@ impl ServerTalkHost {
         Ok(direct.unwrap_or_else(|| exchange_id.to_string()))
     }
 
+    /// The conversation whose people bound what team context `caller` may use: the held turn's,
+    /// else the desktop-hosted turn `run_id` names, else none (the owner's own chat).
+    async fn team_scope(&self, caller: &CrewMember) -> flow_like_types::Result<Option<String>> {
+        let scope = match &self.held {
+            Some(held) => turn_origin_conversation(&self.state.db, &held.turn)
+                .await
+                .map(Some),
+            None => {
+                turn_conversation(&self.state.db, &self.owner_id, &caller.id, &self.run_id).await
+            }
+        };
+        scope.map_err(|error| flow_like_types::anyhow!("{error}"))
+    }
+
     fn hops(&self) -> u32 {
         self.trigger_hops.saturating_add(1)
     }
@@ -680,13 +697,30 @@ pub(crate) fn answer_from(
 #[async_trait]
 impl BotTalkHost for ServerTalkHost {
     async fn roster(&self, caller: &CrewMember) -> flow_like_types::Result<Vec<CrewMember>> {
-        roster_in(&self.state.db, &self.owner_id, &caller.id, now_millis())
-            .await
-            .map_err(|error| flow_like_types::anyhow!("{error}"))
+        let conversation = self.team_scope(caller).await?;
+        roster_in(
+            &self.state.db,
+            &self.owner_id,
+            &caller.id,
+            conversation.as_deref(),
+            now_millis(),
+        )
+        .await
+        .map_err(|error| flow_like_types::anyhow!("{error}"))
     }
 
     async fn team_brief(&self, caller: &CrewMember) -> flow_like_types::Result<Option<TeamBrief>> {
-        Ok(teams::team_brief_for(&self.state, &caller.id).await?)
+        let conversation = self.team_scope(caller).await?;
+        Ok(teams::team_brief_in(&self.state, &caller.id, conversation.as_deref()).await?)
+    }
+
+    async fn org_lookup(
+        &self,
+        caller: &CrewMember,
+        query: &str,
+    ) -> flow_like_types::Result<Option<OrgLookup>> {
+        let conversation = self.team_scope(caller).await?;
+        Ok(teams::org_lookup_in(&self.state, &caller.id, conversation.as_deref(), query).await?)
     }
 
     async fn has_grant(&self, from: &CrewMember, to: &CrewMember) -> flow_like_types::Result<bool> {

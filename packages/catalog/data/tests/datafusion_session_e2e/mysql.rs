@@ -5,7 +5,7 @@ use flow_like_catalog_data::data::datafusion::databases::RegisterMysqlNode;
 use flow_like_runtime::flow::node::NodeLogic;
 use flow_like_types::async_trait;
 use flow_like_types::{Value, json::json};
-use sqlx::{Executor, MySqlPool};
+use sqlx::{AssertSqlSafe, Executor, MySqlPool};
 use std::sync::Arc;
 
 /// A server speaking the MySQL protocol, mounted through `df_register_mysql`.
@@ -90,27 +90,21 @@ impl Backend for MysqlWire {
     async fn create_source(&self) -> String {
         let table = unique("people");
         let pool = self.pool().await;
-        pool.execute(
-            format!(
-                "CREATE TABLE {table} (
-                    id BIGINT PRIMARY KEY,
-                    name VARCHAR(64) NOT NULL,
-                    score DOUBLE NOT NULL,
-                    active BOOLEAN NOT NULL,
-                    created_at DATETIME NOT NULL
-                ) CHARACTER SET utf8mb4"
-            )
-            .as_str(),
-        )
+        pool.execute(AssertSqlSafe(format!(
+            "CREATE TABLE {table} (
+                id BIGINT PRIMARY KEY,
+                name VARCHAR(64) NOT NULL,
+                score DOUBLE NOT NULL,
+                active BOOLEAN NOT NULL,
+                created_at DATETIME NOT NULL
+            ) CHARACTER SET utf8mb4"
+        )))
         .await
         .unwrap_or_else(|error| panic!("creating {} table {table}: {error}", self.label));
-        pool.execute(
-            format!(
-                "INSERT INTO {table} VALUES {}",
-                values_sql(ansi_boolean, ansi_timestamp)
-            )
-            .as_str(),
-        )
+        pool.execute(AssertSqlSafe(format!(
+            "INSERT INTO {table} VALUES {}",
+            values_sql(ansi_boolean, ansi_timestamp)
+        )))
         .await
         .unwrap_or_else(|error| panic!("seeding {} table {table}: {error}", self.label));
         pool.close().await;
@@ -119,10 +113,11 @@ impl Backend for MysqlWire {
 
     async fn count_rows(&self, source: &str) -> i64 {
         let pool = self.pool().await;
-        let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {source}"))
-            .fetch_one(&pool)
-            .await
-            .unwrap_or_else(|error| panic!("counting {} table {source}: {error}", self.label));
+        let count: i64 =
+            sqlx::query_scalar(AssertSqlSafe(format!("SELECT COUNT(*) FROM {source}")))
+                .fetch_one(&pool)
+                .await
+                .unwrap_or_else(|error| panic!("counting {} table {source}: {error}", self.label));
         pool.close().await;
         count
     }
@@ -130,7 +125,7 @@ impl Backend for MysqlWire {
     async fn drop_source(&self, source: &str) {
         let pool = self.pool().await;
         let _ = pool
-            .execute(format!("DROP TABLE IF EXISTS {source}").as_str())
+            .execute(AssertSqlSafe(format!("DROP TABLE IF EXISTS {source}")))
             .await;
         pool.close().await;
     }

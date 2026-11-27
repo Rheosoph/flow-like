@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { LockIcon } from "lucide-react";
 import {
 	type KeyboardEvent,
 	type ReactNode,
@@ -39,16 +40,23 @@ function TeamTagMenu({
 					key={option.id}
 					type="button"
 					aria-current={index === active}
+					aria-disabled={Boolean(option.lockedLevel)}
 					onMouseDown={(event) => {
 						event.preventDefault();
-						onPick(option);
+						if (!option.lockedLevel) onPick(option);
 					}}
 					className={cn(
 						"flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm outline-none",
 						index === active && "bg-accent text-accent-foreground",
+						option.lockedLevel && "cursor-not-allowed opacity-60",
 					)}
 				>
-					<TeamTile teamId={option.id} name={option.name} size={22} />
+					<TeamTile
+						teamId={option.id}
+						name={option.name}
+						imageUrl={option.imageUrl}
+						size={22}
+					/>
 					<span className="min-w-0 flex-1 truncate">{option.name}</span>
 					<span
 						className={cn(
@@ -60,7 +68,15 @@ function TeamTagMenu({
 					>
 						{`#${option.tag}`}
 					</span>
-					{option.leadName && (
+					{option.lockedLevel && (
+						<span className="flex shrink-0 items-center gap-1 text-xs capitalize">
+							<LockIcon className="size-3" aria-hidden />
+							{t("teams.chats.leadClassified", "Lead classified {{level}}", {
+								level: option.lockedLevel,
+							})}
+						</span>
+					)}
+					{option.leadName && !option.lockedLevel && (
 						<span
 							className={cn(
 								"hidden max-w-[40%] shrink-0 truncate text-xs sm:inline",
@@ -145,7 +161,8 @@ export function useTeamTagPicker({
 				(index) => (index + step + suggestions.length) % suggestions.length,
 			);
 		} else if (event.key === "Enter" || event.key === "Tab") {
-			pick(suggestions[active] ?? suggestions[0]);
+			const option = suggestions[active] ?? suggestions[0];
+			if (!option.lockedLevel) pick(option);
 		} else if (event.key === "Escape") {
 			setTrigger(null);
 		} else {

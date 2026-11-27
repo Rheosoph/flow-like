@@ -55,6 +55,13 @@ import {
 import { createScreenSealing } from "@flow-like/flow-like-ui/lib/bot-screens/screen-sealing";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
+import type {
+	TeamsBotAccess,
+	TeamsBotConnection,
+	TeamsBotPackage,
+	TeamsBotSetup,
+} from "@flow-like/flow-like-ui/lib/teams-bot";
+import type { IBotChannelLink } from "@flow-like/flow-like-ui/state/backend-state/bot-channels-state";
 import { IAppVisibility } from "@flow-like/flow-like-ui/lib/schema/app/app";
 import {
 	type IBotApprovalItemDecision,
@@ -1095,6 +1102,97 @@ export class BotState implements IBotState {
 			);
 		}
 		return account;
+	}
+
+	private async teamsRoute(botId: string): Promise<IAccountRoute> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			throw new Error(
+				"Microsoft Teams needs a bot on an account; this bot lives on this device",
+			);
+		}
+		return account;
+	}
+
+	async getTeams(botId: string): Promise<TeamsBotConnection> {
+		const account = await this.teamsRoute(botId);
+		return get<TeamsBotConnection>(
+			account.profile,
+			`${botPath(account.id)}/teams`,
+			account.auth,
+		);
+	}
+
+	async setupTeams(
+		botId: string,
+		input: TeamsBotSetup,
+	): Promise<TeamsBotConnection> {
+		const account = await this.teamsRoute(botId);
+		return put<TeamsBotConnection>(
+			account.profile,
+			`${botPath(account.id)}/teams`,
+			input,
+			account.auth,
+		);
+	}
+
+	async getTeamsPackage(botId: string): Promise<TeamsBotPackage> {
+		const account = await this.teamsRoute(botId);
+		return get<TeamsBotPackage>(
+			account.profile,
+			`${botPath(account.id)}/teams/package`,
+			account.auth,
+		);
+	}
+
+	async rotateTeamsSecret(botId: string): Promise<TeamsBotConnection> {
+		const account = await this.teamsRoute(botId);
+		return post<TeamsBotConnection>(
+			account.profile,
+			`${botPath(account.id)}/teams/rotate`,
+			{},
+			account.auth,
+		);
+	}
+
+	async disconnectTeams(botId: string): Promise<TeamsBotConnection> {
+		const account = await this.teamsRoute(botId);
+		return del<TeamsBotConnection>(
+			account.profile,
+			`${botPath(account.id)}/teams`,
+			undefined,
+			account.auth,
+		);
+	}
+
+	async getTeamsAccess(botId: string): Promise<TeamsBotAccess> {
+		const account = await this.teamsRoute(botId);
+		return get<TeamsBotAccess>(
+			account.profile,
+			`${botPath(account.id)}/teams/access`,
+			account.auth,
+		);
+	}
+
+	async listChannelLinks(botId: string): Promise<IBotChannelLink[]> {
+		const account = await this.accountFor(botId);
+		if (!account) return [];
+		const response = await get<{ links?: IBotChannelLink[] }>(
+			account.profile,
+			`${botPath(account.id)}/channels`,
+			account.auth,
+		);
+		return asArray(response?.links);
+	}
+
+	async deleteChannelLink(botId: string, linkId: string): Promise<void> {
+		const account = await this.teamsRoute(botId);
+		await del<void>(
+			account.profile,
+			`${botPath(account.id)}/channels/${encodeURIComponent(linkId)}`,
+			undefined,
+			account.auth,
+		);
 	}
 
 	async listWebhooks(botId: string): Promise<IBotWebhook[]> {

@@ -1,6 +1,7 @@
 "use client";
 
 import { flattenForest, orgForest } from "../../../lib/bot-teams/org-model";
+import { InlineApps } from "./app-deck";
 import { useOrgChart } from "./org-chart-context";
 import { Bench, TeamBox } from "./org-chart-tree";
 
@@ -17,7 +18,8 @@ export function OrgOutline() {
 					style={{ marginLeft: node.depth * INDENT_PX }}
 					className={node.depth > 0 ? "border-l pl-2" : undefined}
 				>
-					<TeamBox team={node.team} className="w-full" />
+					<TeamBox team={node.team} className="w-full" layout="inline" />
+					<InlineApps team={node.team} />
 				</div>
 			))}
 			<Bench />

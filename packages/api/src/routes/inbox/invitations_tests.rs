@@ -3,7 +3,10 @@ use super::{
     MEMBER_DECLINED, MEMBER_PENDING, Reader,
     conversations::{NewConversation, create_group_in, start_group},
     entries::send_in,
-    fixture::{assert_code, at, copies, database, delete_bot, insert_bot, says, text, user},
+    fixture::{
+        assert_code, at, copies, database, delete_bot, insert_bot, let_others_invite, says, text,
+        user,
+    },
     invitations::{
         InviteMode, accept_in, cancel_in, classify, decline_in, invitable, invitations_for,
         invite_in, set_limits_in,
@@ -69,6 +72,8 @@ async fn world() -> DatabaseConnection {
     ] {
         insert_bot(&db, id, owner, "SERVER").await;
     }
+    let_others_invite(&db, "bot_b").await;
+    let_others_invite(&db, "bot_c").await;
     share_app(&db, "user-a", "app-1").await;
     share_app(&db, "user-b", "app-1").await;
     share_app(&db, "user-c", "app-2").await;
@@ -570,6 +575,7 @@ async fn a_persons_invitation_takes_no_limits_and_own_bots_join_at_once() {
 async fn invitable_suggests_what_the_server_accepts_and_strangers_are_invited_too() {
     let db = world().await;
     insert_bot(&db, "bot_gone", "user-b", "SERVER").await;
+    let_others_invite(&db, "bot_gone").await;
     delete_bot(&db, "bot_gone").await;
     let listed = invitable(&db, "user-a", None, None).await.unwrap();
     let modes: BTreeMap<&str, InviteMode> = listed
@@ -624,6 +630,55 @@ async fn invitable_suggests_what_the_server_accepts_and_strangers_are_invited_to
     };
     assert_eq!(state("user-b").as_deref(), Some("invited"));
     assert_eq!(state("bot_b"), None);
+}
+
+#[tokio::test]
+async fn other_peoples_bots_stay_unlisted_and_uninvitable_until_their_owner_lets_others_invite() {
+    let db = world().await;
+    insert_bot(&db, "bot_private", "user-b", "SERVER").await;
+    insert_bot(&db, "bot_mine", "user-a", "SERVER").await;
+    let listed: Vec<String> = invitable(&db, "user-a", None, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.principal_id)
+        .collect();
+    assert!(listed.contains(&"bot_b".to_string()), "{listed:?}");
+    assert!(
+        listed.contains(&"bot_mine".to_string()),
+        "own bots stay listed"
+    );
+    assert!(!listed.contains(&"bot_private".to_string()), "{listed:?}");
+
+    let error = classify(&db, "user-a", &["bot_private".to_string()])
+        .await
+        .unwrap_err();
+    assert_code(&error, StatusCode::FORBIDDEN, INBOX_MEMBER_NOT_ALLOWED);
+    let unknown = classify(&db, "user-a", &["bot_nobody".to_string()])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.public_message().map(|m| m.replace("bot_private", "")),
+        unknown
+            .public_message()
+            .map(|m| m.replace("bot_nobody", "")),
+        "a hidden bot is refused like an unknown id"
+    );
+    let own = classify(&db, "user-b", &["bot_private".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(own[0].mode, InviteMode::AddNow, "its owner still adds it");
+
+    let_others_invite(&db, "bot_private").await;
+    let listed = invitable(&db, "user-a", Some("private"), None)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].mode, InviteMode::Invite);
+    let invitee = classify(&db, "user-a", &["bot_private".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(invitee[0].mode, InviteMode::Invite);
 }
 
 #[tokio::test]

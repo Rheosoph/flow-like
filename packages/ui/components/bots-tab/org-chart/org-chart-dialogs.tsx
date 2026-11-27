@@ -41,8 +41,11 @@ import {
 	toOrgBot,
 } from "./org-chart-model";
 import { OrgBotAvatar, PersonName } from "./org-chart-parts";
+import { PinAppDialog } from "./pin-app-dialog";
 
 const TOP_LEVEL = "__top__";
+const PARENT_PAD_PX = 8;
+const PARENT_INDENT_PX = 14;
 
 export function NewTeamDialog({
 	parentId,
@@ -125,8 +128,14 @@ export function NewTeamDialog({
 								<SelectItem value={TOP_LEVEL}>
 									{t("teams.org.topLevel", "Top level")}
 								</SelectItem>
-								{parents.map((team) => (
-									<SelectItem key={team.id} value={team.id}>
+								{parents.map(({ team, depth }) => (
+									<SelectItem
+										key={team.id}
+										value={team.id}
+										style={{
+											paddingLeft: PARENT_PAD_PX + depth * PARENT_INDENT_PX,
+										}}
+									>
 										{team.name}
 									</SelectItem>
 								))}
@@ -472,6 +481,9 @@ export function OrgChartDialogs() {
 	}
 	const team = org.teams.find((entry) => entry.id === dialog.teamId);
 	if (!team) return null;
+	if (dialog.kind === "pinApp") {
+		return <PinAppDialog team={team} onClose={close} />;
+	}
 	return dialog.kind === "addPeople" ? (
 		<AddPeopleDialog team={team} onClose={close} />
 	) : (

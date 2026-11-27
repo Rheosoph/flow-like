@@ -71,7 +71,7 @@ try {
 		await handle.asElement().click();
 	};
 	const fill = async (selector, value) => {
-		await page.click(selector, { clickCount: 3 });
+		await page.click(selector, { count: 3 });
 		await page.keyboard.press("Backspace");
 		await page.keyboard.type(value);
 	};

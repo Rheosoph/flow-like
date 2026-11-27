@@ -2,35 +2,49 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { MaximizeIcon, MinusIcon, NetworkIcon, PlusIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useOrg } from "../../../hooks/use-bot-teams";
 import { orgForest } from "../../../lib/bot-teams/org-model";
 import type { IBot } from "../../../state/backend-state/bot-state";
 import { Button } from "../../ui/button";
 import { Label } from "../../ui/label";
 import { Switch } from "../../ui/switch";
-import { OrgChartProvider, useOrgChart } from "./org-chart-context";
+import { AppFilterPicker } from "./app-card";
+import type { AppFilter } from "./org-chart-apps";
+import {
+	type AppDestination,
+	OrgChartProvider,
+	useOrgChart,
+} from "./org-chart-context";
 import { OrgChartDialogs } from "./org-chart-dialogs";
 import { DockedInspector, SheetInspector } from "./org-chart-inspector";
 import { OrgOutline } from "./org-chart-outline";
 import { AskBadge } from "./org-chart-parts";
 import { Bench, OrgTree } from "./org-chart-tree";
+import { ZOOM_MAX, ZOOM_MIN } from "./org-chart-viewport";
+import {
+	type ChartZoom,
+	useChartViewport,
+	useChartZoom,
+} from "./use-chart-viewport";
 
 export interface OrgChartViewProps {
 	me: string | null;
 	bots: IBot[] | undefined;
 	onOpenChat: (botId: string) => void;
 	onOpenConversation: (conversationId: string) => void;
+	onOpenApp: (appId: string, where: AppDestination) => void;
+}
+
+interface AppToggles {
+	showApps: boolean;
+	onShowApps: (value: boolean) => void;
+	appFilter: AppFilter;
+	onAppFilter: (value: AppFilter) => void;
 }
 
 const NARROW_PX = 760;
-const ZOOM_MIN = 0.4;
-const ZOOM_MAX = 1.2;
-const ZOOM_STEP = 0.1;
 const LEGEND = ["direct", "ok", "via", "blocked", "later"] as const;
-
-const clamp = (value: number) =>
-	Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(value * 100) / 100));
 
 function useWidth() {
 	const ref = useRef<HTMLDivElement>(null);
@@ -49,20 +63,76 @@ function useWidth() {
 	return { ref, width };
 }
 
+interface ZoomControlsProps {
+	zoom: ChartZoom;
+	zoomIn: () => void;
+	zoomOut: () => void;
+	fit: () => void;
+}
+
+function ZoomControls({
+	zoom: store,
+	zoomIn,
+	zoomOut,
+	fit,
+}: Readonly<ZoomControlsProps>) {
+	const { t } = useTranslation("bots");
+	const zoom = useChartZoom(store);
+	return (
+		<div className="flex items-center gap-1">
+			<Button
+				variant="ghost"
+				size="icon"
+				className="size-7"
+				aria-label={t("teams.org.zoomOut", "Zoom out")}
+				disabled={zoom <= ZOOM_MIN}
+				onClick={zoomOut}
+			>
+				<MinusIcon aria-hidden />
+			</Button>
+			<span
+				className="w-10 text-center text-xs tabular-nums"
+				aria-live="polite"
+			>
+				{Math.round(zoom * 100)}%
+			</span>
+			<Button
+				variant="ghost"
+				size="icon"
+				className="size-7"
+				aria-label={t("teams.org.zoomIn", "Zoom in")}
+				disabled={zoom >= ZOOM_MAX}
+				onClick={zoomIn}
+			>
+				<PlusIcon aria-hidden />
+			</Button>
+			<Button
+				variant="ghost"
+				size="icon"
+				className="size-7"
+				aria-label={t("teams.org.fit", "Fit to view")}
+				onClick={fit}
+			>
+				<MaximizeIcon aria-hidden />
+			</Button>
+		</div>
+	);
+}
+
 function Toolbar({
 	showAsk,
 	onShowAsk,
-	zoom,
-	onZoom,
-	onFit,
-	charted,
+	showIo,
+	onShowIo,
+	apps,
+	controls,
 }: Readonly<{
 	showAsk: boolean;
 	onShowAsk: (value: boolean) => void;
-	zoom: number;
-	onZoom: (value: number) => void;
-	onFit: () => void;
-	charted: boolean;
+	showIo: boolean;
+	onShowIo: (value: boolean) => void;
+	apps: AppToggles;
+	controls: ZoomControlsProps | null;
 }>) {
 	const { t } = useTranslation("bots");
 	const { setDialog } = useOrgChart();
@@ -71,6 +141,29 @@ function Toolbar({
 			<h2 className="text-sm font-semibold">
 				{t("teams.org.title", "Org chart")}
 			</h2>
+			<div className="flex items-center gap-2">
+				<Switch id="org-ins-outs" checked={showIo} onCheckedChange={onShowIo} />
+				<Label htmlFor="org-ins-outs" className="text-xs">
+					{t("teams.org.io.toggle", "Ins & outs")}
+				</Label>
+			</div>
+			<div className="flex items-center gap-2">
+				<Switch
+					id="org-apps"
+					checked={apps.showApps}
+					onCheckedChange={apps.onShowApps}
+				/>
+				<Label htmlFor="org-apps" className="text-xs">
+					{t("teams.org.apps.toggle", "Apps")}
+				</Label>
+			</div>
+			{apps.showApps && (
+				<AppFilterPicker
+					value={apps.appFilter}
+					onChange={apps.onAppFilter}
+					look="segmented"
+				/>
+			)}
 			<div className="flex items-center gap-2">
 				<Switch
 					id="org-who-can-ask"
@@ -94,45 +187,7 @@ function Toolbar({
 				</ul>
 			)}
 			<div className="ml-auto flex items-center gap-2">
-				{charted && (
-					<div className="flex items-center gap-1">
-						<Button
-							variant="ghost"
-							size="icon"
-							className="size-7"
-							aria-label={t("teams.org.zoomOut", "Zoom out")}
-							disabled={zoom <= ZOOM_MIN}
-							onClick={() => onZoom(zoom - ZOOM_STEP)}
-						>
-							<MinusIcon aria-hidden />
-						</Button>
-						<span
-							className="w-10 text-center text-xs tabular-nums"
-							aria-live="polite"
-						>
-							{Math.round(zoom * 100)}%
-						</span>
-						<Button
-							variant="ghost"
-							size="icon"
-							className="size-7"
-							aria-label={t("teams.org.zoomIn", "Zoom in")}
-							disabled={zoom >= ZOOM_MAX}
-							onClick={() => onZoom(zoom + ZOOM_STEP)}
-						>
-							<PlusIcon aria-hidden />
-						</Button>
-						<Button
-							variant="ghost"
-							size="icon"
-							className="size-7"
-							aria-label={t("teams.org.fit", "Fit to view")}
-							onClick={onFit}
-						>
-							<MaximizeIcon aria-hidden />
-						</Button>
-					</div>
-				)}
+				{controls && <ZoomControls {...controls} />}
 				<Button
 					size="sm"
 					onClick={() => setDialog({ kind: "newTeam", parentId: null })}
@@ -146,25 +201,27 @@ function Toolbar({
 }
 
 function Chart({
-	zoom,
+	viewportRef,
 	contentRef,
 }: Readonly<{
-	zoom: number;
-	contentRef: React.RefObject<HTMLDivElement | null>;
+	viewportRef: (element: HTMLDivElement | null) => void;
+	contentRef: (element: HTMLDivElement | null) => void;
 }>) {
 	const { org, select } = useOrgChart();
 	const forest = orgForest(org);
 	return (
 		<div
-			className="min-h-0 flex-1 overflow-auto bg-[radial-gradient(var(--border)_1px,transparent_1px)] [background-size:18px_18px]"
-			onClick={(event) => event.target === event.currentTarget && select(null)}
+			ref={viewportRef}
+			className="relative min-h-0 flex-1 cursor-grab touch-none overflow-clip bg-[radial-gradient(var(--border)_1px,transparent_1px)] bg-size-[18px_18px] select-none data-[panning=true]:cursor-grabbing data-[panning=true]:[&_*]:cursor-grabbing [&_section]:cursor-default"
+			onClick={(event) => {
+				if (!(event.target as Element).closest("section, button")) select(null);
+			}}
 			onKeyDown={undefined}
 			role="presentation"
 		>
 			<div
 				ref={contentRef}
-				style={{ zoom }}
-				className="flex w-max min-w-full flex-col gap-10 p-8"
+				className="absolute top-0 left-0 flex w-max origin-top-left flex-col gap-10 p-8"
 			>
 				<div className="flex items-start justify-center gap-12">
 					{forest.map((node) => (
@@ -212,22 +269,24 @@ function OrgChartBody({
 	hasTeams,
 	showAsk,
 	onShowAsk,
+	showIo,
+	onShowIo,
+	apps,
 }: Readonly<{
 	available: boolean;
 	hasTeams: boolean;
 	showAsk: boolean;
 	onShowAsk: (value: boolean) => void;
+	showIo: boolean;
+	onShowIo: (value: boolean) => void;
+	apps: AppToggles;
 }>) {
 	const { ref, width } = useWidth();
-	const contentRef = useRef<HTMLDivElement>(null);
-	const [zoom, setZoom] = useState(1);
+	const { dragBotId } = useOrgChart();
+	const { viewportRef, contentRef, ...controls } = useChartViewport(
+		dragBotId !== null,
+	);
 	const narrow = width < NARROW_PX;
-	const fit = useCallback(() => {
-		const content = contentRef.current;
-		if (!content) return;
-		const natural = content.scrollWidth / zoom;
-		setZoom(clamp((width - 380) / natural));
-	}, [width, zoom]);
 	return (
 		<div ref={ref} className="flex h-full min-h-0 flex-col">
 			{hasTeams ? (
@@ -235,10 +294,10 @@ function OrgChartBody({
 					<Toolbar
 						showAsk={showAsk}
 						onShowAsk={onShowAsk}
-						zoom={zoom}
-						onZoom={(value) => setZoom(clamp(value))}
-						onFit={fit}
-						charted={!narrow}
+						showIo={showIo}
+						onShowIo={onShowIo}
+						apps={apps}
+						controls={narrow ? null : controls}
 					/>
 					<div className="flex min-h-0 flex-1">
 						{narrow ? (
@@ -247,7 +306,7 @@ function OrgChartBody({
 							</div>
 						) : (
 							<>
-								<Chart zoom={zoom} contentRef={contentRef} />
+								<Chart viewportRef={viewportRef} contentRef={contentRef} />
 								<DockedInspector />
 							</>
 						)}
@@ -267,23 +326,39 @@ export function OrgChartView({
 	bots,
 	onOpenChat,
 	onOpenConversation,
+	onOpenApp,
 }: Readonly<OrgChartViewProps>) {
 	const { org, available } = useOrg();
 	const [showAsk, setShowAsk] = useState(false);
+	const [showIo, setShowIo] = useState(true);
+	const [showApps, setShowApps] = useState(true);
+	const [appFilter, setAppFilter] = useState<AppFilter>("all");
 	return (
 		<OrgChartProvider
 			org={org}
 			me={me}
 			bots={bots ?? []}
 			showAsk={showAsk}
+			showIo={showIo}
+			showApps={showApps}
+			appFilter={appFilter}
 			onOpenChat={onOpenChat}
 			onOpenConversation={onOpenConversation}
+			onOpenApp={onOpenApp}
 		>
 			<OrgChartBody
 				available={available}
 				hasTeams={org.teams.length > 0}
 				showAsk={showAsk}
 				onShowAsk={setShowAsk}
+				showIo={showIo}
+				onShowIo={setShowIo}
+				apps={{
+					showApps,
+					onShowApps: setShowApps,
+					appFilter,
+					onAppFilter: setAppFilter,
+				}}
 			/>
 		</OrgChartProvider>
 	);

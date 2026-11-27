@@ -393,6 +393,21 @@ describe("trigger entries", () => {
 		expect(texts(items)).toEqual(["Remind me daily", "Here is the news"]);
 	});
 
+	test("a channel trigger folds like any other trigger", () => {
+		const items = foldInboxEntries(
+			[
+				trigger(0, {
+					source: "channel",
+					title: "Anna",
+					text: "Hi bot",
+					payload: { provider: "discord", sender: { id: "1", name: "Anna" } },
+				}),
+			],
+			"me",
+		);
+		expect(items[0]).toMatchObject({ type: "trigger", source: "channel" });
+	});
+
 	test("a trigger with an unknown source or without a body is not shown", () => {
 		const items = foldInboxEntries(
 			[trigger(0, { source: "carrier-pigeon", title: "x" }), trigger(1, {})],

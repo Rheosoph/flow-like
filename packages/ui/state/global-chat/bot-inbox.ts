@@ -80,7 +80,7 @@ async function resolve(botId: string): Promise<BotHistoryTarget | null> {
 		return target;
 	} catch (error) {
 		forgetBotConversation(botId);
-		console.warn(`[BotChat] ${botId}'s chat stays on this device:`, error);
+		console.warn("[BotChat] %s's chat stays on this device:", botId, error);
 		return null;
 	}
 }

@@ -416,7 +416,16 @@ fn build() -> FkGraph {
     graph.register::<crate::entity::bot_turn_checkpoint::Entity>();
     graph.register::<crate::entity::bot_decision_wait::Entity>();
     graph.register::<crate::entity::bot_note::Entity>();
-    for child in ["BotDecisionWait", "BotNote"] {
+    graph.register::<crate::entity::bot_channel_link::Entity>();
+    graph.register::<crate::entity::bot_channel_sender::Entity>();
+    graph.edges.push(FkEdge {
+        child: "BotChannelSender".to_owned(),
+        column: "botId".to_owned(),
+        parent: "Bot".to_owned(),
+        parent_column: "id".to_owned(),
+        action: FkAction::Cascade,
+    });
+    for child in ["BotDecisionWait", "BotNote", "BotChannelLink"] {
         for (column, parent) in [("botId", "Bot"), ("conversationId", "Conversation")] {
             graph.edges.push(FkEdge {
                 child: child.to_owned(),
@@ -430,12 +439,17 @@ fn build() -> FkGraph {
     graph.register::<crate::entity::bot_team::Entity>();
     graph.register::<crate::entity::bot_team_person::Entity>();
     graph.register::<crate::entity::bot_team_bot::Entity>();
+    graph.register::<crate::entity::bot_team_app::Entity>();
     graph.register::<crate::entity::bot_team_thread::Entity>();
+    graph.register::<crate::entity::bot_team_chat::Entity>();
+    graph.register::<crate::entity::bot_org_classification::Entity>();
     for (child, column, parent, action) in [
         ("BotTeamPerson", "teamId", "BotTeam", FkAction::Cascade),
         ("BotTeamPerson", "userId", "User", FkAction::Cascade),
         ("BotTeamBot", "teamId", "BotTeam", FkAction::Cascade),
         ("BotTeamBot", "botId", "Bot", FkAction::Cascade),
+        ("BotTeamApp", "teamId", "BotTeam", FkAction::Cascade),
+        ("BotTeamApp", "appId", "App", FkAction::Cascade),
         ("BotTeamThread", "teamId", "BotTeam", FkAction::Cascade),
         ("BotTeamThread", "userId", "User", FkAction::Cascade),
         (
@@ -444,6 +458,21 @@ fn build() -> FkGraph {
             "Conversation",
             FkAction::Cascade,
         ),
+        ("BotTeamChat", "botId", "Bot", FkAction::Cascade),
+        ("BotTeamChat", "userId", "User", FkAction::Cascade),
+        (
+            "BotTeamChat",
+            "conversationId",
+            "Conversation",
+            FkAction::SetNull,
+        ),
+        (
+            "BotOrgClassification",
+            "orgId",
+            "BotTeam",
+            FkAction::Cascade,
+        ),
+        ("BotOrgClassification", "userId", "User", FkAction::Cascade),
         ("BotTeam", "parentId", "BotTeam", FkAction::SetNull),
         ("BotTeam", "leadBotId", "Bot", FkAction::SetNull),
         (

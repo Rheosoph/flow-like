@@ -1197,6 +1197,58 @@ fn a_trigger_naming_a_bot_addresses_only_that_bot_in_a_group() {
     }
 }
 
+#[test]
+fn a_follow_up_wakes_a_bot_limited_to_mentions_while_the_person_talks_with_it() {
+    use flow_like_types::inbox::ConversationKind;
+    let owner = flow_like_local_bots::LOCAL_OWNER_ID;
+    let line = |id: &str, sender: &str, body: Value| {
+        let mut line = entry(plain_envelope(body));
+        line.id = id.into();
+        line.message_id = id.into();
+        line.sender_id = sender.into();
+        line
+    };
+    let ask = line(
+        "ask",
+        owner,
+        json!({ "text": "How are you?", "mentions": ["bot"] }),
+    );
+    let answer = line(
+        "answer",
+        "bot",
+        json!({ "text": "Fine", "reply_to": "ask" }),
+    );
+    let follow_up = line(
+        "follow_up",
+        owner,
+        json!({ "text": "Post the last round here" }),
+    );
+    let not_before = ask.created_at;
+    let waiting = |bot_id: &str, entries: &[InboxEntry]| {
+        crate::rule::waiting(
+            ConversationKind::Group,
+            bot_id,
+            entries,
+            not_before,
+            true,
+            false,
+        )
+    };
+    let exchange = [follow_up.clone(), answer.clone(), ask.clone()];
+
+    let found = waiting("bot", &exchange).expect("the follow-up wakes the bot");
+    assert_eq!(found.message_id, "follow_up");
+    assert!(!found.addressed, "the bot still decides whether to answer");
+    assert!(waiting("other", &exchange).is_none());
+
+    let mut topic = line("topic", owner, json!({}));
+    topic.kind = InboxEntryKind::Topic;
+    assert!(
+        waiting("bot", &[follow_up, topic, answer, ask]).is_none(),
+        "a new topic ends the exchange"
+    );
+}
+
 #[tokio::test]
 async fn an_approval_parks_the_turn_instead_of_answering() {
     let f = Fixture::start(Mode::Park, vec![plain("summarize the report")]);

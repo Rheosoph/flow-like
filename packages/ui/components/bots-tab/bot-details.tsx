@@ -10,7 +10,6 @@ import {
 	Loader2Icon,
 	LockIcon,
 	type LucideIcon,
-	PencilIcon,
 	RadioIcon,
 	ShieldQuestionIcon,
 	XIcon,
@@ -27,6 +26,7 @@ import {
 import type { GlobalChatBotView } from "../global-chat/use-global-chat-bot";
 import { Button } from "../ui/button";
 import { BotAppAccess } from "./bot-app-restrictions";
+import { BotChannels, offersChannels } from "./bot-channels";
 import { BotEncryption, offersEncryption } from "./bot-encryption";
 import {
 	BOT_LOCATION_ICONS,
@@ -403,7 +403,6 @@ function BotActions({
 		setDuplicating(false);
 		if (copy) actions.onDuplicated?.(copy);
 	};
-	const { onEdit } = actions;
 	return (
 		<div className="flex flex-wrap gap-2">
 			{!bot.local && (
@@ -411,17 +410,6 @@ function BotActions({
 					botId={bot.id}
 					name={bot.name ?? t("crew.bot", "Bot")}
 				/>
-			)}
-			{onEdit && (
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					onClick={() => onEdit(bot)}
-				>
-					<PencilIcon aria-hidden />
-					{t("panel.details.edit", "Edit")}
-				</Button>
 			)}
 			{duplicateBot && (
 				<Button
@@ -452,7 +440,7 @@ export function BotDetails({
 }: Readonly<{ view: GlobalChatBotView; actions: BotPanelActions }>) {
 	const { bot } = view;
 	return (
-		<div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain px-5 pt-1 pb-6">
+		<div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain px-5 pt-4 pb-6">
 			{bot?.local && <LocalAccountNotice bot={bot} onMove={actions.onMove} />}
 			{view.description && (
 				<p className="text-sm leading-relaxed whitespace-pre-line text-muted-foreground">
@@ -481,6 +469,13 @@ export function BotDetails({
 			{bot && offersTasks(bot) && <BotTasks bot={bot} />}
 			{bot && offersEmail(bot) && <BotEmailAddress botId={bot.id} />}
 			{bot && offersWebhooks(bot) && <BotWebhooks key={bot.id} bot={bot} />}
+			{bot && offersChannels(bot) && (
+				<BotChannels
+					key={bot.id}
+					bot={bot}
+					onOpenConversation={actions.onOpenConversation}
+				/>
+			)}
 			{bot && <BotActions bot={bot} actions={actions} />}
 		</div>
 	);

@@ -8,6 +8,7 @@ import {
 	SheetDescription,
 	SheetTitle,
 } from "../../ui/sheet";
+import { AppInspector } from "./app-inspector";
 import { BotInspector } from "./bot-inspector";
 import { useOrgChart } from "./org-chart-context";
 import { TeamInspector } from "./team-inspector";
@@ -22,6 +23,10 @@ function InspectorBody() {
 	if (selection?.kind === "team") {
 		const team = org.teams.find((entry) => entry.id === selection.id);
 		if (team) return <TeamInspector key={team.id} team={team} />;
+	}
+	if (selection?.kind === "app") {
+		const app = org.apps?.find((entry) => entry.id === selection.id);
+		if (app) return <AppInspector key={app.id} app={app} />;
 	}
 	return (
 		<div className="flex flex-col items-center gap-2 py-16 text-center text-sm text-muted-foreground">

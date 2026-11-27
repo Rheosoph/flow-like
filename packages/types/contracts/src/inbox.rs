@@ -584,6 +584,8 @@ pub enum TriggerSource {
     Webhook,
     Email,
     Event,
+    /// Someone outside Flow-Like wrote in a Microsoft Teams or Discord chat the bot is part of.
+    Channel,
 }
 
 impl TriggerSource {
@@ -593,6 +595,7 @@ impl TriggerSource {
             Self::Webhook => "webhook",
             Self::Email => "email",
             Self::Event => "event",
+            Self::Channel => "channel",
         }
     }
 }

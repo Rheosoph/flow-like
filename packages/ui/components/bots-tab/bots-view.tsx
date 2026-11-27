@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import {
 	type ReactNode,
 	useCallback,
@@ -10,7 +11,9 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { useOrg } from "../../hooks/use-bot-teams";
+import { useCreateConversation } from "../../hooks/use-inbox";
 import { emitGuideEvent } from "../../lib/guide/guide-events";
 import { useBackend } from "../../state/backend-state";
 import type { IBot } from "../../state/backend-state/bot-state";
@@ -53,6 +56,7 @@ import { MoveLocalBotsDialog } from "./move-local-bots-dialog";
 import { NewMessageDialog } from "./new-message-dialog";
 import { NewRoomDialog } from "./new-room-dialog";
 import { OrgChartView } from "./org-chart";
+import type { AppDestination } from "./org-chart/org-chart-context";
 import { TeamChatList } from "./team-chat-list";
 import { teamRooms } from "./team-chat-list-model";
 import { useBotsView } from "./use-bots-view";
@@ -149,6 +153,7 @@ function useMoveReview(available: boolean) {
 function CrewLayout(data: Readonly<CrewData>) {
 	const { t } = useTranslation("bots");
 	const queryClient = useQueryClient();
+	const router = useRouter();
 	const { me, mode, bots, conversations } = data;
 	const signedIn = mode === "account";
 	const hasCrew = mode !== "guest";
@@ -238,6 +243,23 @@ function CrewLayout(data: Readonly<CrewData>) {
 			select({ type: "conversation", conversationId });
 		},
 		[panelCoversChat, select, selectPanel, selection],
+	);
+	const { mutateAsync: createConversation } = useCreateConversation();
+	const messagePerson = useCallback(
+		(userId: string) => {
+			createConversation({ kind: "direct", members: [userId] })
+				.then((conversation) => openConversation(conversation.id))
+				.catch((error: unknown) => {
+					console.error(`Starting a chat with ${userId} failed:`, error);
+					toast.error(
+						t(
+							"teams.chats.startChatFailed",
+							"Couldn't start the chat. Try again.",
+						),
+					);
+				});
+		},
+		[createConversation, openConversation, t],
 	);
 	const openStarred = useCallback(
 		(conversationId: string, messageId: string) => {
@@ -340,6 +362,13 @@ function CrewLayout(data: Readonly<CrewData>) {
 			select(bot ? dockSelectionForBot(bot, bots) : { type: "bot", botId });
 		},
 		[bots, select],
+	);
+	const openApp = useCallback(
+		(appId: string, where: AppDestination) => {
+			const id = encodeURIComponent(appId);
+			router.push(where === "app" ? `/use?id=${id}` : `/store?id=${id}`);
+		},
+		[router],
 	);
 	const editBot = useCallback(
 		(botId: string) => setEditor({ open: true, botId }),
@@ -450,6 +479,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 							bots={bots}
 							onOpenChat={openChatOf}
 							onOpenConversation={openConversation}
+							onOpenApp={openApp}
 						/>
 					</div>
 				</div>
@@ -513,6 +543,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 						onOpenMember={openMember}
 						onOpenAssistant={openPromptChat}
 						onSettings={openSettings}
+						onMessagePerson={messagePerson}
 					/>
 				</CrewSplitLayout>
 			)}

@@ -1396,6 +1396,71 @@ impl Dispatcher {
         Ok(Some(tenant_id))
     }
 
+    /// Start up to `count` executor environments for `user_id` before a page open's runs reach
+    /// them. A fresh environment is still building its node registry after init, and its first
+    /// run waits for the rest; a warm-up absorbs that wait. Only the streaming Lambda backend
+    /// starts environments per request. Best effort: a failed warm-up only costs the start it
+    /// would have hidden.
+    pub async fn warm_executors(&self, user_id: &str, count: usize) {
+        #[cfg(feature = "lambda")]
+        {
+            if self.config.backend == ExecutionBackend::LambdaStream
+                && count > 0
+                && let Err(error) = self.warm_lambda_executors(user_id, count).await
+            {
+                tracing::debug!(error = %error, "Executor warm-up skipped");
+            }
+        }
+        #[cfg(not(feature = "lambda"))]
+        let _ = (user_id, count);
+    }
+
+    #[cfg(feature = "lambda")]
+    async fn warm_lambda_executors(
+        &self,
+        user_id: &str,
+        count: usize,
+    ) -> Result<(), DispatchError> {
+        let function_name = self.config.lambda_function_name.as_ref().ok_or_else(|| {
+            DispatchError::Configuration("LAMBDA_EXECUTOR_FUNCTION not configured".into())
+        })?;
+        let client = self
+            .lambda_client
+            .as_ref()
+            .ok_or_else(|| DispatchError::Configuration("Lambda client not initialized".into()))?;
+        let tenant_id = self.lambda_tenant_id_for_user(user_id)?;
+        let payload = serde_json::to_vec(&wrap_as_apigw_v2_event("/warm", serde_json::json!({})))
+            .map_err(|e| DispatchError::Serialization(e.to_string()))?;
+        let invokes = (0..count).map(|_| {
+            let mut invoke = client
+                .invoke()
+                .function_name(function_name)
+                .invocation_type(aws_sdk_lambda::types::InvocationType::Event)
+                .payload(aws_sdk_lambda::primitives::Blob::new(payload.clone()));
+            if let Some(tenant_id) = tenant_id.as_deref() {
+                invoke = invoke.tenant_id(tenant_id);
+            }
+            invoke.send()
+        });
+        let results = futures::future::join_all(invokes)
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "aws.lambda.warm",
+                cloud.service = "lambda",
+                warm.count = count
+            ))
+            .await;
+        for result in results {
+            if let Err(error) = result {
+                tracing::debug!(
+                    error = %lambda_dispatch_error(error, tenant_id.is_some()),
+                    "Executor warm-up invoke failed"
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "lambda")]
     fn lambda_tenant_id_for_user(&self, user_id: &str) -> Result<Option<String>, DispatchError> {
         let enabled = *LAMBDA_TENANT_ISOLATION

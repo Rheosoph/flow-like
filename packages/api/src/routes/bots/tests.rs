@@ -597,6 +597,7 @@ fn stored_rows_read_back_as_the_settings_that_wrote_them() {
         subtask_model: None,
         calendar_wake: None,
         calendar_synced_at: None,
+        others_can_invite: None,
     };
     assert_eq!(model.location, "DESKTOP");
     assert_eq!(*model.capabilities, ["computer_use", "webhook"]);
@@ -837,6 +838,7 @@ async fn a_duplicate_copies_the_settings_and_the_apps_the_owner_still_uses() {
         location: BotLocation::Device,
         execution_mode: flow_like_types::bot::BotExecutionMode::Docker,
         device_id: Some("device-1".into()),
+        others_can_invite: true,
     };
     let mut row = new_bot_row("owner", None, Some("researcher".into()), &settings, at(0)).unwrap();
     row.import_key = Set(Some("bot_local".into()));
@@ -881,8 +883,10 @@ async fn a_duplicate_copies_the_settings_and_the_apps_the_owner_still_uses() {
         BotSettings::from_row(&copy),
         BotSettings {
             name: Some("Scout copy".into()),
+            others_can_invite: false,
             ..settings
-        }
+        },
+        "a copy starts hidden from other people"
     );
     assert_eq!(
         app_ids,

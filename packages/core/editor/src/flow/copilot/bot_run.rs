@@ -39,7 +39,7 @@ use super::bot_discussion::{
 };
 use super::bot_notes::{self, NotesBridge, NotesHandle, notes_tool_specs};
 use super::bot_reply_files::{GroupChat, ReplyFiles, ReplyFilesBridge, file_attach_spec};
-use super::bot_talk::{BotTalk, BotTalkBridge, ask_bot_tool_spec};
+use super::bot_talk::{BotTalk, BotTalkBridge, ask_bot_tool_spec, org_lookup_tool_spec};
 use super::bot_trail::{ToolTrail, TrailBridge};
 use super::capability_tools::{
     HostTools, bot_tool_spec, is_room_tool, is_secret_tool, linked_tool_names, tool_capability,
@@ -2549,6 +2549,9 @@ async fn prepare_bot_turn(
     if talk_turn.asks {
         tool_specs.push(ask_bot_tool_spec());
     }
+    if talk_turn.looks_up {
+        tool_specs.push(org_lookup_tool_spec());
+    }
     let mut bridge: Arc<dyn PlatformToolBridge> = match bot.toolset {
         BotToolset::FlowPilot => Arc::new(DeniedToolBridge {
             bot: bot.clone(),
@@ -2559,7 +2562,7 @@ async fn prepare_bot_turn(
             inner: bridge,
         }),
     };
-    if let (true, Some(talk)) = (talk_turn.asks, talk) {
+    if let (true, Some(talk)) = (talk_turn.asks || talk_turn.looks_up, talk) {
         bridge = Arc::new(BotTalkBridge::new(talk.clone(), bridge));
     }
     if let (true, Some(memory)) = (bot.remembers(), bot.host_tools.memory()) {

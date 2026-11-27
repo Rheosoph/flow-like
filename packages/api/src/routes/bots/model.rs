@@ -67,6 +67,9 @@ pub struct Bot {
     pub execution_mode: BotExecutionMode,
     /// The managed device a `device` bot runs on.
     pub device_id: Option<String>,
+    /// Whether people who share an app with you find this bot and can invite it into their rooms;
+    /// you accept each invitation. Off by default.
+    pub others_can_invite: bool,
     /// Which calendar events wake the bot and how long before they start; off until you or the
     /// bot switch it on.
     #[schema(value_type = Object, example = json!({ "enabled": false, "offsets_minutes": [15] }))]
@@ -135,6 +138,9 @@ pub struct CreateBotRequest {
     pub execution_mode: Option<BotExecutionMode>,
     /// One of your active managed devices; required for `device` bots.
     pub device_id: Option<String>,
+    /// Let people who share an app with you find and invite the bot; off when omitted.
+    #[serde(default)]
+    pub others_can_invite: Option<bool>,
 }
 
 /// Changes to a bot. Omitted fields stay as they are; `null` clears a nullable field.
@@ -193,6 +199,9 @@ pub struct UpdateBotRequest {
     #[serde(default, deserialize_with = "deserialize_nullable")]
     #[schema(value_type = Option<String>)]
     pub device_id: Option<Option<String>>,
+    /// Whether people who share an app with you find the bot and can invite it; you accept each
+    /// invitation.
+    pub others_can_invite: Option<bool>,
 }
 
 /// Everything an owner can change on a bot, validated and normalized.
@@ -215,6 +224,7 @@ pub(crate) struct BotSettings {
     pub location: BotLocation,
     pub execution_mode: BotExecutionMode,
     pub device_id: Option<String>,
+    pub others_can_invite: bool,
 }
 
 impl BotSettings {
@@ -246,6 +256,7 @@ impl BotSettings {
             location: BotLocation::parse(&row.location).unwrap_or_default(),
             execution_mode: stored_execution_mode(row),
             device_id: row.device_id.clone(),
+            others_can_invite: row.others_can_invite.unwrap_or(false),
         }
     }
 
@@ -276,6 +287,10 @@ impl BotSettings {
             ("location", self.location != next.location),
             ("execution_mode", self.execution_mode != next.execution_mode),
             ("device_id", self.device_id != next.device_id),
+            (
+                "others_can_invite",
+                self.others_can_invite != next.others_can_invite,
+            ),
         ]
         .into_iter()
         .filter_map(|(field, changed)| changed.then_some(field))
@@ -304,6 +319,7 @@ impl BotSettings {
         row.location = Set(location_column(self.location));
         row.execution_mode = Set(Some(self.execution_mode.as_str().to_ascii_uppercase()));
         row.device_id = Set(self.device_id.clone());
+        row.others_can_invite = Set(Some(self.others_can_invite));
         Ok(())
     }
 }
@@ -332,6 +348,7 @@ impl From<bot::Model> for Bot {
             location: settings.location,
             execution_mode: settings.execution_mode,
             device_id: settings.device_id,
+            others_can_invite: settings.others_can_invite,
             calendar_wake,
             import_key: row.import_key,
             id: row.id,

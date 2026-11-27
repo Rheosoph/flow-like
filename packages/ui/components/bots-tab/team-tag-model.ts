@@ -1,4 +1,4 @@
-import { teamTag } from "../../lib/bot-teams/org-model";
+import { orgBot, teamTag } from "../../lib/bot-teams/org-model";
 import type { IOrgView } from "../../state/backend-state/bot-team-state";
 
 export interface TeamTagOption {
@@ -6,7 +6,11 @@ export interface TeamTagOption {
 	name: string;
 	/** The tag without its `#`. */
 	tag: string;
+	/** The team room's picture, the team's icon. */
+	imageUrl?: string;
 	leadName?: string;
+	/** The lead's classification when the reader can't talk to it because of it; the option is listed but can't be picked. */
+	lockedLevel?: string;
 }
 
 export interface TeamTagQuery {
@@ -47,7 +51,11 @@ export function matchTeamTags(
 	const needle = query.toLowerCase();
 	return options
 		.filter((option) => option.tag.toLowerCase().startsWith(needle))
-		.sort((a, b) => a.tag.localeCompare(b.tag))
+		.sort(
+			(a, b) =>
+				Number(Boolean(a.lockedLevel)) - Number(Boolean(b.lockedLevel)) ||
+				a.tag.localeCompare(b.tag),
+		)
 		.slice(0, MAX_SUGGESTIONS);
 }
 
@@ -66,7 +74,10 @@ export function insertTeamTag(
 	};
 }
 
-/** The teams a message can address: those with a lead, since nobody else answers a request. */
+/**
+ * The teams a message can address: those with a lead, since nobody else answers a request. A lead
+ * the reader's classification doesn't reach stays listed, marked with its level.
+ */
 export function teamTagOptions(
 	org: IOrgView,
 	leadName: (botId: string) => string | undefined,
@@ -75,12 +86,21 @@ export function teamTagOptions(
 		const tag = teamTag(team.name).slice(1);
 		if (!tag || !team.lead_bot_id) return [];
 		const lead = leadName(team.lead_bot_id);
+		const classified = org.reach?.some(
+			(entry) =>
+				entry.bot_id === team.lead_bot_id && entry.reach === "classified",
+		);
+		const lockedLevel = classified
+			? (orgBot(org, team.lead_bot_id)?.classification ?? "internal")
+			: undefined;
 		return [
 			{
 				id: team.id,
 				name: team.name,
 				tag,
+				...(team.image_url ? { imageUrl: team.image_url } : {}),
 				...(lead ? { leadName: lead } : {}),
+				...(lockedLevel ? { lockedLevel } : {}),
 			},
 		];
 	});
@@ -111,6 +131,9 @@ export function addressesTeam(
 	options: readonly TeamTagOption[],
 ): boolean {
 	return leadingTags(text).some((tag) =>
-		options.some((option) => option.tag.toLowerCase() === tag.toLowerCase()),
+		options.some(
+			(option) =>
+				!option.lockedLevel && option.tag.toLowerCase() === tag.toLowerCase(),
+		),
 	);
 }

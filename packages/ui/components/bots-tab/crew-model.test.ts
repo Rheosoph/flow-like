@@ -413,6 +413,12 @@ describe("person chat badge and pending state", () => {
 		).toBe(5);
 	});
 
+	test("a conversation the reader only watches adds nothing", () => {
+		expect(
+			personUnreadTotal([person(2, 2), { ...person(3, 4), watching: true }]),
+		).toBe(2);
+	});
+
 	test("a direct chat with a pending recipient awaits an answer", () => {
 		expect(
 			awaitingAnswer({
