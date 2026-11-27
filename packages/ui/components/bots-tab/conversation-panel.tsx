@@ -14,6 +14,8 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { useBotCallSpeech } from "../../hooks/use-bot-call-speech";
+import { useOrg } from "../../hooks/use-bot-teams";
+import { useBotLabels } from "../../hooks/use-bots";
 import { useConversationActivity } from "../../hooks/use-conversation-activity";
 import { useConversationCall } from "../../hooks/use-conversation-call";
 import { useConversationRoom } from "../../hooks/use-conversation-room";
@@ -31,6 +33,7 @@ import {
 import { useInboxBlocks } from "../../hooks/use-inbox-blocks";
 import { useSpeechModel } from "../../hooks/use-speech-model";
 import { LocalPrincipalsProvider } from "../../hooks/use-user-lookup";
+import { isTeamConversation, orgBot } from "../../lib/bot-teams/org-model";
 import { offersCalls } from "../../lib/realtime/call-listening";
 import { useBackend } from "../../state/backend-state";
 import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
@@ -97,6 +100,7 @@ import { RoomAvatar } from "./room-avatar";
 import { ConnectedRoomMeetings } from "./room-meetings";
 import { RoomMembersDialog } from "./room-members-dialog";
 import { SwipeBackLayer } from "./swipe-back-layer";
+import { teamTagOptions } from "./team-tag-model";
 import {
 	type ConversationText,
 	useConversationText,
@@ -525,6 +529,20 @@ function ConversationView({
 		() => mentionablesOf(conversation, directory, me),
 		[conversation, directory, me],
 	);
+	const { org, available: teamsAvailable } = useOrg();
+	const labels = useBotLabels();
+	const teamTags = useMemo(
+		() =>
+			!teamsAvailable || encrypted || isTeamConversation(org, conversation.id)
+				? []
+				: teamTagOptions(org, (botId) => {
+						const bot = orgBot(org, botId);
+						return (
+							bot && labels({ system: bot.system ?? null, name: bot.name }).name
+						);
+					}),
+		[teamsAvailable, encrypted, org, conversation.id, labels],
+	);
 	const requestHint = awaitingAnswer(conversation)
 		? t(
 				"crew.requests.pendingHint",
@@ -532,7 +550,11 @@ function ConversationView({
 			)
 		: null;
 
-	const composerPlaceholder =
+	const teamHint =
+		teamTags.length > 0 && !compact
+			? t("teams.requests.hint", "Start with #Team to ask a team")
+			: null;
+	const basePlaceholder =
 		requestHint ??
 		(mentionables.some((option) => option.kind === "bot")
 			? compact
@@ -545,6 +567,11 @@ function ConversationView({
 			: t("crew.composer.placeholder", "Message {{name}}", {
 					name: heading.title,
 				}));
+
+	const composerPlaceholder =
+		teamHint && !requestHint
+			? `${basePlaceholder} · ${teamHint}`
+			: basePlaceholder;
 
 	const sendPlain = useSendPlain(conversation.id);
 	const notifyUnseenFailure = useCallback(
@@ -767,6 +794,7 @@ function ConversationView({
 							: null
 					}
 					mentionables={mentionables}
+					teamTags={teamTags}
 					activity={activity}
 					onSend={(body, mentions, replyTo, files) =>
 						void pending.send(body, mentions, undefined, replyTo, files)

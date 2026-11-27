@@ -277,6 +277,9 @@ pub(crate) struct Links {
     /// The bot turns `body.discussion` allows the discussion it starts to reach; only a person's
     /// room message carries it on.
     pub discussion_hops: Option<u32>,
+    /// The teams a person's `#Team` message goes to; the server sets it in [`fan_out`], never the
+    /// client. Such a message wakes no bot of its own conversation.
+    pub teams: Vec<String>,
 }
 
 /// A send request checked without the database.
@@ -385,6 +388,7 @@ pub(super) fn plain_links(kind: InboxEntryKind, envelope: &Value) -> Result<Link
                     .collect(),
                 reply_to: message.reply_to,
                 mentions: message.mentions,
+                teams: Vec::new(),
             })
         }
         InboxEntryKind::Topic => TopicBody::parse(body)
@@ -680,6 +684,16 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
     let bots = live_bots(txn, &principals).await?;
     let named = super::bot_mentions::with_named_bots(sender, &bots, outgoing, &mut envelopes);
     let outgoing = named.as_ref().unwrap_or(outgoing);
+    let tagged = super::team_request::with_team_tags(
+        txn,
+        &conversation,
+        sender,
+        &bots,
+        outgoing,
+        &mut envelopes,
+    )
+    .await?;
+    let outgoing = tagged.as_ref().unwrap_or(outgoing);
     if outgoing.interactive.is_some()
         && (ConversationKind::parse(&conversation.kind) != Some(ConversationKind::Direct)
             || members.len() != 2
@@ -860,6 +874,7 @@ async fn deliver<'e, C: ConnectionTrait>(
         hands_over,
         chain_origin: chain.origin,
         discussion_hops: chain.discussion_hops,
+        team_addressed: !outgoing.links.teams.is_empty(),
     };
     if speaks_to_direct_bot(event.sender_id, conversation_kind, bots, outgoing) {
         for recipient in &mut delivery.recipients {
@@ -1360,6 +1375,7 @@ pub async fn send_entry(
     wake(&state, sent.wake).await;
     if person_sent && first_send {
         super::person_push::after_person_send(&state, &sent.entry).await;
+        super::team_request::after_person_send(&state, &sent.entry).await;
     }
     crate::bot_host::dispatch(&state, &sent.bots).await;
     if let Some((bot_id, turn_id)) = notify_turn {

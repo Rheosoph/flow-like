@@ -19,6 +19,7 @@ import { cn } from "../../../lib/utils";
 import type { ComposerAttachSource } from "../../../state/composer-capture";
 import { ConversationNotePill } from "../../bots-tab/conversation-note";
 import type { Mentionable } from "../../bots-tab/mentions";
+import type { TeamTagOption } from "../../bots-tab/team-tag-model";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import type { IMessage } from "./chat-db";
@@ -199,6 +200,8 @@ export interface IChatGroup {
 	/** Hover menu in a message's corner, e.g. edit and delete for your own. */
 	renderMessageMenu?: (message: IMessage) => React.ReactNode;
 	mentionables?: readonly Mentionable[];
+	/** Teams a leading `#` suggests in the composer. */
+	teamTags?: readonly TeamTagOption[];
 	placeholder?: string;
 	/** Writing is not possible; the composer stays but cannot send. */
 	composerDisabled?: boolean;
@@ -1136,6 +1139,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								)}
 								<ChatBox
 									mentionables={group?.mentionables}
+									teamTags={group?.teamTags}
 									placeholder={group?.placeholder}
 									ref={chatBox}
 									availableTools={config?.tools ?? []}

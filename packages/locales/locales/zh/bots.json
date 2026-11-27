@@ -2903,6 +2903,23 @@
 			"yourBots": "",
 			"zoomIn": "",
 			"zoomOut": ""
+		},
+		"requests": {
+			"answer": {
+				"leadFallback": "",
+				"open": "",
+				"snippet": "",
+				"title": ""
+			},
+			"chip": "",
+			"chipOpen": "",
+			"hint": "",
+			"picker": {
+				"label": "",
+				"lead": ""
+			},
+			"unknownTeam": "",
+			"yourRequests": ""
 		}
 	}
 }

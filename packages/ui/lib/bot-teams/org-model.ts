@@ -207,3 +207,16 @@ export function askStatus(
 export function teamTag(name: string): string {
 	return `#${name.split(/\s+/).join("")}`;
 }
+
+/** Whether the conversation is a team's room or the reader's own thread with a team. */
+export function isTeamConversation(
+	org: IOrgView,
+	conversationId: string,
+): boolean {
+	return (
+		org.teams.some((team) => team.conversation_id === conversationId) ||
+		(org.threads ?? []).some(
+			(thread) => thread.conversation_id === conversationId,
+		)
+	);
+}

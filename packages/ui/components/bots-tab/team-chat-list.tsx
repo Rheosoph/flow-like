@@ -496,12 +496,13 @@ export function TeamChatList({
 				filter,
 				query,
 				title: context.text.title,
+				requestsLabel: t("teams.requests.yourRequests", "Your requests"),
 				snippet,
 				orgBotName: (bot) =>
 					labels({ system: bot.system ?? null, name: bot.name }).name,
 				ownerName: (ownerId) => context.directory(ownerId).name,
 			}),
-		[org, conversations, crew, filter, query, context, snippet, labels],
+		[org, conversations, crew, filter, query, context, snippet, labels, t],
 	);
 	const actions: RowActions = {
 		context,

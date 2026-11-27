@@ -64,6 +64,7 @@ model User {
   botPermissions              BotPermission[]
   botTurns                    BotTurn[]
   botTeams                    BotTeamPerson[]
+  botTeamThreads              BotTeamThread[]
 
   status String @default("ACTIVE")
   tier   String @default("FREE")

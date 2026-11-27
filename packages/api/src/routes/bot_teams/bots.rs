@@ -8,6 +8,7 @@ use super::{
     lock_scope,
     model::{AcceptBotRequest, AddBotRequest, BriefingResponse, DirectAgreementRequest},
     room::{bot as bot_principal, leave, sync_room},
+    threads::{sync_org_threads, sync_team_threads},
     view::team_view,
 };
 use crate::{
@@ -112,7 +113,8 @@ pub(crate) async fn prune_outsiders<C: ConnectionTrait>(
             detach_bot_in(db, team, &row.bot_id, by, now, effects).await?;
         }
     }
-    Ok(())
+    let org = org_of(db, &root).await?;
+    sync_org_threads(db, &org.teams, by, now, effects).await
 }
 
 /// Takes the bot out of the team: its row, a lead role it held and its place in the team room.
@@ -134,6 +136,11 @@ pub(crate) async fn detach_bot_in<C: ConnectionTrait>(
             .filter(bot_team::Column::Id.eq(&team.id))
             .exec(db)
             .await?;
+        let headless = bot_team::Model {
+            lead_bot_id: None,
+            ..team.clone()
+        };
+        sync_team_threads(db, &headless, by, now, effects).await?;
     }
     leave(db, team, by, &[bot_principal(bot_id)], now, effects).await
 }

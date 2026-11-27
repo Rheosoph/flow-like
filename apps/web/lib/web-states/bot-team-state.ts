@@ -50,6 +50,7 @@ export class WebBotTeamState implements IBotTeamState {
 			invitations: Array.isArray(response?.invitations)
 				? response.invitations
 				: [],
+			threads: Array.isArray(response?.threads) ? response.threads : [],
 		};
 	}
 

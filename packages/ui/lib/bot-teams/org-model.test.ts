@@ -10,6 +10,7 @@ import {
 	askStatus,
 	flattenForest,
 	isTeamAdmin,
+	isTeamConversation,
 	orgForest,
 	pendingTeamsOf,
 	reportingLine,
@@ -201,5 +202,20 @@ describe("askStatus", () => {
 	test("outside the org is none", () => {
 		expect(askStatus(org, "outsider", "fin-a")).toBe("none");
 		expect(askStatus(org, "sec-a", "unknown")).toBe("none");
+	});
+});
+
+describe("isTeamConversation", () => {
+	const org = {
+		teams: [{ id: "t", name: "Security", conversation_id: "room" }],
+		bots: [],
+		invitations: [],
+		threads: [{ team_id: "t", conversation_id: "thread" }],
+	} as unknown as IOrgView;
+
+	test("a team room and the reader's thread count, other chats do not", () => {
+		expect(isTeamConversation(org, "room")).toBe(true);
+		expect(isTeamConversation(org, "thread")).toBe(true);
+		expect(isTeamConversation(org, "other")).toBe(false);
 	});
 });

@@ -32,6 +32,7 @@ model Conversation {
   inviteLinks    ConversationInviteLink[]
   botNotes       BotNote[]
   botTeam        BotTeam?
+  botTeamThread  BotTeamThread?
 
   @@unique([createdBy, importKey])
 }

@@ -1,18 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	BriefcaseIcon,
-	FlaskConicalIcon,
-	HeadsetIcon,
-	LandmarkIcon,
-	type LucideIcon,
-	MegaphoneIcon,
-	ShieldIcon,
-	StarIcon,
-	UsersIcon,
-	WrenchIcon,
-} from "lucide-react";
+import { StarIcon } from "lucide-react";
 import { useUserIdentity } from "../../../hooks/use-user-lookup";
 import type { AskStatus } from "../../../lib/bot-teams/org-model";
 import { cn } from "../../../lib/utils";
@@ -20,47 +9,7 @@ import type { IOrgBot } from "../../../state/backend-state/bot-team-state";
 import { BotAvatar } from "../../bots/bot-avatar";
 import { UserAvatar } from "../../ui/user-avatar";
 import { useOrgChart } from "./org-chart-context";
-import { type TeamIconKey, type TeamTone, teamTile } from "./org-chart-model";
-
-const TONE_CLASS: Record<TeamTone, string> = {
-	info: "bg-info-bg text-info",
-	good: "bg-good-bg text-good",
-	warning: "bg-warning-bg text-warning",
-	locked: "bg-locked-bg text-locked",
-	paused: "bg-paused-bg text-paused",
-};
-
-const ICONS: Record<TeamIconKey, LucideIcon> = {
-	briefcase: BriefcaseIcon,
-	shield: ShieldIcon,
-	headset: HeadsetIcon,
-	users: UsersIcon,
-	landmark: LandmarkIcon,
-	flask: FlaskConicalIcon,
-	megaphone: MegaphoneIcon,
-	wrench: WrenchIcon,
-};
-
-export function TeamTile({
-	teamId,
-	name,
-	size = 28,
-}: Readonly<{ teamId: string; name?: string; size?: number }>) {
-	const { tone, icon } = teamTile(teamId, name);
-	const Icon = ICONS[icon];
-	return (
-		<span
-			aria-hidden
-			className={cn(
-				"flex shrink-0 items-center justify-center rounded-lg",
-				TONE_CLASS[tone],
-			)}
-			style={{ width: size, height: size }}
-		>
-			<Icon style={{ width: size * 0.55, height: size * 0.55 }} />
-		</span>
-	);
-}
+export { TeamTile } from "./team-tile";
 
 export function PersonName({
 	userId,

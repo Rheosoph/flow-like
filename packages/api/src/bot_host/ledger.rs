@@ -83,7 +83,10 @@ pub(crate) fn host_kind_of(location: BotLocation) -> TurnHostKind {
 /// reaction wakes only the bot whose message it reacts to, and in a group not one limited to
 /// mentions. Transcript deliveries set `read_along` only for bots with a decision model.
 pub(crate) fn queues_turn(delivery: &BotDelivery, recipient: &BotRecipient) -> bool {
-    if recipient.bot_id == delivery.sender_id || recipient.hops > delivery.hop_limit(recipient) {
+    if delivery.team_addressed
+        || recipient.bot_id == delivery.sender_id
+        || recipient.hops > delivery.hop_limit(recipient)
+    {
         return false;
     }
     match delivery.kind {
@@ -313,6 +316,9 @@ pub(crate) async fn enqueue_in<C: ConnectionTrait>(
     delivery: &BotDelivery,
     now: DateTime<FixedOffset>,
 ) -> Result<u64, ApiError> {
+    if delivery.team_addressed {
+        return Ok(0);
+    }
     let wait_routing = super::decision_wait::routing(db, delivery, now).await?;
     let mut waking: Vec<&BotRecipient> = delivery
         .recipients

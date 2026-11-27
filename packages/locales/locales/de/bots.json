@@ -2903,6 +2903,23 @@
 			"yourBots": "Deine Bots",
 			"zoomIn": "Vergrößern",
 			"zoomOut": "Verkleinern"
+		},
+		"requests": {
+			"answer": {
+				"leadFallback": "Der Lead",
+				"open": "Thread öffnen",
+				"snippet": "{{name}} hat geantwortet",
+				"title": "{{lead}} · Lead von {{team}}"
+			},
+			"chip": "→ {{team}}",
+			"chipOpen": "Deinen Thread mit {{team}} öffnen",
+			"hint": "Beginne mit #Team, um ein Team zu fragen",
+			"picker": {
+				"label": "Ein Team fragen",
+				"lead": "Lead: {{name}}"
+			},
+			"unknownTeam": "einem Team",
+			"yourRequests": "Deine Anfragen"
 		}
 	}
 }

@@ -4,9 +4,11 @@
 
 use chrono::{DateTime, FixedOffset};
 
-use super::layout::{Badge, Block, Email, Tone, Value, plain, strong};
+use super::layout::{Badge, Block, Email, Speaker, Tone, Value, plain, strong};
 
 const SOLUTION: &str = "24-Hour Solution";
+const TEAM: &str = "Flow-Like team";
+const REVIEW_TEAM: &str = "Flow-Like review team";
 
 fn hero(eyebrow: &str, title: impl Into<String>, subtitle: Option<String>) -> Block {
     Block::Hero {
@@ -24,6 +26,14 @@ fn callout(tone: Tone, label: &str, body: &str) -> Block {
     Block::Callout {
         tone,
         label: label.to_string(),
+        body: body.to_string(),
+    }
+}
+
+/// Words from Flow-Like's own people, signed with the logo.
+fn from_team(team: &str, body: &str) -> Block {
+    Block::Quote {
+        speaker: Speaker::Team(team.to_string()),
         body: body.to_string(),
     }
 }
@@ -198,7 +208,7 @@ pub fn solution_status_update(
         text(description),
     ];
     if let Some(message) = present(message) {
-        blocks.push(callout(Tone::Info, "Message from our team", message));
+        blocks.push(from_team(TEAM, message));
     }
     blocks.push(button("View the full status", tracking_url));
     Email {
@@ -218,12 +228,13 @@ pub fn solution_log_added(
     details: Option<&str>,
     current_status: &str,
 ) -> (String, String) {
-    let mut blocks = vec![
-        hero(SOLUTION, "New update", Some(format!("For {company_name}"))),
-        callout(Tone::Info, "Update", action),
-    ];
+    let mut blocks = vec![hero(
+        SOLUTION,
+        action,
+        Some(format!("New update for {company_name}")),
+    )];
     if let Some(details) = present(details) {
-        blocks.push(callout(Tone::Neutral, "Details", details));
+        blocks.push(from_team(TEAM, details));
     }
     blocks.push(Block::Details {
         title: None,
@@ -261,7 +272,7 @@ pub fn solution_delivered(
         ),
     ];
     if let Some(notes) = present(delivery_notes) {
-        blocks.push(callout(Tone::Neutral, "Delivery notes", notes));
+        blocks.push(from_team(TEAM, notes));
     }
     blocks.push(button("Access your solution", tracking_url));
     blocks.push(Block::Note(
@@ -282,31 +293,26 @@ pub fn package_review_update(
     action: &str,
     reviewer_comment: Option<&str>,
 ) -> (String, String) {
-    let (headline, description, tone) = match action.to_lowercase().as_str() {
+    let (headline, description) = match action.to_lowercase().as_str() {
         "approve" => (
             "Your package is approved",
             "Your package passed review and is now live on the registry. People can discover and install it right away.",
-            Tone::Success,
         ),
         "reject" => (
             "Your package was not approved",
             "Your package did not pass review. Check the reviewer’s feedback and resubmit when you’re ready.",
-            Tone::Danger,
         ),
         "request_changes" => (
             "Changes requested",
             "The reviewer asked for some changes before your package can be approved.",
-            Tone::Warning,
         ),
         "flag" => (
             "Your package was flagged",
             "Your package was flagged for an additional review. Our team will follow up shortly.",
-            Tone::Danger,
         ),
         _ => (
             "Package review update",
             "There’s an update on your package review.",
-            Tone::Info,
         ),
     };
     let mut blocks = vec![
@@ -321,7 +327,7 @@ pub fn package_review_update(
         },
     ];
     if let Some(comment) = present(reviewer_comment) {
-        blocks.push(callout(tone, "Reviewer feedback", comment));
+        blocks.push(from_team(REVIEW_TEAM, comment));
     }
     blocks.push(button("View the package", package_url));
     Email {
@@ -361,8 +367,8 @@ pub fn publication_update(
     reviewer_message: Option<&str>,
 ) -> (String, String) {
     let entity = entity_label.to_lowercase();
-    let visibility = target_visibility.replace('_', " ");
-    let (headline, description, tone) = match action.to_lowercase().as_str() {
+    let visibility = humanize(target_visibility);
+    let (headline, description) = match action.to_lowercase().as_str() {
         "approve" | "accept" => (
             format!("Your {entity} is published"),
             vec![
@@ -370,26 +376,22 @@ pub fn publication_update(
                 strong(visibility.clone()),
                 plain(". People can discover it in the store."),
             ],
-            Tone::Success,
         ),
         "reject" => (
             "Publication request rejected".to_string(),
             vec![plain(
                 "Your publication request was not approved. Review the feedback and try again when you’re ready.",
             )],
-            Tone::Danger,
         ),
         "hold" => (
             "Publication request on hold".to_string(),
             vec![plain(
                 "Your publication request is on hold. The review team will follow up with more details.",
             )],
-            Tone::Warning,
         ),
         _ => (
             "Publication request update".to_string(),
             vec![plain("There’s an update on your publication request.")],
-            Tone::Info,
         ),
     };
     let mut blocks = vec![
@@ -409,7 +411,7 @@ pub fn publication_update(
         },
     ];
     if let Some(message) = present(reviewer_message) {
-        blocks.push(callout(tone, "Message from the reviewer", message));
+        blocks.push(from_team(REVIEW_TEAM, message));
     }
     blocks.push(button(format!("View the {entity}"), app_url));
     Email {
@@ -566,7 +568,13 @@ pub fn room_invitation(mail: &RoomInvitationMail) -> (String, String) {
         )),
     )];
     if let Some(reason) = present(mail.reason) {
-        blocks.push(callout(Tone::Info, "Why you’re invited", reason));
+        blocks.push(Block::Quote {
+            speaker: Speaker::Named {
+                name: mail.bot.to_string(),
+                role: Some(format!("{}’s bot", mail.owner)),
+            },
+            body: reason.to_string(),
+        });
     }
     let footer = match mail.link_expires {
         Some(expires) => {
@@ -606,6 +614,8 @@ pub fn room_invitation(mail: &RoomInvitationMail) -> (String, String) {
 pub const COGNITO_CODE: &str = "{####}";
 /// Cognito replaces this with the username of an account an administrator created.
 pub const COGNITO_USERNAME: &str = "{username}";
+/// Where the hosted pool's people sign in; Cognito templates cannot carry a per-hub link.
+const COGNITO_SIGN_IN_URL: &str = "https://app.flow-like.com";
 
 /// A Cognito email template: Cognito sends the HTML as the only body.
 pub struct CognitoMail {
@@ -662,6 +672,7 @@ pub fn cognito_invitation() -> CognitoMail {
                         row("Temporary password", Value::Code(COGNITO_CODE.into())),
                     ],
                 },
+                button("Sign in to Flow-Like", COGNITO_SIGN_IN_URL),
                 Block::Note(
                     "The temporary password works once and only for a limited time.".into(),
                 ),
@@ -876,7 +887,7 @@ mod tests {
                     intro: "Your payment was confirmed. Keep this message as a record of your purchase and the terms you accepted.",
                     event: vec![(
                         "Purchase confirmed at".into(),
-                        "2026-11-26T10:00:00+00:00".into(),
+                        "26 November 2026, 10:00:00 UTC".into(),
                     )],
                     order_id: "po_8f2a91",
                     product: "Inventory Planner",
@@ -894,6 +905,74 @@ mod tests {
                     "The certificate of “Line 3 controller” expires in 7 days. Renew it to keep the device connected.",
                     "https://app.flow-like.com/devices",
                 ),
+            ),
+            (
+                "solution-log",
+                solution_log_added(
+                    "Acme GmbH",
+                    "https://flow-like.com/track/abc",
+                    "Kickoff call scheduled",
+                    Some("We meet on Monday at 10:00 to walk through the CRM fields."),
+                    "IN_PROGRESS",
+                ),
+            ),
+            (
+                "solution-delivered",
+                solution_delivered(
+                    "Acme GmbH",
+                    "https://flow-like.com/track/abc",
+                    Some(
+                        "The CRM sync runs every 15 minutes.\nYour credentials are in the shared vault.",
+                    ),
+                ),
+            ),
+            (
+                "app-publication",
+                app_publication_update(
+                    "Inventory Planner",
+                    "https://app.flow-like.com/store/apps/inventory",
+                    "approve",
+                    "PUBLIC",
+                    Some("Clear screenshots and a good description. Welcome to the store!"),
+                ),
+            ),
+            (
+                "publication-hold",
+                publication_update(
+                    "Template",
+                    "Invoice Extractor",
+                    "https://app.flow-like.com/store/templates/invoice",
+                    "hold",
+                    "PUBLIC",
+                    Some(
+                        "We need a sample invoice without personal data before we can publish this.",
+                    ),
+                ),
+            ),
+            (
+                "order-withdrawal",
+                order_confirmation(&OrderConfirmation {
+                    withdrawn: true,
+                    intro: "Your withdrawal request was received. Payment history shows the refund status; this message does not confirm that funds have reached your payment account.",
+                    event: vec![
+                        ("Consumer name".into(), "Alex Example".into()),
+                        (
+                            "Declaration received".into(),
+                            "Withdrawal from the purchase identified below.".into(),
+                        ),
+                        (
+                            "Received at".into(),
+                            "27 November 2026, 09:30:00 UTC".into(),
+                        ),
+                    ],
+                    order_id: "po_8f2a91",
+                    product: "Inventory Planner",
+                    amount: "49.00 EUR",
+                    email: "buyer@example.com",
+                    terms_version: "2026-10",
+                    waiver_accepted: false,
+                    terms: "1. Scope\nThe seller grants you access to the app.\n\n2. Withdrawal\nYou may withdraw within 14 days.",
+                }),
             ),
         ];
         for (name, (html, text)) in previews {

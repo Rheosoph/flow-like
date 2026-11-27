@@ -336,6 +336,34 @@ describe("the chat from the bot's inbox history", () => {
 		expect(seqs).toEqual({ m1: 1, m2: 2, m3: 3 });
 	});
 
+	test("a team's answer shows as a notice and stays out of the model's text", () => {
+		const entries = [
+			entry(1, "user_1", "#ITSupport is the VPN down?"),
+			entry(2, "user_1", "", {
+				kind: "activity",
+				envelope: {
+					v: 1,
+					enc: "none",
+					body: {
+						type: "team_answer",
+						team_id: "team_it",
+						lead_id: "bot_fixer",
+						thread_id: "conv_thread",
+						request_message_id: "m1",
+						reply_message_id: "re-1",
+						text: "It's back up.",
+					},
+				},
+			}),
+		];
+		const { messages } = transcriptOf(entries, BOT, "bot:bot_ada");
+		expect(messages.map((message) => message.notice?.note.type)).toEqual([
+			undefined,
+			"team_answer",
+		]);
+		expect(messages[1].inner.content).toBe("");
+	});
+
 	test("reads further back while reactions leave the newest page short", async () => {
 		const { inbox, queries } = fakeInbox(120);
 		const listEntries = inbox.listEntries.bind(inbox);

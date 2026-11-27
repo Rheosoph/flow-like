@@ -102,6 +102,14 @@ pub struct MessageBody {
     /// hosts that keep no turn rows ([`crate::bot_turn::hop_limit`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discussion_hops: Option<u32>,
+    /// On a person's message that starts with `#Team` tags: the ids of the teams it went to. The
+    /// server sets it from the text ([`crate::bot_team::leading_team_tags`]); such a message
+    /// wakes no bot of its own conversation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub teams: Vec<String>,
+    /// On the copy of a team request in the person's thread with the team: the message it copies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_request: Option<crate::bot_team::TeamRequestRef>,
 }
 
 /// A person's permission for a discussion between bots: `rounds` rounds, one message from each

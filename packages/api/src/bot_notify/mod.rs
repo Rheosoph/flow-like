@@ -243,6 +243,7 @@ pub(crate) async fn notify_for_reply<C: ConnectionTrait>(
 
 /// The post-commit hook of a committed reply; failures are logged, never raised.
 pub(crate) async fn after_reply(state: &AppState, reply: &Reply<'_>) {
+    crate::routes::inbox::team_request::after_reply(state, reply).await;
     if let Err(error) = notify_for_reply(&state.db, &StateSink(state), reply).await {
         tracing::warn!(%error, bot_id = reply.bot_id, "Could not notify the owner of a bot's reply");
     }

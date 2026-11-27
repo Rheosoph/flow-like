@@ -60,6 +60,7 @@ pub mod segments;
 pub mod stars;
 mod summary;
 mod targets;
+pub(crate) mod team_request;
 pub(crate) mod team_room;
 mod text_links;
 pub(crate) mod triggers;

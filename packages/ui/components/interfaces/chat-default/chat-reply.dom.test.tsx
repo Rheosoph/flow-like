@@ -24,6 +24,9 @@ vi.mock("@flow-like/locales", () => ({
 	i18n: { t: (_key: string, fallback: string) => fallback },
 	useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
 }));
+vi.mock("../../bots-tab/team-answer-card", () => ({
+	TeamAnswerCard: () => null,
+}));
 vi.mock("./VoiceMode", () => ({ VoiceMode: () => null }));
 vi.mock("./ai-disclosure", () => ({ ChatAiDisclosure: () => null }));
 vi.mock("./chat-run-controls", () => ({

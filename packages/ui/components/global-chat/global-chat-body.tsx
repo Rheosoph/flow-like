@@ -21,6 +21,8 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { useOrg } from "../../hooks/use-bot-teams";
+import { useBotLabels } from "../../hooks/use-bots";
 import { inboxKeys } from "../../hooks/use-inbox";
 import {
 	IBitTypes,
@@ -36,6 +38,7 @@ import { Button } from "../../index";
 import { cn } from "../../lib";
 import { getApiOrigin } from "../../lib/api-url";
 import { searchAllBitsOfType } from "../../lib/bit/model-listing";
+import { orgBot } from "../../lib/bot-teams/org-model";
 import { DEFAULT_CHAT_AI_DISCLOSURE } from "../../lib/chat-appearance";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
@@ -131,6 +134,7 @@ import {
 	runVoiceTurn,
 } from "../../state/global-chat/voice-turn";
 import { BotFileAssets } from "../bots-tab/bot-file-assets";
+import { addressesTeam, teamTagOptions } from "../bots-tab/team-tag-model";
 import { FlowScriptWorkspacePanel } from "../flowpilot/flowscript-workspace-panel";
 import {
 	flowPilotModelIdForProvider,
@@ -408,6 +412,23 @@ export function GlobalChatBody({
 	const queryClient = useQueryClient();
 	const chatConfig = useBotChatConfig(chatBot);
 	const noteBotId = chatBot.bot?.id ?? chatBot.botId;
+	const { org, available: teamsAvailable } = useOrg();
+	const botLabels = useBotLabels();
+	const teamTags = useMemo(
+		() =>
+			noteBotId && teamsAvailable
+				? teamTagOptions(org, (botId) => {
+						const bot = orgBot(org, botId);
+						return (
+							bot &&
+							botLabels({ system: bot.system ?? null, name: bot.name }).name
+						);
+					})
+				: [],
+		[noteBotId, teamsAvailable, org, botLabels],
+	);
+	const teamTagsRef = useRef(teamTags);
+	teamTagsRef.current = teamTags;
 	const botNotes = useMemo<IChatGroup | undefined>(
 		() =>
 			noteBotId
@@ -419,9 +440,10 @@ export function GlobalChatBody({
 								sessionId={activeConversationId}
 							/>
 						),
+						teamTags,
 					}
 				: undefined,
-		[noteBotId, activeConversationId],
+		[noteBotId, activeConversationId, teamTags],
 	);
 	const isStreaming = useGlobalChatStore((s) => s.isStreaming);
 	const conversationLoading = useGlobalChatStore((s) => s.conversationLoading);
@@ -932,7 +954,9 @@ export function GlobalChatBody({
 				isAgentBackendProvider(normalizeAIProvider(agentSelection.provider)),
 				agentSelection.reasoningEffort,
 			);
-			if (!answersHere) {
+			// A message to a team goes through the hub, which routes it to the team's lead and wakes
+			// no bot of this chat, so this chat doesn't run a turn of its own for it.
+			if (!answersHere || addressesTeam(trimmed, teamTagsRef.current)) {
 				if (nativeRequest)
 					throw new Error(
 						`${botName} answers on its own computer, not in this chat.`,

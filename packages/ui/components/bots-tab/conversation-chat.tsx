@@ -38,6 +38,8 @@ import type { ConversationBlock, ConversationMessage } from "./fold-entries";
 import { type Mentionable, inlineMentions, mentionedIn } from "./mentions";
 import { MessageMarkLine, MessageMenu } from "./message-marks";
 import { roomChatMessage } from "./room-message-body";
+import { TeamRequestChips } from "./team-request-chips";
+import type { TeamTagOption } from "./team-tag-model";
 import { useRoomAttachments } from "./use-room-attachments";
 import { useRoomRunWidgetAction } from "./use-room-widget-action";
 
@@ -115,6 +117,7 @@ export function ConversationChat({
 	placeholder,
 	disabledReason,
 	mentionables,
+	teamTags,
 	activity,
 	onSend,
 	onAllowDiscussion,
@@ -127,6 +130,7 @@ export function ConversationChat({
 	placeholder: string;
 	disabledReason?: string | null;
 	mentionables?: readonly Mentionable[];
+	teamTags?: readonly TeamTagOption[];
 	activity?: ConversationActivity;
 	onSend: (
 		text: string,
@@ -397,7 +401,9 @@ export function ConversationChat({
 				const source = byId.get(message.id);
 				const mailedTo = source?.mailedTo;
 				const note = source?.note;
-				if (!lead && !older && !marked && !mailedTo && !note) return null;
+				const teams = source?.teams;
+				if (!lead && !older && !marked && !mailedTo && !note && !teams)
+					return null;
 				return (
 					<div className="mb-1.5 flex flex-col gap-3">
 						{older}
@@ -410,6 +416,9 @@ export function ConversationChat({
 							/>
 						)}
 						{mailedTo && <MailSentLine to={mailedTo} />}
+						{teams && source && (
+							<TeamRequestChips teamIds={teams} mine={source.mine} />
+						)}
 						{note && source && (
 							<BotNoteChip
 								note={note}
@@ -478,6 +487,7 @@ export function ConversationChat({
 				);
 			},
 			mentionables,
+			teamTags,
 			placeholder: disabledReason ?? placeholder,
 			composerDisabled: Boolean(disabledReason),
 			editable: (message) =>
@@ -501,6 +511,7 @@ export function ConversationChat({
 			directory,
 			conversationId,
 			mentionables,
+			teamTags,
 			placeholder,
 			disabledReason,
 			allMessages,

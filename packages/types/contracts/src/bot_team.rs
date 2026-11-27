@@ -181,6 +181,29 @@ pub struct OrgView {
     pub teams: Vec<Team>,
     pub bots: Vec<OrgBot>,
     pub invitations: Vec<TeamInvitation>,
+    /// The viewer's own threads with teams, where their `#Team` requests went.
+    #[serde(default)]
+    pub threads: Vec<TeamThread>,
+}
+
+/// A person's thread with a team: their `#Team` requests land here and the team's lead answers.
+/// Its members are the person, the current lead and the lead's owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TeamThread {
+    pub team_id: String,
+    pub conversation_id: String,
+}
+
+/// On the copy of a team request in the person's thread: the message it copies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TeamRequestRef {
+    pub team_id: String,
+    pub origin_conversation_id: String,
+    pub origin_message_id: String,
+    /// The lead's answer is copied back into the origin, which is the person's own chat with one
+    /// of their bots. Anywhere else the answer stays in the thread.
+    #[serde(default)]
+    pub answer_here: bool,
 }
 
 /// A bot as a brief names it.
@@ -254,6 +277,43 @@ pub struct TeamBrief {
 pub fn team_tag(name: &str) -> String {
     let compact: String = name.split_whitespace().collect();
     format!("#{compact}")
+}
+
+/// Teams one message can address.
+pub const MAX_REQUEST_TEAMS: usize = 3;
+/// Characters of a lead's answer copied back into the chat its request came from.
+pub const TEAM_ANSWER_MAX_CHARS: usize = 4_000;
+
+/// The `#Tag`s a message starts with, without `#` and trailing punctuation, in order and at most
+/// [`MAX_REQUEST_TEAMS`]: "#Security #ITSupport, is the VPN down?" gives `Security` and
+/// `ITSupport`. A tag later in the text or a markdown heading ("# Notes") addresses no team.
+pub fn leading_team_tags(text: &str) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for token in text.split_whitespace() {
+        let Some(tag) = token.strip_prefix('#') else {
+            break;
+        };
+        let tag = tag.trim_end_matches([',', ':', ';', '.', '!', '?']);
+        if tag.is_empty() || tag.starts_with('#') {
+            break;
+        }
+        if !tags
+            .iter()
+            .any(|known| known.to_lowercase() == tag.to_lowercase())
+        {
+            tags.push(tag.to_string());
+        }
+        if tags.len() == MAX_REQUEST_TEAMS {
+            break;
+        }
+    }
+    tags
+}
+
+/// Whether `tag`, as [`leading_team_tags`] returns it, names the team called `name`.
+pub fn tag_names_team(tag: &str, name: &str) -> bool {
+    let full = team_tag(name);
+    full.trim_start_matches('#').to_lowercase() == tag.to_lowercase()
 }
 
 fn clip(text: &str, max_chars: usize) -> String {
@@ -577,5 +637,31 @@ mod tests {
             serde_json::to_value(TeamInvitationKind::DirectAsks).unwrap(),
             serde_json::json!("direct_asks")
         );
+    }
+
+    #[test]
+    fn a_message_addresses_the_teams_it_starts_with() {
+        assert_eq!(
+            leading_team_tags("#Security #ITSupport, is the VPN down?"),
+            ["Security", "ITSupport"]
+        );
+        assert_eq!(
+            leading_team_tags("  #People: who approves leave?"),
+            ["People"]
+        );
+        assert_eq!(leading_team_tags("#security #Security hi"), ["security"]);
+        assert_eq!(leading_team_tags("#A #B #C #D hi"), ["A", "B", "C"]);
+        assert!(leading_team_tags("I asked #Security yesterday").is_empty());
+        assert!(leading_team_tags("# Notes\nnothing here").is_empty());
+        assert!(leading_team_tags("## Heading").is_empty());
+        assert!(leading_team_tags("").is_empty());
+    }
+
+    #[test]
+    fn a_tag_names_a_team_without_spaces_or_case() {
+        assert!(tag_names_team("ITSupport", "IT Support"));
+        assert!(tag_names_team("itsupport", "IT  Support"));
+        assert!(tag_names_team("R&D", "R&D"));
+        assert!(!tag_names_team("IT", "IT Support"));
     }
 }
