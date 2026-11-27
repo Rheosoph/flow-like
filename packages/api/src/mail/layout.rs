@@ -1,10 +1,12 @@
 //! The one look of every email the platform sends. An email is a list of blocks, and the same
 //! blocks render its HTML part and its plain-text part, so a client without HTML reads all of
 //! it. The HTML wears the website's dark theme (`packages/ui/global.css`, `.dark`) in every
-//! client: clients that darken light emails, like Outlook, find nothing light to darken, and the
-//! orange button also carries its color as a gradient image, which they leave alone. It is built
-//! from tables and inline styles so Outlook for Windows and Gmail keep it intact, with no web
-//! fonts. Its one image is the app icon from the website; with images blocked the wordmark stays.
+//! client. Outlook for Mac in dark mode repaints every background color to one mid gray (white
+//! and near-black alike, orange to dark red) and drops gradients, but keeps text, border and
+//! shadow colors, so every surface paints its color twice: as its background and as an inset
+//! shadow over it ([`fill`]). It is built from tables and inline styles so Outlook for Windows
+//! and Gmail keep it intact, with no web fonts. Its one image is the app icon from the website;
+//! with images blocked the wordmark stays.
 
 const SANS: &str =
     "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
@@ -26,14 +28,16 @@ const INK: &str = "#F3EFEC";
 const BODY: &str = "#C9CBD1";
 const MUTED: &str = "#999EA8";
 const FAINT: &str = "#80858F";
-/// The website's primary and accent; its buttons run from one to the other.
+/// The website's primary (its buttons) and accent (its labels and dots).
 const PRIMARY: &str = "#FB562D";
 const ACCENT: &str = "#F6472C";
 const LINK: &str = "#FF7350";
-const BUTTON_FILL: &str = "linear-gradient(100deg,#FB562D 0%,#F6472C 100%)";
-const AVATAR_FILL: &str = "linear-gradient(135deg,#FF8A3D 0%,#F6472C 100%)";
 const GLOW: &str = "radial-gradient(ellipse 80% 60% at 30% 0%, rgba(246,71,44,0.32) 0%, rgba(246,71,44,0.11) 45%, rgba(12,14,19,0) 100%)";
 const DOT_GLOW: &str = "rgba(246,71,44,0.75)";
+const BUTTON_GLOW: &str = "0 12px 30px -10px rgba(251,86,45,0.55)";
+const PANEL_GLOW: &str = "0 24px 64px -28px rgba(251,86,45,0.45)";
+/// Wider than any email is tall, so the inset shadow of [`fill`] covers the whole box.
+const FILL_SPREAD: &str = "4000px";
 
 /// Layout rules every client with a stylesheet keeps, Gmail included.
 const BASE_STYLE: &str = r#"
@@ -64,7 +68,7 @@ a[x-apple-data-detectors] { color: inherit !important; text-decoration: none !im
 fn guard_style() -> String {
     format!(
         r#"
-[data-ogsb] .fl-fill {{ background-color: {PRIMARY} !important; background-image: {BUTTON_FILL} !important; }}
+[data-ogsb] .fl-fill {{ background-color: {PRIMARY} !important; }}
 @media print {{
   body, table, td, div, p, h1, span, a, strong {{ color: #111111 !important; background: #FFFFFF !important; border-color: #DDDDDD !important; box-shadow: none !important; }}
 }}
@@ -163,7 +167,8 @@ impl Value {
         match self {
             Self::Text(text) => escape(text),
             Self::Code(code) => format!(
-                r#"<span style="display:inline-block;padding:2px 8px;border-radius:6px;background-color:{RAISED};border:1px solid {BORDER};font-family:{MONO};font-size:13px;line-height:20px;font-weight:500;color:{INK};">{}</span>"#,
+                r#"<span style="display:inline-block;padding:2px 8px;border-radius:6px;{}border:1px solid {BORDER};font-family:{MONO};font-size:13px;line-height:20px;font-weight:500;color:{INK};">{}</span>"#,
+                fill(RAISED, None),
                 escape(code)
             ),
             Self::Badge(badge) => badge.html(),
@@ -329,14 +334,20 @@ fn inline_table(class: Option<&str>, cells: &str) -> String {
     )
 }
 
-/// The website's status dot, glowing where `glow` is given.
+/// `color` as a background that Outlook's dark mode cannot gray: the same color again as an
+/// inset shadow, which it leaves alone, followed by an `outer` shadow if given.
+fn fill(color: &str, outer: Option<&str>) -> String {
+    let outer = outer.map(|outer| format!(", {outer}")).unwrap_or_default();
+    format!("background-color:{color};box-shadow:inset 0 0 0 {FILL_SPREAD} {color}{outer};")
+}
+
+/// The website's status dot, glowing where `glow` is given. A character, because Outlook keeps
+/// text colors but repaints backgrounds.
 fn dot(color: &str, glow: Option<&str>) -> String {
     let glow = glow
-        .map(|glow| format!("box-shadow:0 0 12px {glow};"))
+        .map(|glow| format!("text-shadow:0 0 10px {glow};"))
         .unwrap_or_default();
-    format!(
-        r#"<span style="display:inline-block;width:6px;height:6px;border-radius:3px;background-color:{color};{glow}vertical-align:middle;margin:-2px 10px 0 0;font-size:0;line-height:0;">&nbsp;</span>"#
-    )
+    format!(r#"<span style="color:{color};font-size:10px;padding-right:9px;{glow}">&#9679;</span>"#)
 }
 
 /// A panel's heading: a dot and a monospace label, given as HTML.
@@ -362,7 +373,8 @@ fn initial_avatar(name: &str) -> String {
     inline_table(
         None,
         &format!(
-            r#"<td width="32" height="32" align="center" valign="middle" bgcolor="{PRIMARY}" style="width:32px;height:32px;border-radius:16px;background-color:{PRIMARY};background-image:{AVATAR_FILL};{}color:#FFFFFF;text-align:center;">{}</td>"#,
+            r#"<td width="32" height="32" align="center" valign="middle" bgcolor="{PRIMARY}" style="width:32px;height:32px;border-radius:16px;{}{}color:#FFFFFF;text-align:center;">{}</td>"#,
+            fill(PRIMARY, None),
             sans(14, 32, 700),
             escape(&initial)
         ),
@@ -379,16 +391,14 @@ fn panel(heading: Option<&str>, content: &str, padding: &str, glow: bool) -> Str
             )
         })
         .unwrap_or_default();
-    let (border, shadow) = if glow {
-        (
-            GLOW_BORDER,
-            "box-shadow:0 24px 64px -28px rgba(251,86,45,0.45);",
-        )
+    let (border, outer) = if glow {
+        (GLOW_BORDER, Some(PANEL_GLOW))
     } else {
-        (BORDER, "")
+        (BORDER, None)
     };
     full_width(&format!(
-        r#"<tr><td bgcolor="{CARD}" style="background-color:{CARD};border:1px solid {border};border-radius:14px;{shadow}">{}</td></tr>"#,
+        r#"<tr><td bgcolor="{CARD}" style="{}border:1px solid {border};border-radius:14px;">{}</td></tr>"#,
+        fill(CARD, outer),
         full_width(&format!(
             r#"{heading}<tr><td style="padding:{padding};">{content}</td></tr>"#
         ))
@@ -401,11 +411,13 @@ fn button_html(label: &str, url: &str, primary: bool) -> String {
     let font = sans(14, 20, 700);
     let cell = if primary {
         format!(
-            r#"<td class="fl-fill" align="center" bgcolor="{PRIMARY}" style="border-radius:10px;background-color:{PRIMARY};background-image:{BUTTON_FILL};box-shadow:0 12px 30px -10px rgba(251,86,45,0.55);mso-padding-alt:15px 24px;"><a href="{url}" target="_blank" rel="noopener" style="display:inline-block;padding:15px 24px;{font}color:#FFFFFF;text-decoration:none;border-radius:10px;">{label}&nbsp;&nbsp;&rarr;</a></td>"#
+            r#"<td class="fl-fill" align="center" bgcolor="{PRIMARY}" style="border-radius:10px;{}mso-padding-alt:15px 24px;"><a href="{url}" target="_blank" rel="noopener" style="display:inline-block;padding:15px 24px;{font}color:#FFFFFF;text-decoration:none;border-radius:10px;">{label}&nbsp;&nbsp;&rarr;</a></td>"#,
+            fill(PRIMARY, Some(BUTTON_GLOW))
         )
     } else {
         format!(
-            r#"<td align="center" bgcolor="{PAGE}" style="border:1px solid {BORDER};border-radius:10px;background-color:{PAGE};mso-padding-alt:14px 22px;"><a href="{url}" target="_blank" rel="noopener" style="display:inline-block;padding:14px 22px;{font}color:{INK};text-decoration:none;border-radius:10px;">{label}</a></td>"#
+            r#"<td align="center" bgcolor="{PAGE}" style="border:1px solid {BORDER};border-radius:10px;{}mso-padding-alt:14px 22px;"><a href="{url}" target="_blank" rel="noopener" style="display:inline-block;padding:14px 22px;{font}color:{INK};text-decoration:none;border-radius:10px;">{label}</a></td>"#,
+            fill(PAGE, None)
         )
     };
     inline_table(Some("fl-btn"), &cell)
@@ -805,6 +817,7 @@ impl Email {
         let body = self.body_html();
         let footer = self.footer_html();
         let guard = guard_style();
+        let canvas = fill(PAGE, None);
         format!(
             r#"<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -821,10 +834,12 @@ impl Email {
 <style>{BASE_STYLE}</style>
 <style>{guard}</style>
 </head>
-<body style="margin:0;padding:0;width:100%;background-color:{PAGE};">
+<body style="margin:0;padding:0;width:100%;min-height:100vh;{canvas}">
 <div style="display:none;max-height:0;max-width:0;overflow:hidden;opacity:0;mso-hide:all;font-size:1px;line-height:1px;color:{PAGE};">{preview}</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{PAGE}" style="width:100%;background-color:{PAGE};">
-<tr><td class="fl-outer" align="center" style="padding:16px 12px 40px 12px;background-color:{PAGE};background-image:{GLOW};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{PAGE}" style="width:100%;{canvas}">
+<tr><td style="{canvas}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background-image:{GLOW};">
+<tr><td class="fl-outer" align="center" style="padding:16px 12px 40px 12px;">
 <!--[if mso]><table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;">
 {brand}
@@ -832,6 +847,8 @@ impl Email {
 {footer}
 </table>
 <!--[if mso]></td></tr></table><![endif]-->
+</td></tr>
+</table>
 </td></tr>
 </table>
 </body>
@@ -984,12 +1001,19 @@ mod tests {
     }
 
     #[test]
-    fn the_main_button_keeps_its_orange_where_outlook_darkens_backgrounds() {
+    fn every_background_is_painted_twice_so_outlook_cannot_gray_it() {
         let html = sample().html();
-        let button = &html[html.find(r#"<td class="fl-fill""#).unwrap()..];
-        let cell = &button[..button.find('>').unwrap()];
-        assert!(cell.contains(&format!("background-image:{BUTTON_FILL}")));
-        assert!(cell.contains(&format!(r#"bgcolor="{PRIMARY}""#)));
+        let backgrounds: Vec<_> = html.match_indices("background-color:#").collect();
+        assert!(backgrounds.len() > 10);
+        for (at, _) in backgrounds {
+            let color = &html[at + "background-color:".len()..][..7];
+            assert!(
+                html[at..].starts_with(&format!(
+                    "background-color:{color};box-shadow:inset 0 0 0 {FILL_SPREAD} {color}"
+                )),
+                "background {color} at {at} has no inset fill"
+            );
+        }
         assert!(html.contains("[data-ogsb] .fl-fill"));
     }
 
