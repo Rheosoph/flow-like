@@ -118,7 +118,9 @@ fn fill_text(
     for (key, value) in &input.values {
         let before = text_parts(files);
         match kind {
-            TemplateKind::Docx => replace_docx_text(files, &placeholder(key), value, input.markdown)?,
+            TemplateKind::Docx => {
+                replace_docx_text(files, &placeholder(key), value, input.markdown)?
+            }
             _ => replace_pptx_text(files, &placeholder(key), value, input.markdown)?,
         }
         if before == text_parts(files) {
@@ -170,7 +172,9 @@ fn fill_tables(
                 let xml = files
                     .get("word/document.xml")
                     .map(|b| String::from_utf8_lossy(b).into_owned())
-                    .ok_or_else(|| flow_like_types::anyhow!("The template has no word/document.xml"))?;
+                    .ok_or_else(|| {
+                        flow_like_types::anyhow!("The template has no word/document.xml")
+                    })?;
                 let maps: Vec<HashMap<String, String>> = records
                     .iter()
                     .map(|record| record.iter().map(|(k, v)| (k.clone(), v.clone())).collect())

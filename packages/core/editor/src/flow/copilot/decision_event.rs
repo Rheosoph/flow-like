@@ -192,7 +192,7 @@ pub fn request(
     let eligible = match trigger.source {
         TriggerSource::Email | TriggerSource::Webhook => result.is_none(),
         TriggerSource::Schedule => monitoring(trigger) && result.is_some(),
-        TriggerSource::Event => false,
+        TriggerSource::Event | TriggerSource::Channel => false,
     };
     if !eligible {
         return Ok(None);

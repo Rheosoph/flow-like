@@ -29,7 +29,9 @@ use flow_like::flow::board::Board;
 use flow_like::flow::compiled;
 use flow_like::state::{FlowNodeRegistry, FlowNodeRegistryInner};
 use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_storage::object_store::{GetOptions, ObjectStore};
+use flow_like_storage::object_store::{
+    GetOptions, ObjectStore, PutMode, PutOptions, PutPayload,
+};
 use flow_like_storage::{Path, object_store::Error as StoreError};
 use flow_like_types::anyhow;
 use flow_like_types::dispatch::{ETAG_BOUND_LATEST_VERSION_SENTINEL, WasmPackageRef};
@@ -357,7 +359,205 @@ pub async fn ensure_compiled_artifact(
             .await);
     }
 
-    // Miss: compile from the API's prepared-board cache and persist.
+    // Miss. A page open dispatches its load and its widgets' runs together, each to its own
+    // instance; they build the artifact once. Requests on this instance queue behind the local
+    // lock, other instances behind the lease beside the artifact.
+    let target = ArtifactTarget {
+        app_id,
+        board_id,
+        version,
+        expected_etag,
+        selected_draft_etag: selected_draft_etag.as_deref(),
+        storage_root: &storage_root,
+        registry: &registry,
+        fingerprint,
+        artifact_path: &artifact_path,
+        cache_key: &cache_key,
+    };
+    let build_lock = state.artifact_build_lock(&cache_key);
+    let _local_turn = build_lock.lock().await;
+    let built_while_queued = state
+        .compiled_artifact_cache
+        .get(&cache_key)
+        .is_some_and(artifact_trusted);
+    if !built_while_queued {
+        match take_build_turn(meta_store.as_ref(), &artifact_path).await {
+            BuildTurn::Ours(lease) => {
+                let built = build_artifact(state, &target).await;
+                release_build_lease(meta_store.as_ref(), lease).await;
+                built?;
+            }
+            BuildTurn::Theirs(lease) => {
+                match wait_for_build(meta_store.as_ref(), &artifact_path, &lease, &fingerprint)
+                    .await
+                {
+                    Some(written) => state
+                        .compiled_artifact_cache
+                        .insert(cache_key.clone(), artifact_trust(version, written)),
+                    None => build_artifact(state, &target).await?,
+                }
+            }
+        }
+    }
+    Ok(state
+        .compiled_widget_artifacts
+        .enrich(&meta_store, app_id, board_id, version, ensured)
+        .await)
+}
+
+/// One compiled artifact a dispatch needs, as `ensure_compiled_artifact` resolved it.
+#[derive(Clone, Copy)]
+struct ArtifactTarget<'a> {
+    app_id: &'a str,
+    board_id: &'a str,
+    version: Option<(u32, u32, u32)>,
+    expected_etag: Option<&'a str>,
+    selected_draft_etag: Option<&'a str>,
+    storage_root: &'a Path,
+    registry: &'a Arc<FlowNodeRegistryInner>,
+    fingerprint: [u8; 32],
+    artifact_path: &'a Path,
+    cache_key: &'a str,
+}
+
+/// A build lease older than this belongs to a build that died; the next run takes it over.
+const BUILD_LEASE_TTL: Duration = Duration::from_secs(60);
+/// How long a run waits for another instance's build before building the artifact itself.
+const BUILD_WAIT_LIMIT: Duration = Duration::from_secs(45);
+const BUILD_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Who builds a missing artifact.
+enum BuildTurn {
+    /// This request builds and afterwards releases the lease it holds, if any. `None` means the
+    /// store could not record one; the build then runs unannounced.
+    Ours(Option<Path>),
+    /// Another instance holds a live lease for the same artifact.
+    Theirs(Path),
+}
+
+fn build_lease_path(artifact_path: &Path) -> Path {
+    Path::from(format!("{artifact_path}.building"))
+}
+
+/// A lease written in the future (clock skew) counts as live.
+fn lease_is_live(written: SystemTime, now: SystemTime) -> bool {
+    !matches!(now.duration_since(written), Ok(age) if age >= BUILD_LEASE_TTL)
+}
+
+/// Claim the build of `artifact_path` with a create-only lease object. Storage arbitrates, so
+/// exactly one of the instances racing for a fresh artifact wins.
+async fn take_build_turn(meta_store: &dyn ObjectStore, artifact_path: &Path) -> BuildTurn {
+    let lease = build_lease_path(artifact_path);
+    let claim = async {
+        for _ in 0..2 {
+            match meta_store
+                .put_opts(
+                    &lease,
+                    PutPayload::from_static(b"building"),
+                    PutOptions {
+                        mode: PutMode::Create,
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                Ok(_) => return BuildTurn::Ours(Some(lease.clone())),
+                Err(StoreError::AlreadyExists { .. } | StoreError::Precondition { .. }) => {}
+                Err(error) => {
+                    tracing::debug!(path = %lease, error = %error, "Artifact build lease unavailable");
+                    return BuildTurn::Ours(None);
+                }
+            }
+            match meta_store.head(&lease).await {
+                Ok(meta) if lease_is_live(meta.last_modified.into(), SystemTime::now()) => {
+                    return BuildTurn::Theirs(lease.clone());
+                }
+                // The previous holder died mid-build. Two takers may both win this overwrite;
+                // they then write the same content-addressed bytes.
+                Ok(_) => {
+                    return match meta_store
+                        .put(&lease, PutPayload::from_static(b"building"))
+                        .await
+                    {
+                        Ok(_) => BuildTurn::Ours(Some(lease.clone())),
+                        Err(_) => BuildTurn::Ours(None),
+                    };
+                }
+                // Released between the two calls: claim it again.
+                Err(StoreError::NotFound { .. }) => continue,
+                Err(_) => return BuildTurn::Ours(None),
+            }
+        }
+        BuildTurn::Ours(None)
+    };
+    claim
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "artifact.build_turn"
+        ))
+        .await
+}
+
+/// Wait for another instance to persist `artifact_path`. `None` when its lease disappears or
+/// expires without an artifact, or the wait limit passes; the caller then builds it itself.
+async fn wait_for_build(
+    meta_store: &dyn ObjectStore,
+    artifact_path: &Path,
+    lease: &Path,
+    fingerprint: &[u8; 32],
+) -> Option<SystemTime> {
+    let wait = async {
+        let deadline = flow_like_types::tokio::time::Instant::now() + BUILD_WAIT_LIMIT;
+        loop {
+            flow_like_types::tokio::time::sleep(BUILD_POLL_INTERVAL).await;
+            if let Some(written) =
+                stored_artifact_written(meta_store, artifact_path, fingerprint).await
+            {
+                return Some(written);
+            }
+            let lease_live = match meta_store.head(lease).await {
+                Ok(meta) => lease_is_live(meta.last_modified.into(), SystemTime::now()),
+                Err(_) => false,
+            };
+            if !lease_live {
+                return stored_artifact_written(meta_store, artifact_path, fingerprint).await;
+            }
+            if flow_like_types::tokio::time::Instant::now() >= deadline {
+                return None;
+            }
+        }
+    };
+    wait.instrument(tracing::info_span!(
+        target: "flow_like::observability",
+        "artifact.build_wait"
+    ))
+    .await
+}
+
+async fn release_build_lease(meta_store: &dyn ObjectStore, lease: Option<Path>) {
+    let Some(lease) = lease else {
+        return;
+    };
+    if let Err(error) = meta_store.delete(&lease).await {
+        tracing::debug!(path = %lease, error = %error, "Artifact build lease release failed");
+    }
+}
+
+/// Load the board the artifact is compiled from, compile it and persist the artifact.
+async fn build_artifact(state: &AppState, target: &ArtifactTarget<'_>) -> flow_like_types::Result<()> {
+    let ArtifactTarget {
+        app_id,
+        board_id,
+        version,
+        expected_etag,
+        selected_draft_etag,
+        storage_root,
+        registry,
+        fingerprint,
+        artifact_path,
+        cache_key,
+    } = *target;
+    let meta_store = state.meta_bucket.as_generic();
     let board = if let Some(expected_etag) = expected_etag {
         let source_path = compiled::draft_source_path(app_id, board_id, expected_etag);
         let proto = flow_like::utils::compression::from_compressed(
@@ -387,7 +587,7 @@ pub async fn ensure_compiled_artifact(
         let cached = state
             .master_board_shared(app_id, board_id, state, version)
             .await?;
-        require_selected_draft_etag(board_id, selected_draft_etag.as_deref(), &cached.e_tag)?;
+        require_selected_draft_etag(board_id, selected_draft_etag, &cached.e_tag)?;
         cached.board.clone()
     };
 
@@ -396,16 +596,16 @@ pub async fn ensure_compiled_artifact(
     // still carries whatever metadata, pin schemas and permissions were saved,
     // not the package's current ones. Re-hydrate against the overlay registry
     // so the artifact is what the executor's own registry would have produced.
-    let board = if board.has_wasm_nodes() && !Arc::ptr_eq(&registry, &state.registry) {
+    let board = if board.has_wasm_nodes() && !Arc::ptr_eq(registry, &state.registry) {
         rehydrate_with_registry(
             state,
             meta_store.clone(),
             app_id,
             board_id,
-            &storage_root,
+            storage_root,
             version,
             expected_etag,
-            selected_draft_etag.as_deref(),
+            selected_draft_etag,
             registry.clone(),
         )
         .await?
@@ -413,14 +613,14 @@ pub async fn ensure_compiled_artifact(
         board
     };
 
-    ensure_server_runnable(&board, &registry)?;
-    let compiled_board = compiled::compile::compile_board_with_catalog(&board, &registry)?;
+    ensure_server_runnable(&board, registry)?;
+    let compiled_board = compiled::compile::compile_board_with_catalog(&board, registry)?;
     let bytes = compiled::encode_artifact(&compiled_board, &fingerprint)?;
     state
         .compiled_widget_artifacts
-        .seed_base(&artifact_path, fingerprint, &compiled_board, &bytes);
+        .seed_base(artifact_path, fingerprint, &compiled_board, &bytes);
     let written = SystemTime::now();
-    compiled::persist_artifact(&meta_store, &artifact_path, None, bytes)
+    compiled::persist_artifact(&meta_store, artifact_path, None, bytes)
         .instrument(tracing::info_span!(
             target: "flow_like::observability",
             "artifact.persist"
@@ -428,17 +628,14 @@ pub async fn ensure_compiled_artifact(
         .await?;
     state
         .compiled_artifact_cache
-        .insert(cache_key, artifact_trust(version, written));
+        .insert(cache_key.to_string(), artifact_trust(version, written));
     tracing::debug!(
         app_id = %app_id,
         board_id = %board_id,
         path = %artifact_path,
         "Compiled artifact ensured before dispatch"
     );
-    Ok(state
-        .compiled_widget_artifacts
-        .enrich(&meta_store, app_id, board_id, version, ensured)
-        .await)
+    Ok(())
 }
 
 /// Load the board's source again and hydrate it against `registry`, for boards
@@ -507,9 +704,10 @@ async fn rehydrate_with_registry(
 #[cfg(test)]
 mod tests {
     use super::{
-        DRAFT_MIN_RETENTION, LocalOnlyBoard, artifact_trust, artifact_trusted,
-        ensure_server_runnable, refresh_draft_artifact, require_selected_draft_etag,
-        stored_artifact_written,
+        BUILD_LEASE_TTL, BuildTurn, DRAFT_MIN_RETENTION, LocalOnlyBoard, artifact_trust,
+        artifact_trusted, ensure_server_runnable, lease_is_live, refresh_draft_artifact,
+        release_build_lease, require_selected_draft_etag, stored_artifact_written,
+        take_build_turn, wait_for_build,
     };
     use crate::execution::wasm_node_stubs::WasmNodeStub;
     use flow_like::flow::board::{Board, Layer, LayerType};
@@ -549,6 +747,51 @@ mod tests {
         let compiled_board = compiled::compile::compile_board(&board(Vec::new(), Vec::new()))
             .expect("an empty board compiles");
         compiled::encode_artifact(&compiled_board, &[7; 32]).unwrap()
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn one_request_builds_a_missing_artifact_and_the_others_wait_for_it() {
+        let store = InMemory::new();
+        let path = compiled::draft_artifact_path("app-1", "board-1", "etag-1", &[7; 32]);
+        let BuildTurn::Ours(Some(lease)) = take_build_turn(&store, &path).await else {
+            panic!("the first request takes the build");
+        };
+        let BuildTurn::Theirs(held) = take_build_turn(&store, &path).await else {
+            panic!("a concurrent request waits for the build");
+        };
+        assert_eq!(held, lease);
+
+        store.put(&path, artifact_bytes().into()).await.unwrap();
+        assert!(
+            wait_for_build(&store, &path, &held, &[7; 32])
+                .await
+                .is_some()
+        );
+        release_build_lease(&store, Some(lease)).await;
+        assert!(matches!(
+            take_build_turn(&store, &path).await,
+            BuildTurn::Ours(Some(_))
+        ));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_lease_released_without_an_artifact_ends_the_wait() {
+        let store = InMemory::new();
+        let path = compiled::draft_artifact_path("app-1", "board-1", "etag-1", &[7; 32]);
+        let BuildTurn::Ours(Some(lease)) = take_build_turn(&store, &path).await else {
+            panic!("the first request takes the build");
+        };
+        release_build_lease(&store, Some(lease.clone())).await;
+        assert_eq!(wait_for_build(&store, &path, &lease, &[7; 32]).await, None);
+    }
+
+    #[test]
+    fn a_lease_older_than_its_ttl_is_dead_and_one_from_the_future_is_live() {
+        let now = SystemTime::now();
+        assert!(lease_is_live(now, now));
+        assert!(lease_is_live(now + Duration::from_secs(5), now));
+        assert!(lease_is_live(now - BUILD_LEASE_TTL + Duration::from_secs(1), now));
+        assert!(!lease_is_live(now - BUILD_LEASE_TTL, now));
     }
 
     #[flow_like_types::tokio::test]

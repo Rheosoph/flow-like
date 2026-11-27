@@ -784,6 +784,10 @@ pub struct State {
     /// which a writer already holds while it calls `master_board`.
     board_load_locks:
         parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
+    /// Serialises builds of one compiled artifact on this instance; the build lease in
+    /// `execution::compiled_artifacts` does the same across instances.
+    artifact_build_locks:
+        parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
     pub content_bucket: Arc<FlowLikeStore>,
     pub cdn_bucket: Arc<FlowLikeStore>,
     pub meta_bucket: Arc<FlowLikeStore>,
@@ -1718,6 +1722,7 @@ impl State {
                 .time_to_live(Duration::from_secs(10 * 60))
                 .build(),
             board_load_locks: parking_lot::Mutex::new(HashMap::new()),
+            artifact_build_locks: parking_lot::Mutex::new(HashMap::new()),
             credentials_cache: cache,
             credential_refresh_locks: parking_lot::Mutex::new(HashMap::new()),
             content_bucket,
@@ -2120,6 +2125,14 @@ impl State {
     ) -> Option<flow_like_types::Result<Arc<CachedBoard>>> {
         let pinned = recently_verified_pinned(&self.board_cache, cache_key, version)?;
         Some(pinned.board.ensure_supported_format().map(|()| pinned))
+    }
+
+    /// The lock a build of the compiled artifact behind `cache_key` holds on this instance.
+    pub(crate) fn artifact_build_lock(
+        &self,
+        cache_key: &str,
+    ) -> Arc<flow_like_types::tokio::sync::Mutex<()>> {
+        keyed_local_lock(&self.artifact_build_locks, cache_key.to_string())
     }
 
     /// The draft entry this instance holds, without asking storage whether it is current.

@@ -1,8 +1,8 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { GripVerticalIcon } from "lucide-react";
 import {
+	type CSSProperties,
 	type ReactNode,
 	createContext,
 	useCallback,
@@ -14,15 +14,19 @@ import {
 	useState,
 } from "react";
 import { cn } from "../../lib/utils";
+import { PaneResizeHandle, useStoredWidth } from "./pane-resize";
 import { useEdgeSwipeBack } from "./use-edge-swipe-back";
 
 const WIDTH_KEY = "flow-like:bots:chat-width";
+const LIST_WIDTH_KEY = "flow-like:bots:list-width";
 const DEFAULT_WIDTH = 420;
-const MIN_CHAT_WIDTH = 360;
+export const MIN_CHAT_WIDTH = 360;
 const MIN_DIRECTORY_WIDTH = 280;
-/** The fixed list column of a list-first layout. */
+/** The list column of a list-first layout, until the reader drags it. */
 export const LIST_COLUMN_WIDTH = 340;
-/** A bot's overview panel when it opens beside the chat. */
+const MIN_LIST_WIDTH = 260;
+const MAX_LIST_WIDTH = 560;
+/** A bot's overview panel when it opens beside the chat, until the reader drags it. */
 export const BOT_PANEL_WIDTH = 400;
 const PHONE_BREAKPOINT = 820;
 const SLIDE_MS = 300;
@@ -103,15 +107,26 @@ export function CrewSplitLayout({
 	const hadDock = useRef(Boolean(dock));
 	const [exiting, setExiting] = useState(false);
 	const [chatElement, setChatElement] = useState<HTMLElement | null>(null);
-	const drag = useRef<{ x: number; width: number } | null>(null);
 	const chatId = useId();
-	const [width, setWidth] = useState(DEFAULT_WIDTH);
+	const listId = useId();
+	const chatWidth = useStoredWidth(
+		WIDTH_KEY,
+		DEFAULT_WIDTH,
+		MIN_CHAT_WIDTH,
+		Number.POSITIVE_INFINITY,
+	);
+	const listWidth = useStoredWidth(
+		LIST_WIDTH_KEY,
+		LIST_COLUMN_WIDTH,
+		MIN_LIST_WIDTH,
+		MAX_LIST_WIDTH,
+	);
+	const width = chatWidth.width;
 	const [containerWidth, setContainerWidth] = useState(0);
 	const [dragging, setDragging] = useState(false);
-	const [loaded, setLoaded] = useState(false);
 	const panelLayout = dockPanelLayout(
 		containerWidth,
-		listFirst ? LIST_COLUMN_WIDTH : MIN_DIRECTORY_WIDTH,
+		listFirst ? listWidth.width : MIN_DIRECTORY_WIDTH,
 	);
 	const phone = containerWidth > 0 && containerWidth < PHONE_BREAKPOINT;
 	if (dock) lastDock.current = dock;
@@ -131,8 +146,16 @@ export function CrewSplitLayout({
 		containerWidth - MIN_DIRECTORY_WIDTH - panelWidth,
 	);
 	const boundedWidth = Math.min(width, maxWidth);
-	const resize = (next: number) =>
-		setWidth(Math.min(maxWidth, Math.max(MIN_CHAT_WIDTH, next)));
+	const listMax = Math.min(
+		MAX_LIST_WIDTH,
+		containerWidth -
+			MIN_CHAT_WIDTH -
+			(panelOpen && panelLayout === "column" ? BOT_PANEL_WIDTH : 0),
+	);
+	const boundedList = Math.max(
+		MIN_LIST_WIDTH,
+		Math.min(listWidth.width, listMax),
+	);
 
 	useLayoutEffect(() => {
 		const element = container.current;
@@ -144,25 +167,6 @@ export function CrewSplitLayout({
 		observer.observe(element);
 		return () => observer.disconnect();
 	}, []);
-
-	useEffect(() => {
-		try {
-			const stored = Number(localStorage.getItem(WIDTH_KEY));
-			if (Number.isFinite(stored) && stored >= MIN_CHAT_WIDTH) setWidth(stored);
-		} catch {
-			// Resizing still works when browser storage is unavailable.
-		}
-		setLoaded(true);
-	}, []);
-
-	useEffect(() => {
-		if (!loaded || dragging) return;
-		try {
-			localStorage.setItem(WIDTH_KEY, String(width));
-		} catch {
-			// The current layout does not depend on saving the preference.
-		}
-	}, [width, loaded, dragging]);
 
 	const setChat = useCallback((node: HTMLElement | null) => {
 		chat.current = node;
@@ -285,10 +289,18 @@ export function CrewSplitLayout({
 			<div className="relative flex min-h-0 flex-1 overflow-clip">
 				<div
 					ref={list}
+					id={listId}
+					style={
+						listFirst
+							? ({
+									"--bots-list-width": `${boundedList}px`,
+								} as CSSProperties)
+							: undefined
+					}
 					className={cn(
 						"@container/crew relative min-w-0 flex-1 overflow-y-auto",
 						listFirst &&
-							"@min-[820px]/bots:w-85 @min-[820px]/bots:flex-none @min-[820px]/bots:border-r",
+							"@min-[820px]/bots:w-(--bots-list-width) @min-[820px]/bots:flex-none @min-[820px]/bots:border-r",
 					)}
 				>
 					{children}
@@ -311,71 +323,51 @@ export function CrewSplitLayout({
 							listFirst ? "flex-1" : "shrink-0 border-l",
 						)}
 					>
-						{!listFirst && (
-							// biome-ignore lint/a11y/useSemanticElements: This focusable window splitter has interactive children and range semantics.
-							<div
-								role="separator"
-								tabIndex={0}
-								aria-label={t("crew.dock.resize", "Resize chat")}
-								aria-orientation="vertical"
-								aria-controls={chatId}
-								aria-valuemin={MIN_CHAT_WIDTH}
-								aria-valuemax={Math.round(maxWidth)}
-								aria-valuenow={Math.round(boundedWidth)}
-								aria-valuetext={t(
+						{listFirst ? (
+							<PaneResizeHandle
+								edge="right"
+								label={t("crew.dock.resizeList", "Resize chat list")}
+								valueText={t(
+									"crew.dock.listWidth",
+									"Chat list width: {{width}} pixels",
+									{ width: Math.round(boundedList) },
+								)}
+								controls={listId}
+								width={boundedList}
+								min={MIN_LIST_WIDTH}
+								max={listMax}
+								initial={LIST_COLUMN_WIDTH}
+								measure={() =>
+									list.current?.getBoundingClientRect().width ?? boundedList
+								}
+								onResize={listWidth.resize}
+								onCommit={listWidth.save}
+								onDraggingChange={setDragging}
+								className="-left-1.5 @max-[820px]/bots:hidden"
+							/>
+						) : (
+							<PaneResizeHandle
+								edge="left"
+								label={t("crew.dock.resize", "Resize chat")}
+								valueText={t(
 									"crew.dock.width",
 									"Chat width: {{width}} pixels",
-									{
-										width: Math.round(boundedWidth),
-									},
+									{ width: Math.round(boundedWidth) },
 								)}
-								title={t(
-									"crew.dock.resizeHint",
-									"Drag to resize. Double-click to reset.",
-								)}
-								className="group absolute inset-y-0 -left-1.5 z-40 flex w-3 touch-none cursor-col-resize items-center justify-center outline-none @max-[820px]/bots:hidden"
-								onPointerDown={(event) => {
-									if (event.button !== 0) return;
-									event.preventDefault();
-									event.currentTarget.focus();
-									event.currentTarget.setPointerCapture(event.pointerId);
-									drag.current = {
-										x: event.clientX,
-										width:
-											(chat.current?.getBoundingClientRect().width ??
-												boundedWidth + panelWidth) - panelWidth,
-									};
-									setDragging(true);
-								}}
-								onPointerMove={(event) => {
-									if (drag.current)
-										resize(drag.current.width + drag.current.x - event.clientX);
-								}}
-								onPointerUp={(event) => {
-									if (event.currentTarget.hasPointerCapture(event.pointerId))
-										event.currentTarget.releasePointerCapture(event.pointerId);
-								}}
-								onLostPointerCapture={() => {
-									drag.current = null;
-									setDragging(false);
-								}}
-								onDoubleClick={() => resize(DEFAULT_WIDTH)}
-								onKeyDown={(event) => {
-									const step = event.shiftKey ? 80 : 20;
-									if (event.key === "ArrowLeft") resize(boundedWidth + step);
-									else if (event.key === "ArrowRight")
-										resize(boundedWidth - step);
-									else if (event.key === "Home") resize(MIN_CHAT_WIDTH);
-									else if (event.key === "End") resize(maxWidth);
-									else return;
-									event.preventDefault();
-								}}
-							>
-								<span className="absolute inset-y-0 w-0.5 transition-colors group-hover:bg-primary/50 group-focus-visible:bg-primary" />
-								<span className="relative flex h-9 w-3 items-center justify-center rounded-full border bg-card text-muted-foreground group-hover:border-primary/50 group-hover:text-primary group-focus-visible:ring-2 group-focus-visible:ring-ring">
-									<GripVerticalIcon className="size-3" aria-hidden />
-								</span>
-							</div>
+								controls={chatId}
+								width={boundedWidth}
+								min={MIN_CHAT_WIDTH}
+								max={maxWidth}
+								initial={DEFAULT_WIDTH}
+								measure={() =>
+									(chat.current?.getBoundingClientRect().width ??
+										boundedWidth + panelWidth) - panelWidth
+								}
+								onResize={chatWidth.resize}
+								onCommit={chatWidth.save}
+								onDraggingChange={setDragging}
+								className="-left-1.5 @max-[820px]/bots:hidden"
+							/>
 						)}
 						<DockPanelLayoutContext.Provider value={panelLayout}>
 							<DockCompactContext.Provider value={phone}>

@@ -214,6 +214,16 @@ pub(crate) async fn notify_for_reply<C: ConnectionTrait>(
     if bot.owner_id != turn.owner_id || notifications_muted(&bot.appearance) {
         return Ok(false);
     }
+    if !reply.resumed
+        && crate::routes::inbox::person_push::is_watching_in(
+            db,
+            &turn.conversation_id,
+            &bot.owner_id,
+        )
+        .await?
+    {
+        return Ok(false);
+    }
     let id = stable_id(&bot.id, reply.message_id);
     if notification::Entity::find_by_id(id.as_str())
         .one(db)

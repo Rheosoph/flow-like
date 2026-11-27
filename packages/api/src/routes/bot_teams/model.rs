@@ -1,4 +1,6 @@
-use flow_like_types::{bot_effective::BotRoomLimits, bot_team::TeamRole};
+use flow_like_types::{
+    bot_effective::BotRoomLimits, bot_team::TeamRole, data_classification::DataClassification,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
 
@@ -77,6 +79,30 @@ pub struct AcceptBotRequest {
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct DirectAgreementRequest {
     pub agreed: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct ChatRequestBody {
+    /// Another owner's bot in a team of an org you are in.
+    pub bot_id: String,
+    /// Why you ask, shown to the bot's owner; at most 280 characters.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(default)]
+pub struct AcceptChatRequest {
+    /// What the bot may do in the chat, on top of its own restrictions.
+    #[schema(value_type = Option<Object>)]
+    pub limits: Option<BotRoomLimits>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct ClassificationRequest {
+    /// `public`, `internal`, `confidential` or `restricted`; `null` makes the person internal.
+    #[schema(value_type = Option<String>)]
+    pub classification: Option<DataClassification>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

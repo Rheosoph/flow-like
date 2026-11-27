@@ -59,6 +59,7 @@ pub(super) struct Cloned {
 /// Stores a duplicate of the caller's bot `bot_id`. The caller holds the owner's lock, so the
 /// limits [`admit_new_bot`] checks are exact. The profile and device are taken over as they are:
 /// like an update that leaves them alone, one deleted or revoked since doesn't block the copy.
+/// The copy starts hidden from other people, whatever the original allows.
 pub(super) async fn clone_in<C: ConnectionTrait>(
     db: &C,
     owner_id: &str,
@@ -68,6 +69,7 @@ pub(super) async fn clone_in<C: ConnectionTrait>(
     let source = owned_bot(db, owner_id, bot_id).await?;
     let mut settings = BotSettings::from_row(&source);
     settings.name = Some(copy_name(source_name(&source, &settings)));
+    settings.others_can_invite = false;
     validation::check_rules(&settings)?;
     super::crud::verify_decision_model(db, &settings).await?;
     admit_new_bot(db, owner_id, settings.location).await?;

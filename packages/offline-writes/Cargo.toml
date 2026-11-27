@@ -28,7 +28,7 @@ test-support = ["runtime"]
 anyhow = "1"
 blake3.workspace = true
 fs2 = "0.4.3"
-rusqlite = { version = "0.32.1", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled", "fallible_uint"] }
 serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror = "2"
@@ -53,7 +53,7 @@ libc = "0.2"
 
 [dev-dependencies]
 # Hosts such as the desktop enable `extra_check`, which rejects row-returning statements in `execute_batch`.
-rusqlite = { version = "0.32.1", features = ["bundled", "extra_check"] }
+rusqlite = { version = "0.43", features = ["bundled", "extra_check", "fallible_uint"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 # Cloud shallow clones and legacy index manifests in the lazy mirror tests.

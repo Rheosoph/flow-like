@@ -79,7 +79,7 @@ webrtc = "=0.20.5"
 sysinfo = { version = "0.38.4", default-features = false, features = ["system", "network"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-rusqlite = { version = "0.32.1", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled", "fallible_uint"] }
 fs2 = "0.4.3"
 flate2.workspace = true
 tar = { version = "0.4.46", default-features = false }

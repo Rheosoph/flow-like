@@ -341,7 +341,7 @@ thiserror = "2.0.17"
 mimalloc = { version = "0.1.48", default-features = false }
 lettre = { version = "0.11.24", default-features = false, features = ["tokio1-rustls-tls", "builder", "hostname", "pool", "smtp-transport"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
-markitdown = { git = "https://github.com/Rheosoph/markitdown-rs.git", rev = "4c8eb5a9b887f2da696d228d9b6ef5ff6295c97b", default-features = false, features = ["rustls-tls", "static-liblzma"] }
+markitdown = { git = "https://github.com/Rheosoph/markitdown-rs.git", rev = "0650027dcd574a044953fd4973f74d21d9c921ff", default-features = false, features = ["rustls-tls", "static-liblzma"] }
 kube = { version = "0.98", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.24", features = ["v1_32"] }
 percent-encoding = "2.3.2"

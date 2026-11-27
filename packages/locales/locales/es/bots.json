@@ -669,11 +669,13 @@
 			"groupSubtitle": "",
 			"groupSubtitlePeople": "",
 			"label": "",
+			"listWidth": "",
 			"loadFailed": "",
 			"loadFailedTitle": "",
 			"loading": "",
 			"resize": "",
 			"resizeHint": "",
+			"resizeList": "",
 			"signInForBots": "",
 			"signInForConversations": "",
 			"unavailableTitle": "",
@@ -1299,6 +1301,8 @@
 		"safety": {
 			"encryptionHint": "",
 			"handles": "",
+			"othersCanInvite": "",
+			"othersCanInviteHint": "",
 			"privacy": "",
 			"subtitle": "",
 			"title": ""
@@ -1833,6 +1837,7 @@
 			"status": "",
 			"dockerOnDevice": ""
 		},
+		"editBot": "",
 		"encryption": {
 			"fingerprint": "",
 			"host": "",
@@ -1895,6 +1900,7 @@
 			"revoke": "",
 			"title": ""
 		},
+		"resize": "",
 		"show": "",
 		"tabs": "",
 		"skills": {
@@ -2014,6 +2020,7 @@
 			"url": "",
 			"urlExample": ""
 		},
+		"width": "",
 		"working": ""
 	},
 	"presence": {
@@ -2787,6 +2794,11 @@
 	},
 	"teams": {
 		"chats": {
+			"botHidden": "",
+			"editBot": "",
+			"hideBot": "",
+			"startChat": "",
+			"startChatFailed": "",
 			"title": "",
 			"collapse": "",
 			"empty": {
@@ -2804,9 +2816,11 @@
 			},
 			"group": {
 				"bots": "",
+				"colleagues": "",
 				"people": "",
 				"pinned": "",
-				"rooms": ""
+				"rooms": "",
+				"watching": ""
 			},
 			"invite": {
 				"aBot": "",
@@ -2830,12 +2844,15 @@
 			},
 			"ownerBot": "",
 			"settingsFor": "",
+			"undo": "",
 			"view": {
 				"chats": "",
 				"label": "",
 				"org": ""
 			},
-			"waitingFor": ""
+			"waitingFor": "",
+			"botSilent": "",
+			"leadClassified": ""
 		},
 		"org": {
 			"title": "",
@@ -2885,6 +2902,54 @@
 			"invitePeopleHint": "",
 			"invitePeopleTo": "",
 			"invited": "",
+			"io": {
+				"botHint": "",
+				"botTitle": "",
+				"caldav": "",
+				"connectedCalendars": "",
+				"connectedHint": "",
+				"copyAddress": "",
+				"google": "",
+				"in": "",
+				"lastCalled": "",
+				"mailCounts": "",
+				"mailCountsShort": "",
+				"mailInTitle_one": "",
+				"mailInTitle_many": "",
+				"mailInTitle_other": "",
+				"microsoft": "",
+				"more_one": "",
+				"more_many": "",
+				"more_other": "",
+				"moreTitle_one": "",
+				"moreTitle_many": "",
+				"moreTitle_other": "",
+				"neverCalled": "",
+				"out": "",
+				"ownCalendar": "",
+				"ownCalendarHint": "",
+				"ownCalendarLine": "",
+				"sent_one": "",
+				"sent_many": "",
+				"sent_other": "",
+				"sentTitle_one": "",
+				"sentTitle_many": "",
+				"sentTitle_other": "",
+				"teamHint": "",
+				"teamReceived_one": "",
+				"teamReceived_many": "",
+				"teamReceived_other": "",
+				"teamSent_one": "",
+				"teamSent_many": "",
+				"teamSent_other": "",
+				"teamTitle": "",
+				"teamWebhooks_one": "",
+				"teamWebhooks_many": "",
+				"teamWebhooks_other": "",
+				"toggle": "",
+				"webhookNeverTitle": "",
+				"webhookTitle": ""
+			},
 			"lead": "",
 			"leadLabel": "",
 			"leave": "",
@@ -2964,6 +3029,64 @@
 			},
 			"unknownTeam": "",
 			"yourRequests": ""
+		},
+		"reach": {
+			"acceptLead": "",
+			"chat": "",
+			"chatTip": "",
+			"classification": "",
+			"classified": "",
+			"classifiedTip": "",
+			"declineLead": "",
+			"declined": "",
+			"declinedTip": "",
+			"gatedTip": "",
+			"joining": "",
+			"joiningTip": "",
+			"leadClassified": "",
+			"leadOffer": "",
+			"leadPickerHint": "",
+			"level": {
+				"confidential": "",
+				"internal": "",
+				"internalDefault": "",
+				"public": "",
+				"restricted": ""
+			},
+			"noLead": "",
+			"noteLabel": "",
+			"notePlaceholder": "",
+			"offerWaiting": "",
+			"request": "",
+			"requestBody": "",
+			"requestSent": "",
+			"requestTip": "",
+			"requestTitle": "",
+			"sendRequest": "",
+			"stepDown": "",
+			"stepDownBody": "",
+			"stepDownConfirm": "",
+			"stepDownTitle": "",
+			"talk": "",
+			"talkTip": "",
+			"talkToTeam": "",
+			"teamRoom": "",
+			"teamRoomTip": "",
+			"waiting": "",
+			"waitingTip": "",
+			"withdrawBody": "",
+			"withdrawConfirm": "",
+			"withdrawOffer": "",
+			"withdrawTitle": "",
+			"yourClassification": ""
+		},
+		"needs": {
+			"approve": "",
+			"approveConfirm": "",
+			"chatNoNote": "",
+			"chatTitle": "",
+			"leadMeta": "",
+			"leadTitle": ""
 		}
 	}
 }

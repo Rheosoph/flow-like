@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use crate::document::pdf::render::{
-    EmbeddedImage, PdfLayout, PdfMetadata, build_pdf, decode_image, parse_markdown,
-    render_document,
+    EmbeddedImage, PdfLayout, PdfMetadata, build_pdf, decode_image, parse_markdown, render_document,
 };
 
 use super::{Built, Images};

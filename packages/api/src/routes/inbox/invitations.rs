@@ -67,7 +67,7 @@ fn cannot_invite(principal_id: &str) -> ApiError {
         StatusCode::FORBIDDEN,
         INBOX_MEMBER_NOT_ALLOWED,
         format!(
-            "You can't invite '{principal_id}': it is neither a person on this hub nor a live bot"
+            "You can't invite '{principal_id}': it is neither a person on this hub, nor your own live bot, nor a live bot whose owner lets others invite it"
         ),
     )
 }
@@ -111,9 +111,10 @@ async fn known_people<C: ConnectionTrait>(
 }
 
 /// The server's rule for who `caller` may bring into a room, in the order asked: their own live
-/// bots at once; any other person on the hub, and other people's live bots, by invitation, which
-/// the person (or the bot's owner) accepts or declines. The first id that is neither a known
-/// person nor a live bot fails with [`INBOX_MEMBER_NOT_ALLOWED`].
+/// bots at once; any other person on the hub, and other people's live bots whose owner lets
+/// others invite them, by invitation, which the person (or the bot's owner) accepts or declines.
+/// The first id that is none of these fails with [`INBOX_MEMBER_NOT_ALLOWED`], the same way for
+/// a hidden bot as for an unknown id.
 pub(crate) async fn classify<C: ConnectionTrait>(
     db: &C,
     caller: &str,
@@ -122,16 +123,18 @@ pub(crate) async fn classify<C: ConnectionTrait>(
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
-    let bots: HashMap<String, String> = bot::Entity::find()
+    let bots: HashMap<String, (String, bool)> = bot::Entity::find()
         .select_only()
         .column(bot::Column::Id)
         .column(bot::Column::OwnerId)
+        .column(bot::Column::OthersCanInvite)
         .filter(bot::Column::Id.is_in(candidates.iter().cloned()))
         .filter(bot::Column::DeletedAt.is_null())
-        .into_tuple::<(String, String)>()
+        .into_tuple::<(String, String, Option<bool>)>()
         .all(db)
         .await?
         .into_iter()
+        .map(|(id, owner, open)| (id, (owner, open.unwrap_or(false))))
         .collect();
     let people: Vec<String> = candidates
         .iter()
@@ -142,18 +145,19 @@ pub(crate) async fn classify<C: ConnectionTrait>(
     candidates
         .iter()
         .map(|id| match bots.get(id) {
-            Some(owner) if owner == caller => Ok(invitee(
+            Some((owner, _)) if owner == caller => Ok(invitee(
                 id,
                 PrincipalKind::Bot,
                 InviteMode::AddNow,
                 Some(owner),
             )),
-            Some(owner) => Ok(invitee(
+            Some((owner, true)) => Ok(invitee(
                 id,
                 PrincipalKind::Bot,
                 InviteMode::Invite,
                 Some(owner),
             )),
+            Some((_, false)) => Err(cannot_invite(id)),
             None if known.contains(id) => {
                 Ok(invitee(id, PrincipalKind::User, InviteMode::Invite, None))
             }
@@ -797,8 +801,9 @@ async fn bot_page<C: ConnectionTrait>(
 }
 
 /// Who `caller` likely brings into a room, filtered by `q`: their own bots, the people they share
-/// an app with and those people's bots. [`classify`] accepts every entry, and anyone else on the
-/// hub too, whom clients find through the user directory.
+/// an app with and those people's bots whose owner lets others invite them; other bots stay
+/// unlisted. [`classify`] accepts every entry, and anyone else on the hub too, whom clients find
+/// through the user directory.
 pub(crate) async fn invitable<C: ConnectionTrait>(
     db: &C,
     caller: &str,
@@ -814,7 +819,9 @@ pub(crate) async fn invitable<C: ConnectionTrait>(
     .await?;
     let shared = bot_page(
         db,
-        Condition::all().add(bot::Column::OwnerId.in_subquery(co_members(caller))),
+        Condition::all()
+            .add(bot::Column::OwnerId.in_subquery(co_members(caller)))
+            .add(bot::Column::OthersCanInvite.eq(true)),
         needle,
     )
     .await?;
@@ -1379,7 +1386,7 @@ pub async fn set_limits(
     tag = "Inbox",
     params(InvitableQuery),
     responses(
-        (status = 200, description = "Suggestions for who to bring into a room, at most 50 of each: your own bots join at once (`add_now`), people who share an app with you and their bots by invitation (`invite`). Anyone else on the hub can be invited too; find them through the user search.", body = InvitableList),
+        (status = 200, description = "Suggestions for who to bring into a room, at most 50 of each: your own bots join at once (`add_now`), people who share an app with you, and those of their bots they let others invite, by invitation (`invite`). Anyone else on the hub can be invited too; find them through the user search.", body = InvitableList),
         (status = 401, description = "Not signed in"),
         (status = 403, description = "Only people use the picker, not API keys or running flows")
     ),

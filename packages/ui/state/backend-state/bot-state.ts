@@ -138,6 +138,8 @@ export interface IBot {
 	execution_mode?: BotExecutionMode;
 	/** Set when `location` is `device`. */
 	device_id: string | null;
+	/** People who share an app with the owner find the bot and can invite it; older hubs and local bots leave it out. */
+	others_can_invite?: boolean;
 	created_at: string;
 	updated_at: string;
 	/** Lives only on this device until it moves to an account. */
@@ -166,6 +168,7 @@ export interface ICreateBotRequest {
 	location?: BotLocation;
 	execution_mode?: BotExecutionMode;
 	device_id?: string | null;
+	others_can_invite?: boolean;
 }
 
 /** Omitted fields stay as they are; `null` clears a nullable field. */
@@ -188,6 +191,7 @@ export interface IUpdateBotRequest {
 	location?: BotLocation;
 	execution_mode?: BotExecutionMode;
 	device_id?: string | null;
+	others_can_invite?: boolean;
 }
 
 export type BotPermission =

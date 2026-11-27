@@ -662,11 +662,13 @@
 			"groupSubtitle": "Gruppe · {{people}}, {{bots}}",
 			"groupSubtitlePeople": "Gruppe · {{people}}",
 			"label": "Unterhaltung",
+			"listWidth": "Breite der Chatliste: {{width}} Pixel",
 			"loadFailed": "Die Chats öffnen sich, sobald die Liste geladen ist.",
 			"loadFailedTitle": "Deine Bots konnten nicht geladen werden",
 			"loading": "Wird geladen …",
 			"resize": "Chatgröße ändern",
 			"resizeHint": "Zum Ändern der Größe ziehen. Zum Zurücksetzen doppelklicken.",
+			"resizeList": "Breite der Chatliste ändern",
 			"signInForBots": "Melde dich an, um deine Bots zu sehen.",
 			"signInForConversations": "Melde dich an, um deine Unterhaltungen zu sehen.",
 			"unavailableTitle": "Unterhaltung nicht verfügbar",
@@ -1277,6 +1279,8 @@
 		"safety": {
 			"encryptionHint": "Wenn sie eingeschaltet ist, sind seine Nachrichten und Secrets nur für dich und den Host des Bots lesbar. Bots auf einem Gerät kommunizieren ohnehin über einen verschlüsselten Tunnel.",
 			"handles": "Was er verarbeiten darf",
+			"othersCanInvite": "Personen, mit denen du zusammenarbeitest, dürfen ihn einladen",
+			"othersCanInviteHint": "Aus: Nur du siehst ihn und holst ihn in Räume. An: Alle, die eine App mit dir teilen, sehen Namen und Beschreibung, wenn sie jemanden in einen Raum holen, und du nimmst jede Einladung an.",
 			"privacy": "Privatsphäre",
 			"subtitle": "Kennzeichne die sensibelsten Daten, mit denen er arbeiten darf, und entscheide, wer seine Nachrichten lesen kann.",
 			"title": "Schütze seine Daten"
@@ -1791,6 +1795,7 @@
 			"status": "Status",
 			"dockerOnDevice": "Docker auf {{device}}"
 		},
+		"editBot": "Bot bearbeiten",
 		"encryption": {
 			"fingerprint": "Schlüsselfingerabdruck {{fingerprint}}",
 			"host": "Schlüssel liegt bei {{host}}",
@@ -1853,6 +1858,7 @@
 			"revoke": "{{from}} nicht mehr erlauben, {{to}} zu fragen",
 			"title": "Darf fragen"
 		},
+		"resize": "Detailbreite ändern",
 		"show": "Details zu {{name}} anzeigen",
 		"tabs": "Details zu {{name}}",
 		"skills": {
@@ -1971,6 +1977,7 @@
 			"url": "URL",
 			"urlExample": "Secret in der URL"
 		},
+		"width": "Detailbreite: {{width}} Pixel",
 		"working": "Arbeitet…"
 	},
 	"presence": {
@@ -2743,6 +2750,11 @@
 	},
 	"teams": {
 		"chats": {
+			"botHidden": "{{name}} ist in diesem Profil ausgeblendet",
+			"editBot": "Bot bearbeiten",
+			"hideBot": "In diesem Profil ausblenden",
+			"startChat": "Chat starten",
+			"startChatFailed": "Der Chat konnte nicht gestartet werden. Versuche es erneut.",
 			"title": "Chats",
 			"collapse": "{{name}} einklappen",
 			"empty": {
@@ -2760,9 +2772,11 @@
 			},
 			"group": {
 				"bots": "Deine Bots",
+				"colleagues": "Bots von Kolleginnen und Kollegen",
 				"people": "Personen",
 				"pinned": "Angeheftet",
-				"rooms": "Räume"
+				"rooms": "Räume",
+				"watching": "Deine Bots im Einsatz"
 			},
 			"invite": {
 				"aBot": "deinen Bot",
@@ -2786,12 +2800,15 @@
 			},
 			"ownerBot": "Bot von {{name}}",
 			"settingsFor": "Einstellungen für {{name}}",
+			"undo": "Rückgängig",
 			"view": {
 				"chats": "Chats",
 				"label": "Bots-Ansicht",
 				"org": "Organigramm"
 			},
-			"waitingFor": "Wartet auf {{name}}"
+			"waitingFor": "Wartet auf {{name}}",
+			"botSilent": "Bot · Antwortet hier nicht",
+			"leadClassified": "Leitung klassifiziert als {{level}}"
 		},
 		"org": {
 			"title": "Organigramm",
@@ -2841,6 +2858,46 @@
 			"invitePeopleHint": "Sobald sie annehmen, sehen sie die ganze Organisation.",
 			"invitePeopleTo": "Personen zu {{team}} einladen",
 			"invited": "Eingeladen",
+			"io": {
+				"botHint": "Was seine Arbeit außerhalb der Chats startet. Die Zahlen gelten für die letzten {{days}} Tage.",
+				"botTitle": "Wege hinein und hinaus",
+				"caldav": "CalDAV-Kalender",
+				"connectedCalendars": "Verbundene Kalender: {{names}}",
+				"connectedHint": "Verbundene Kalender, die er liest",
+				"copyAddress": "Adresse kopieren",
+				"google": "Google Kalender",
+				"in": "Ein",
+				"lastCalled": "Zuletzt aufgerufen {{when}}",
+				"mailCounts": "{{received}} empfangen · {{sent}} gesendet",
+				"mailCountsShort": "{{received}} rein · {{sent}} raus",
+				"mailInTitle_one": "Mails an {{address}} starten seine Arbeit: {{count}} empfangen in den letzten {{days}} Tagen",
+				"mailInTitle_other": "Mails an {{address}} starten seine Arbeit: {{count}} empfangen in den letzten {{days}} Tagen",
+				"microsoft": "Outlook-Kalender",
+				"more_one": "+{{count}} weiterer",
+				"more_other": "+{{count}} weitere",
+				"moreTitle_one": "{{count}} weiterer Weg hinein. Wähle den Bot, um alle zu sehen",
+				"moreTitle_other": "{{count}} weitere Wege hinein. Wähle den Bot, um alle zu sehen",
+				"neverCalled": "Noch nicht aufgerufen",
+				"out": "Aus",
+				"ownCalendar": "Eigener Kalender: seine Termine wecken ihn",
+				"ownCalendarHint": "Termine, die er führt, wecken ihn, bevor sie beginnen",
+				"ownCalendarLine": "Sein eigener Kalender",
+				"sent_one": "{{count}} gesendet",
+				"sent_other": "{{count}} gesendet",
+				"sentTitle_one": "{{count}} Mail von {{address}} gesendet in den letzten {{days}} Tagen",
+				"sentTitle_other": "{{count}} Mails von {{address}} gesendet in den letzten {{days}} Tagen",
+				"teamHint": "{{received}} Mails rein und {{sent}} raus in den letzten {{days}} Tagen.",
+				"teamReceived_one": "{{count}} Mail hat {{team}} in den letzten {{days}} Tagen erreicht",
+				"teamReceived_other": "{{count}} Mails haben {{team}} in den letzten {{days}} Tagen erreicht",
+				"teamSent_one": "{{team}} hat in den letzten {{days}} Tagen {{count}} Mail gesendet",
+				"teamSent_other": "{{team}} hat in den letzten {{days}} Tagen {{count}} Mails gesendet",
+				"teamTitle": "Ein- und Ausgänge",
+				"teamWebhooks_one": "{{count}} Webhook führt zu {{team}}",
+				"teamWebhooks_other": "{{count}} Webhooks führen zu {{team}}",
+				"toggle": "Ein- & Ausgänge",
+				"webhookNeverTitle": "Webhook {{name}} startet seine Arbeit. Noch nicht aufgerufen",
+				"webhookTitle": "Webhook {{name}} startet seine Arbeit. Zuletzt aufgerufen {{when}}"
+			},
 			"lead": "Leitung",
 			"leadLabel": "Leitung",
 			"leave": "Team verlassen",
@@ -2920,6 +2977,64 @@
 			},
 			"unknownTeam": "einem Team",
 			"yourRequests": "Deine Anfragen"
+		},
+		"reach": {
+			"acceptLead": "Annehmen",
+			"chat": "Chat",
+			"chatTip": "Deinen Chat mit {{bot}} öffnen",
+			"classification": "Klassifizierung",
+			"classified": "Klassifiziert",
+			"classifiedTip": "{{bot}} ist als {{level}} klassifiziert, höher als du ({{yours}})",
+			"declineLead": "Ablehnen",
+			"declined": "Abgelehnt",
+			"declinedTip": "Ab {{date}} kannst du wieder fragen",
+			"gatedTip": "Antwortet nicht im Teamraum: Dort ist jemand nicht für {{level}} klassifiziert",
+			"joining": "Tritt bei",
+			"joiningTip": "{{bot}} ist noch nicht dabei: Sein Besitzer muss erst zustimmen",
+			"leadClassified": "Leitung klassifiziert als {{level}}",
+			"leadOffer": "{{team}} bittet {{bot}}, die Leitung zu übernehmen. Dann können alle in {{org}} mit ihm sprechen, und seine Durchläufe gehen auf dich (bis zu {{limit}} pro Person und Tag).",
+			"leadPickerHint": "Der Bot einer anderen Person übernimmt die Leitung erst, wenn sein Besitzer zustimmt.",
+			"level": {
+				"confidential": "Vertraulich",
+				"internal": "Intern",
+				"internalDefault": "Intern (Standard)",
+				"public": "Öffentlich",
+				"restricted": "Streng vertraulich"
+			},
+			"noLead": "Keine Leitung: Dieses Team ist nicht direkt erreichbar",
+			"noteLabel": "Notiz",
+			"notePlaceholder": "Optional: Worüber möchtest du sprechen?",
+			"offerWaiting": "Wartet auf die Zustimmung von {{owner}}",
+			"request": "Chat anfragen",
+			"requestBody": "{{owner}} entscheidet und liest im Chat mit. Schreib, was du brauchst.",
+			"requestSent": "Anfrage an {{owner}} gesendet",
+			"requestTip": "Frag {{owner}}, ob du mit {{bot}} chatten darfst",
+			"requestTitle": "Chat mit {{bot}} anfragen",
+			"sendRequest": "Anfrage senden",
+			"stepDown": "Leitung abgeben",
+			"stepDownBody": "{{bot}} bleibt im Team, aber niemand kann {{team}} direkt erreichen, bis ein anderer Bot die Leitung übernimmt.",
+			"stepDownConfirm": "Abgeben",
+			"stepDownTitle": "Leitung von {{team}} abgeben?",
+			"talk": "Sprechen",
+			"talkTip": "Sprich mit {{bot}}, der Leitung von {{team}}. Seine Durchläufe gehen auf {{owner}}.",
+			"talkToTeam": "Mit {{team}} sprechen",
+			"teamRoom": "Teamraum",
+			"teamRoomTip": "Sprich mit {{bot}} im Teamraum von {{team}}",
+			"waiting": "Wartet",
+			"waitingTip": "Wartet auf {{owner}}",
+			"withdrawBody": "Damit fallen die Anfrage und die aktuelle Leitung weg: {{team}} hat keine Leitung, bis du eine auswählst.",
+			"withdrawConfirm": "Zurückziehen",
+			"withdrawOffer": "Zurückziehen",
+			"withdrawTitle": "Leitungsanfrage zurückziehen?",
+			"yourClassification": "Deine Klassifizierung in {{org}}: {{level}}"
+		},
+		"needs": {
+			"approve": "Erlauben",
+			"approveConfirm": "Erlauben und freigeben",
+			"chatNoNote": "Keine Notiz",
+			"chatTitle": "{{name}} möchte mit {{bot}} sprechen",
+			"leadMeta": "Dann können alle in {{org}} mit ihm sprechen, und seine Durchläufe gehen auf dich (bis zu {{limit}} pro Person und Tag).",
+			"leadTitle": "{{team}} bittet {{bot}}, die Leitung zu übernehmen"
 		}
 	}
 }

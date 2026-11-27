@@ -34,7 +34,7 @@ openmls_basic_credential = "0.6.0"
 openmls_traits = "0.6.0"
 openmls_rust_crypto = "0.6.0"
 tls_codec = "0.5"
-rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }
+rusqlite = { version = "0.43", features = ["bundled", "fallible_uint"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys = { version = "0.3", optional = true }

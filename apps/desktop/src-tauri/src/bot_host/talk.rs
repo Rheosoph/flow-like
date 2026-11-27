@@ -79,8 +79,12 @@ impl AccountTalkHost {
     }
 
     async fn fetch_roster(&self, caller: &CrewMember) -> flow_like_types::Result<Roster> {
-        self.call(Method::GET, format!("bots/{}/talk/roster", caller.id), None)
-            .await
+        let path = format!(
+            "bots/{}/talk/roster?run_id={}",
+            caller.id,
+            urlencoding::encode(&self.run_id)
+        );
+        self.call(Method::GET, path, None).await
     }
 
     async fn settle_card_answer(

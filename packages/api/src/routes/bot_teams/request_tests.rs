@@ -58,6 +58,9 @@ async fn security(db: &DatabaseConnection) -> String {
     patch(db, "mara", &security, lead("jonas-bot"))
         .await
         .unwrap();
+    super::lead::accept_lead_in(db, "jonas", &security, "jonas-bot", at(5))
+        .await
+        .unwrap();
     security
 }
 

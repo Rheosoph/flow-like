@@ -662,11 +662,13 @@
 			"groupSubtitle": "Group · {{people}}, {{bots}}",
 			"groupSubtitlePeople": "Group · {{people}}",
 			"label": "Conversation",
+			"listWidth": "Chat list width: {{width}} pixels",
 			"loadFailed": "Their chats open once the list loads.",
 			"loadFailedTitle": "Couldn't load your bots",
 			"loading": "Loading…",
 			"resize": "Resize chat",
 			"resizeHint": "Drag to resize. Double-click to reset.",
+			"resizeList": "Resize chat list",
 			"signInForBots": "Sign in to see your bots.",
 			"signInForConversations": "Sign in to see your conversations.",
 			"unavailableTitle": "Conversation unavailable",
@@ -1277,6 +1279,8 @@
 		"safety": {
 			"encryptionHint": "When it's on, only you and the bot's host can read its messages and secrets. Bots on a device already talk over an encrypted tunnel.",
 			"handles": "What it may handle",
+			"othersCanInvite": "People you work with can invite it",
+			"othersCanInviteHint": "Off: only you see it and bring it into rooms. On: people who share an app with you see its name and description when they bring someone into a room, and you accept each invitation.",
 			"privacy": "Privacy",
 			"subtitle": "Label the most sensitive data it may work with, and decide who can read its messages.",
 			"title": "Keep its data safe"
@@ -1791,6 +1795,7 @@
 			"status": "Status",
 			"dockerOnDevice": "Docker on {{device}}"
 		},
+		"editBot": "Edit bot",
 		"encryption": {
 			"fingerprint": "Key fingerprint {{fingerprint}}",
 			"host": "Key held by {{host}}",
@@ -1853,6 +1858,7 @@
 			"revoke": "Stop {{from}} asking {{to}}",
 			"title": "Can ask"
 		},
+		"resize": "Resize details",
 		"show": "Show {{name}}'s details",
 		"tabs": "{{name}}'s details",
 		"skills": {
@@ -1971,6 +1977,7 @@
 			"url": "URL",
 			"urlExample": "Secret in the URL"
 		},
+		"width": "Details width: {{width}} pixels",
 		"working": "Working…"
 	},
 	"presence": {
@@ -2743,6 +2750,11 @@
 	},
 	"teams": {
 		"chats": {
+			"botHidden": "{{name}} is hidden in this profile",
+			"editBot": "Edit bot",
+			"hideBot": "Hide in this profile",
+			"startChat": "Start a chat",
+			"startChatFailed": "Couldn't start the chat. Try again.",
 			"title": "Chats",
 			"collapse": "Collapse {{name}}",
 			"empty": {
@@ -2760,9 +2772,11 @@
 			},
 			"group": {
 				"bots": "Your bots",
+				"colleagues": "Colleagues' bots",
 				"people": "People",
 				"pinned": "Pinned",
-				"rooms": "Rooms"
+				"rooms": "Rooms",
+				"watching": "Your bots at work"
 			},
 			"invite": {
 				"aBot": "your bot",
@@ -2786,12 +2800,15 @@
 			},
 			"ownerBot": "{{name}}'s bot",
 			"settingsFor": "Settings for {{name}}",
+			"undo": "Undo",
 			"view": {
 				"chats": "Chats",
 				"label": "Bots view",
 				"org": "Org chart"
 			},
-			"waitingFor": "Waiting for {{name}}"
+			"waitingFor": "Waiting for {{name}}",
+			"botSilent": "Bot · Doesn't answer here",
+			"leadClassified": "Lead classified {{level}}"
 		},
 		"org": {
 			"title": "Org chart",
@@ -2841,6 +2858,46 @@
 			"invitePeopleHint": "They see the whole org once they accept.",
 			"invitePeopleTo": "Invite people to {{team}}",
 			"invited": "Invited",
+			"io": {
+				"botHint": "What starts its work outside the chats. Counts cover the last {{days}} days.",
+				"botTitle": "Ways in and out",
+				"caldav": "CalDAV calendar",
+				"connectedCalendars": "Connected calendars: {{names}}",
+				"connectedHint": "Connected calendars it reads",
+				"copyAddress": "Copy address",
+				"google": "Google Calendar",
+				"in": "In",
+				"lastCalled": "Last called {{when}}",
+				"mailCounts": "{{received}} received · {{sent}} sent",
+				"mailCountsShort": "{{received}} in · {{sent}} out",
+				"mailInTitle_one": "Mail to {{address}} starts its work: {{count}} received in the last {{days}} days",
+				"mailInTitle_other": "Mail to {{address}} starts its work: {{count}} received in the last {{days}} days",
+				"microsoft": "Outlook calendar",
+				"more_one": "+{{count}} more",
+				"more_other": "+{{count}} more",
+				"moreTitle_one": "{{count}} more way in. Select the bot to see all",
+				"moreTitle_other": "{{count}} more ways in. Select the bot to see all",
+				"neverCalled": "Not called yet",
+				"out": "Out",
+				"ownCalendar": "Own calendar: its events wake it",
+				"ownCalendarHint": "Events it keeps wake it before they start",
+				"ownCalendarLine": "Its own calendar",
+				"sent_one": "{{count}} sent",
+				"sent_other": "{{count}} sent",
+				"sentTitle_one": "Sent {{count}} mail from {{address}} in the last {{days}} days",
+				"sentTitle_other": "Sent {{count}} mails from {{address}} in the last {{days}} days",
+				"teamHint": "{{received}} mails in and {{sent}} out in the last {{days}} days.",
+				"teamReceived_one": "{{count}} mail reached {{team}} in the last {{days}} days",
+				"teamReceived_other": "{{count}} mails reached {{team}} in the last {{days}} days",
+				"teamSent_one": "{{team}} sent {{count}} mail in the last {{days}} days",
+				"teamSent_other": "{{team}} sent {{count}} mails in the last {{days}} days",
+				"teamTitle": "Ins and outs",
+				"teamWebhooks_one": "{{count}} webhook leads into {{team}}",
+				"teamWebhooks_other": "{{count}} webhooks lead into {{team}}",
+				"toggle": "Ins & outs",
+				"webhookNeverTitle": "Webhook {{name}} starts its work. Not called yet",
+				"webhookTitle": "Webhook {{name}} starts its work. Last called {{when}}"
+			},
 			"lead": "Lead",
 			"leadLabel": "Lead",
 			"leave": "Leave team",
@@ -2920,6 +2977,64 @@
 			},
 			"unknownTeam": "a team",
 			"yourRequests": "Your requests"
+		},
+		"reach": {
+			"acceptLead": "Accept",
+			"chat": "Chat",
+			"chatTip": "Open your chat with {{bot}}",
+			"classification": "Classification",
+			"classified": "Classified",
+			"classifiedTip": "{{bot}} is {{level}}, above your classification ({{yours}})",
+			"declineLead": "Decline",
+			"declined": "Declined",
+			"declinedTip": "Ask again from {{date}}",
+			"gatedTip": "Doesn't answer in the team room: someone there isn't classified for {{level}}",
+			"joining": "Joining",
+			"joiningTip": "{{bot}} has not joined yet: its owner has to accept first",
+			"leadClassified": "Lead classified {{level}}",
+			"leadOffer": "{{team}} asks {{bot}} to lead it. Everyone in {{org}} can then talk to it, and its turns are on you (up to {{limit}} per person a day).",
+			"leadPickerHint": "Another person's bot leads only after its owner accepts.",
+			"level": {
+				"confidential": "Confidential",
+				"internal": "Internal",
+				"internalDefault": "Internal (default)",
+				"public": "Public",
+				"restricted": "Restricted"
+			},
+			"noLead": "No lead: this team can't be contacted directly",
+			"noteLabel": "Note",
+			"notePlaceholder": "Optional: what would you like to talk about?",
+			"offerWaiting": "Waiting for {{owner}} to accept",
+			"request": "Ask to chat",
+			"requestBody": "{{owner}} decides and sits in the chat to watch. Say what you need.",
+			"requestSent": "Request sent to {{owner}}",
+			"requestTip": "Ask {{owner}} to let you chat with {{bot}}",
+			"requestTitle": "Ask to chat with {{bot}}",
+			"sendRequest": "Send request",
+			"stepDown": "Step down as lead",
+			"stepDownBody": "{{bot}} stays in the team, but nobody can talk to {{team}} directly until another bot leads it.",
+			"stepDownConfirm": "Step down",
+			"stepDownTitle": "Step down as lead of {{team}}?",
+			"talk": "Talk",
+			"talkTip": "Talk to {{bot}}, the lead of {{team}}. Its turns are on {{owner}}.",
+			"talkToTeam": "Talk to {{team}}",
+			"teamRoom": "Team room",
+			"teamRoomTip": "Talk to {{bot}} in the {{team}} team room",
+			"waiting": "Waiting",
+			"waitingTip": "Waiting for {{owner}}",
+			"withdrawBody": "This clears the request and the current lead: {{team}} has no lead until you pick one.",
+			"withdrawConfirm": "Withdraw",
+			"withdrawOffer": "Withdraw",
+			"withdrawTitle": "Withdraw the lead request?",
+			"yourClassification": "Your classification in {{org}}: {{level}}"
+		},
+		"needs": {
+			"approve": "Approve",
+			"approveConfirm": "Approve and allow",
+			"chatNoNote": "No note added",
+			"chatTitle": "{{name}} wants to talk with {{bot}}",
+			"leadMeta": "Everyone in {{org}} can then talk to it, and its turns are on you (up to {{limit}} per person a day).",
+			"leadTitle": "{{team}} asks {{bot}} to lead it"
 		}
 	}
 }

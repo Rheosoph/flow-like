@@ -373,6 +373,48 @@ afterEach(() => {
 });
 
 describe("mount", () => {
+	test("asks for sandbox access while the grant is minted, and the frame reuses it", async () => {
+		const backend = stubBackend();
+		const accessCalls: WidgetAccessRequest[] = [];
+		let releaseMint!: () => void;
+		const registry = {
+			...backend.registry,
+			mintWidgetGrant: (request: WidgetGrantRequest) =>
+				new Promise((resolve) => {
+					releaseMint = () =>
+						resolve(
+							parseWidgetGrantResponse(
+								mintAnswer(request, 1),
+								isWebWidgetGrant,
+							),
+						);
+				}),
+			getWidgetAccess: async (request: WidgetAccessRequest) => {
+				accessCalls.push(structuredClone(request));
+				return { access: "sandbox-token", expiresIn: 3600 };
+			},
+		} as unknown as IRegistryState;
+		const view = mount({ ...backend, registry }, layers(A, B));
+		await flush();
+		view.controller.actions.allowOnce();
+		await flush();
+
+		expect(view.grant.state.status).not.toBe("ready");
+		expect(accessCalls).toEqual([
+			{ packageId: PACKAGE, packageVersion: "1.0.0", appId: APP },
+		]);
+
+		releaseMint();
+		await flush();
+		expect(view.grant.state.status).toBe("ready");
+		await loadMicroWidgetAccess(
+			registry,
+			{ packageId: PACKAGE, packageVersion: "1.0.0", appId: APP },
+			clock,
+		);
+		expect(accessCalls).toHaveLength(1);
+	});
+
 	test("describes the extracted origins and mints with exactly the approved request", async () => {
 		const backend = stubBackend();
 		const view = mount(backend, layers(A, B));

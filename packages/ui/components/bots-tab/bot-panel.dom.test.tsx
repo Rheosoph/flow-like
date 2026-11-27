@@ -561,7 +561,7 @@ describe("Details", () => {
 	});
 
 	test("Edit opens the bot's settings", async () => {
-		await click(panelButton("Edit"));
+		await click(panelButton("Edit bot"));
 		expect(editor).toEqual({ open: true, botId: "bot_scout" });
 	});
 

@@ -7,7 +7,9 @@
 
 use crate::host::{RunOutcome, TurnEvents, TurnJob};
 use async_trait::async_trait;
-use flow_like::flow::copilot::reply_stream::{Message, ReplyOutbox, ReplyRoute, ReplyStream, interval_for};
+use flow_like::flow::copilot::reply_stream::{
+    Message, ReplyOutbox, ReplyRoute, ReplyStream, interval_for,
+};
 use flow_like_types::realtime::RealtimeReply;
 use std::{sync::Arc, time::Instant};
 
@@ -80,11 +82,7 @@ pub fn open(
         messages: 0,
         live_call: job.live_call,
     };
-    let stream = ReplyStream::start(
-        outlet,
-        job.tool_gate.clone(),
-        interval_for(job.live_call),
-    );
+    let stream = ReplyStream::start(outlet, job.tool_gate.clone(), interval_for(job.live_call));
     job.reply_stream = Some(stream.sink());
     Some(stream)
 }

@@ -1,13 +1,16 @@
 import type {
+	IBotChat,
 	IBotRoomLimits,
 	IBotTeamState,
 	ICreateTeamRequest,
 	IOrgView,
 	ITeam,
 	ITeamBriefing,
+	ITeamThread,
 	IUpdateTeamRequest,
 	TeamRole,
 } from "@flow-like/flow-like-ui";
+import type { DataClassification } from "@flow-like/flow-like-ui/lib/data-classification";
 import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import {
 	type WebBackendRef,
@@ -32,11 +35,37 @@ function botPath(teamId: string, botId: string): string {
 	return `${teamPath(teamId)}/bots/${encodeURIComponent(botId)}`;
 }
 
+function chatPath(botId: string, userId: string): string {
+	return `${TEAMS}/chats/${encodeURIComponent(botId)}/${encodeURIComponent(userId)}`;
+}
+
 function expectTeam(response: unknown, operation: string): ITeam {
 	if (!isRecord(response) || typeof response.id !== "string") {
 		throw new Error(`Unexpected response while trying to ${operation}`);
 	}
 	return response as unknown as ITeam;
+}
+
+function expectChat(response: unknown, operation: string): IBotChat {
+	if (
+		!isRecord(response) ||
+		typeof response.bot_id !== "string" ||
+		typeof response.user_id !== "string"
+	) {
+		throw new Error(`Unexpected response while trying to ${operation}`);
+	}
+	return response as unknown as IBotChat;
+}
+
+function expectThread(response: unknown, operation: string): ITeamThread {
+	if (!isRecord(response) || typeof response.conversation_id !== "string") {
+		throw new Error(`Unexpected response while trying to ${operation}`);
+	}
+	return response as unknown as ITeamThread;
+}
+
+function list<T>(value: T[] | undefined): T[] {
+	return Array.isArray(value) ? value : [];
 }
 
 export class WebBotTeamState implements IBotTeamState {
@@ -45,12 +74,13 @@ export class WebBotTeamState implements IBotTeamState {
 	async getOrg(): Promise<IOrgView> {
 		const response = await apiGet<Partial<IOrgView>>(TEAMS, this.backend.auth);
 		return {
-			teams: Array.isArray(response?.teams) ? response.teams : [],
-			bots: Array.isArray(response?.bots) ? response.bots : [],
-			invitations: Array.isArray(response?.invitations)
-				? response.invitations
-				: [],
-			threads: Array.isArray(response?.threads) ? response.threads : [],
+			teams: list(response?.teams),
+			bots: list(response?.bots),
+			invitations: list(response?.invitations),
+			threads: list(response?.threads),
+			reach: list(response?.reach),
+			chats: list(response?.chats),
+			classifications: list(response?.classifications),
 		};
 	}
 
@@ -192,5 +222,96 @@ export class WebBotTeamState implements IBotTeamState {
 			);
 		}
 		return response;
+	}
+
+	async acceptLead(teamId: string, botId: string): Promise<ITeam> {
+		return expectTeam(
+			await apiPost<ITeam>(
+				`${botPath(teamId, botId)}/lead/accept`,
+				undefined,
+				this.backend.auth,
+			),
+			`let bot ${botId} lead team ${teamId}`,
+		);
+	}
+
+	async declineLead(teamId: string, botId: string): Promise<void> {
+		await apiPost(
+			`${botPath(teamId, botId)}/lead/decline`,
+			undefined,
+			this.backend.auth,
+		);
+	}
+
+	async resignLead(teamId: string, botId: string): Promise<ITeam> {
+		return expectTeam(
+			await apiPost<ITeam>(
+				`${botPath(teamId, botId)}/lead/resign`,
+				undefined,
+				this.backend.auth,
+			),
+			`step bot ${botId} down as lead of team ${teamId}`,
+		);
+	}
+
+	async openThread(teamId: string): Promise<ITeamThread> {
+		return expectThread(
+			await apiPost<ITeamThread>(
+				`${teamPath(teamId)}/thread`,
+				undefined,
+				this.backend.auth,
+			),
+			`open your thread with team ${teamId}`,
+		);
+	}
+
+	async requestChat(botId: string, note?: string | null): Promise<IBotChat> {
+		return expectChat(
+			await apiPost<IBotChat>(
+				`${TEAMS}/chats`,
+				{ bot_id: botId, note: note ?? undefined },
+				this.backend.auth,
+			),
+			`ask for a chat with bot ${botId}`,
+		);
+	}
+
+	async acceptChat(
+		botId: string,
+		userId: string,
+		limits?: IBotRoomLimits | null,
+	): Promise<IBotChat> {
+		return expectChat(
+			await apiPost<IBotChat>(
+				`${chatPath(botId, userId)}/accept`,
+				{ limits: limits ?? undefined },
+				this.backend.auth,
+			),
+			`approve a chat with bot ${botId}`,
+		);
+	}
+
+	async declineChat(botId: string, userId: string): Promise<void> {
+		await apiPost(
+			`${chatPath(botId, userId)}/decline`,
+			undefined,
+			this.backend.auth,
+		);
+	}
+
+	async endChat(botId: string, userId: string): Promise<void> {
+		await apiDelete(chatPath(botId, userId), this.backend.auth);
+	}
+
+	async setClassification(
+		orgId: string,
+		userId: string,
+		classification: DataClassification | null,
+	): Promise<void> {
+		await apiPut(
+			`${teamPath(orgId)}/classifications/${encodeURIComponent(userId)}`,
+			{ classification },
+			this.backend.auth,
+		);
 	}
 }

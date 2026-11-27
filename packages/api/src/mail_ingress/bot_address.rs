@@ -81,6 +81,38 @@ pub(crate) async fn address_of<C: ConnectionTrait>(
     .map(|held| held.address))
 }
 
+/// The active addresses of `bot_ids` by bot id, in one query.
+pub(crate) async fn addresses_of<C: ConnectionTrait>(
+    db: &C,
+    bot_ids: &[String],
+) -> Result<std::collections::HashMap<String, String>, ApiError> {
+    #[derive(FromQueryResult)]
+    struct Row {
+        #[sea_orm(from_alias = "eventId")]
+        event_id: String,
+        address: String,
+    }
+    if bot_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let placeholders = (1..=bot_ids.len())
+        .map(|index| format!("${index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        r#"SELECT "eventId","address" FROM "InboundMailAddress" WHERE "kind"='bot' AND "appId"='bot' AND "active"=TRUE AND "eventId" IN ({placeholders})"#
+    );
+    Ok(Row::find_by_statement(statement(
+        &sql,
+        bot_ids.iter().map(|id| id.as_str().into()).collect(),
+    ))
+    .all(db)
+    .await?
+    .into_iter()
+    .map(|row| (row.event_id, row.address))
+    .collect())
+}
+
 /// The bot an active address belongs to, deleted bots excluded.
 pub(crate) async fn bot_of_address<C: ConnectionTrait>(
     db: &C,

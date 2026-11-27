@@ -8,7 +8,11 @@ import type { IConversation } from "../../state/backend-state/inbox-state";
 import { IdentityAvatar } from "../identity/identity-avatar";
 import { Button } from "../ui/button";
 import { LocalConversationMark } from "./bot-labels";
-import { ConversationMenu } from "./conversation-menu";
+import {
+	ConversationMenu,
+	type ConversationMenuOptions,
+	useConversationMenu,
+} from "./conversation-menu";
 import {
 	type TimelineBucket,
 	conversationTimeline,
@@ -16,10 +20,12 @@ import {
 	foldTimeline,
 	isSelfPrincipal,
 	otherMemberIds,
+	unreadOf,
 } from "./crew-model";
 import { UnreadBadge } from "./crew-section";
 import { conversationBlockTarget } from "./principal-block-action";
 import { RoomAvatar } from "./room-avatar";
+import { OptionsDropdown, RowContextMenu } from "./row-menu";
 import type { ConversationText } from "./use-conversation-text";
 import type { CrewDirectory } from "./use-crew-directory";
 
@@ -99,6 +105,35 @@ export function ConversationAvatar({
 	);
 }
 
+const HOVER_REVEAL =
+	"size-7 opacity-0 group-focus-within/conversation:opacity-100 group-hover/conversation:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100";
+
+function listMenuOptions(
+	conversation: IConversation,
+	context: ConversationListContext,
+): ConversationMenuOptions {
+	return {
+		conversation,
+		defaultTitle: context.text.title({ ...conversation, title: null }),
+		withMute: true,
+		me: context.me,
+		blockTarget: conversationBlockTarget(
+			conversation,
+			context.directory,
+			context.me,
+		),
+		onLeave: () => context.onLeave?.(conversation.id),
+	};
+}
+
+/** A listed conversation's options, for a row that adds its own. */
+export function useListConversationMenu(
+	conversation: IConversation,
+	context: ConversationListContext,
+) {
+	return useConversationMenu(listMenuOptions(conversation, context));
+}
+
 /** Options for one conversation, shown on hover or focus and always on touch screens. */
 export function ConversationOptions({
 	conversation,
@@ -111,21 +146,41 @@ export function ConversationOptions({
 }>) {
 	return (
 		<ConversationMenu
-			conversation={conversation}
-			defaultTitle={context.text.title({ ...conversation, title: null })}
-			withMute
-			me={context.me}
-			blockTarget={conversationBlockTarget(
-				conversation,
-				context.directory,
-				context.me,
-			)}
-			onLeave={() => context.onLeave?.(conversation.id)}
-			className={cn(
-				"size-7 opacity-0 group-focus-within/conversation:opacity-100 group-hover/conversation:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100",
-				className,
-			)}
+			{...listMenuOptions(conversation, context)}
+			className={cn(HOVER_REVEAL, className)}
 		/>
+	);
+}
+
+/**
+ * A conversation's row in a list: a right-click or long press opens its options, as does the
+ * "…" button that shows on hover.
+ */
+export function ConversationRowMenu({
+	conversation,
+	context,
+	className,
+	buttonClassName,
+	children,
+}: Readonly<{
+	conversation: IConversation;
+	context: ConversationListContext;
+	className?: string;
+	buttonClassName?: string;
+	children: ReactNode;
+}>) {
+	const { items, dialogs } = useListConversationMenu(conversation, context);
+	return (
+		<>
+			<RowContextMenu items={items} className={className}>
+				{children}
+				<OptionsDropdown
+					items={items}
+					className={cn(HOVER_REVEAL, buttonClassName)}
+				/>
+			</RowContextMenu>
+			{dialogs}
+		</>
 	);
 }
 
@@ -227,7 +282,7 @@ function TimelineRow({
 	const { t } = useTranslation("bots");
 	const { text } = context;
 	const selected = conversation.id === context.selectedConversationId;
-	const unread = conversation.unread_count > 0;
+	const unread = unreadOf(conversation) > 0;
 	const { room, partnerIsBot, line } = useConversationPreview(
 		conversation,
 		context,
@@ -307,7 +362,7 @@ function TimelineRow({
 							{line}
 						</span>
 					</span>
-					<UnreadBadge count={conversation.unread_count} />
+					<UnreadBadge count={unreadOf(conversation)} />
 				</button>
 				<ConversationOptions
 					conversation={conversation}
@@ -343,7 +398,7 @@ export function ConversationTimeline({
 					timeline,
 					FOLDED_MINIMUM,
 					(conversation) =>
-						conversation.unread_count > 0 ||
+						unreadOf(conversation) > 0 ||
 						conversation.id === context.selectedConversationId,
 				);
 	return (

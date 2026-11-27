@@ -117,7 +117,7 @@ jobs:
   lightweight-boundaries:
     name: Compile lightweight Rust boundaries
     needs: dependency-boundaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -154,7 +154,7 @@ jobs:
   catalog-boundaries:
     name: Compile catalog Rust boundaries
     needs: dependency-boundaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

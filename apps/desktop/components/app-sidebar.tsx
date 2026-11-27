@@ -234,12 +234,7 @@ export function AppSidebar({
 					<MobileHeaderProvider>
 						<MobileHeader showSidebarTrigger={false} />
 						<SidebarInset className="relative flex flex-col flex-1 min-h-0 h-full overflow-hidden">
-							<FlowBackground
-								intensity="subtle"
-								interactive
-								active={!chromeless}
-								className="flex flex-col flex-1 min-h-0 h-full"
-							>
+							<FlowBackground className="flex flex-col flex-1 min-h-0 h-full">
 								{children}
 							</FlowBackground>
 						</SidebarInset>

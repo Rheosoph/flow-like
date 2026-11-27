@@ -1,4 +1,5 @@
 import type { BotAppearance } from "../../components/bots/types";
+import type { DataClassification } from "../../lib/data-classification";
 import type { BotLocation, BotSystemKey } from "./bot-state";
 import type { IBotRoomLimits } from "./inbox-state";
 
@@ -37,6 +38,10 @@ export interface ITeam {
 	direct_asks: boolean;
 	/** The team room: a group conversation of the team's active people and bots. */
 	conversation_id?: string | null;
+	/** The bot an admin asked to lead the team, until its owner answers; only admins and that owner see it. */
+	lead_offer_bot_id?: string | null;
+	/** Bots that take no turn in the team room while someone in it is classified below them. */
+	gated_bots?: string[];
 	people: ITeamPerson[];
 	bots: ITeamBot[];
 	created_at: string;
@@ -56,9 +61,50 @@ export interface IOrgBot {
 	location: BotLocation;
 	/** The bot's data classification, lowercase; null counts as internal. */
 	classification?: string | null;
+	/** What starts its work from outside the chats, and what it sends out. Older hubs leave it out. */
+	inputs?: IOrgBotInputs;
 }
 
-export type TeamInvitationKind = "person" | "bot" | "direct_asks";
+/** Days `IOrgBotMail` counts mail over. */
+export const ORG_MAIL_WINDOW_DAYS = 7;
+
+export interface IOrgBotMail {
+	address: string;
+	/** Mails it received in the last `ORG_MAIL_WINDOW_DAYS` days. */
+	received: number;
+	/** Mails it sent in the last `ORG_MAIL_WINDOW_DAYS` days. */
+	sent: number;
+}
+
+export interface IOrgBotWebhook {
+	name: string;
+	last_called_at?: string | null;
+}
+
+export type OrgCalendarProvider = "google" | "microsoft" | "caldav";
+
+/** How work reaches a bot from outside its chats; never a webhook path, a secret or an account. */
+export interface IOrgBotInputs {
+	/** Its own mail address while the email ability is on. */
+	mail?: IOrgBotMail | null;
+	/** Its switched-on webhooks while the webhook ability is on. */
+	webhooks: IOrgBotWebhook[];
+	/** The calendar ability is on: it keeps its own calendar and its events wake it. */
+	own_calendar: boolean;
+	/** One provider per connected calendar it reads. */
+	connected_calendars: OrgCalendarProvider[];
+}
+
+/**
+ * `lead`: an admin asks the reader's bot to lead the team (everyone in the org can then talk to it).
+ * `chat_request`: someone in the org (`user_id`) asks to talk with the reader's bot.
+ */
+export type TeamInvitationKind =
+	| "person"
+	| "bot"
+	| "direct_asks"
+	| "lead"
+	| "chat_request";
 
 /** One answer the reader owes a team. */
 export interface ITeamInvitation {
@@ -67,10 +113,71 @@ export interface ITeamInvitation {
 	team_name: string;
 	/** The name of the team's top-level team. */
 	org_name: string;
-	/** The reader's bot, for `bot` and `direct_asks`. */
+	/** The reader's bot, for every kind but `person`. */
 	bot_id?: string | null;
 	invited_by?: string | null;
+	/** For `chat_request`: who asks. */
+	user_id?: string | null;
+	/** For `chat_request`: why they ask. */
+	note?: string | null;
 	created_at: string;
+}
+
+/** Characters of the note a person sends with a chat request. */
+export const MAX_CHAT_NOTE_CHARS = 280;
+/** Days a declined chat request waits before the person may ask again. */
+export const CHAT_RETRY_DAYS = 7;
+
+/**
+ * Whether and where the reader can talk with a bot of their org:
+ * `own` their bot; `unavailable` invited, not accepted yet; `classified` above the reader;
+ * `team_room` a bot of the reader's team; `lead` another team's lead (the reader's thread with it);
+ * `chat` an approved chat; `requested` waiting for the owner; `declined` ask again from `retry_at`;
+ * `request` the reader may ask its owner for a chat.
+ */
+export type TalkReach =
+	| "own"
+	| "unavailable"
+	| "classified"
+	| "team_room"
+	| "lead"
+	| "chat"
+	| "requested"
+	| "declined"
+	| "request";
+
+export interface IBotReach {
+	bot_id: string;
+	reach: TalkReach;
+	/** The team room, the reader's thread with the team, or the approved chat; null for a lead until the thread exists. */
+	conversation_id?: string | null;
+	/** For `declined`. */
+	retry_at?: string | null;
+}
+
+export type BotChatStatus = "pending" | "active" | "declined" | "ended";
+
+/** A person's chat with another owner's bot; members are the person, the bot and the owner, who watches. */
+export interface IBotChat {
+	bot_id: string;
+	/** The person who asked. */
+	user_id: string;
+	/** The bot's owner, who decides and watches. */
+	owner_id: string;
+	status: BotChatStatus;
+	/** Exists once approved. */
+	conversation_id?: string | null;
+	note?: string | null;
+	requested_at: string;
+	decided_at?: string | null;
+}
+
+/** A person's classification in an org, set by an admin of its top-level team. */
+export interface IPersonClassification {
+	/** The org's top-level team. */
+	org_id: string;
+	user_id: string;
+	classification: DataClassification;
 }
 
 /** Every team of every org the reader belongs to, the bots in them, and what waits for the reader. */
@@ -80,6 +187,12 @@ export interface IOrgView {
 	invitations: ITeamInvitation[];
 	/** The viewer's own threads with teams, where their `#Team` requests went. */
 	threads?: ITeamThread[];
+	/** How the reader reaches each bot in `bots`. Older hubs leave it out. */
+	reach?: IBotReach[];
+	/** The reader's chats with other owners' bots, and other people's chats with the reader's bots. */
+	chats?: IBotChat[];
+	/** The reader's own classification per org, and everyone's in orgs whose top-level team they administer. Missing: internal. */
+	classifications?: IPersonClassification[];
 }
 
 /** A person's thread with a team: their `#Team` requests land there and the team's lead answers. */
@@ -172,4 +285,28 @@ export interface IBotTeamState {
 		agreed: boolean,
 	): Promise<ITeam>;
 	getBriefing(botId: string): Promise<ITeamBriefing>;
+	/** The bot's owner accepts an admin's request that it lead the team. */
+	acceptLead(teamId: string, botId: string): Promise<ITeam>;
+	declineLead(teamId: string, botId: string): Promise<void>;
+	/** The lead's owner steps it down; the team has no lead until an admin picks one. */
+	resignLead(teamId: string, botId: string): Promise<ITeam>;
+	/** Opens (or creates) the reader's thread with the team's lead. */
+	openThread(teamId: string): Promise<ITeamThread>;
+	/** Asks the bot's owner for a chat with the bot. */
+	requestChat(botId: string, note?: string | null): Promise<IBotChat>;
+	/** The bot's owner approves a chat request, with what the bot may do in it. */
+	acceptChat(
+		botId: string,
+		userId: string,
+		limits?: IBotRoomLimits | null,
+	): Promise<IBotChat>;
+	declineChat(botId: string, userId: string): Promise<void>;
+	/** The person withdraws or ends the chat, or the owner ends it; the person keeps the history. */
+	endChat(botId: string, userId: string): Promise<void>;
+	/** An admin of the org's top-level team sets a person's classification; null makes it internal. */
+	setClassification(
+		orgId: string,
+		userId: string,
+		classification: DataClassification | null,
+	): Promise<void>;
 }

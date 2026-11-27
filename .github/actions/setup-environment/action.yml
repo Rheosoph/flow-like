@@ -96,6 +96,8 @@ runs:
         # Keeping registry/src avoids re-extracting ~1900 .crate archives per job.
         cache-all-crates: true
         cache-bin: false
+        # Build scripts and proc macros linked on a newer image's glibc fail to load on an older one.
+        env-vars: 'CARGO CC CFLAGS CXX CMAKE RUST ImageOS'
 
     - name: Install Protoc
       uses: arduino/setup-protoc@f4d5893b897028ff5739576ea0409746887fa536 # v3.0.0

@@ -6,6 +6,7 @@ use super::{
     model::{
         AcceptBotRequest, AddBotRequest, AddPeopleRequest, CreateTeamRequest, PatchTeamRequest,
     },
+    lead::accept_lead_in,
     people::{add_people_in, decline_in, join_in, remove_person_in, set_role_in},
     teams::{create_team_in, delete_team_in, patch_team_in},
     view::org_view,
@@ -26,10 +27,8 @@ pub(super) async fn world() -> DatabaseConnection {
     let db = database().await;
     let schema = Schema::new(db.get_database_backend());
     for table in [
-        schema.create_table_from_entity(bot_team::Entity),
         schema.create_table_from_entity(crate::entity::bot_team_person::Entity),
         schema.create_table_from_entity(bot_team_bot::Entity),
-        schema.create_table_from_entity(crate::entity::bot_team_thread::Entity),
     ] {
         db.execute(&table).await.unwrap();
     }
@@ -479,6 +478,9 @@ async fn the_lead_reads_along_and_other_bots_answer_when_named() {
         ..Default::default()
     };
     patch(&db, "mara", &security, lead).await.unwrap();
+    accept_lead_in(&db, "jonas", &security, "jonas-bot", at(5))
+        .await
+        .unwrap();
     let members = room(&db, &security).await;
     assert!(!mentioned(&members, "jonas-bot") && mentioned(&members, "mara-bot"));
 

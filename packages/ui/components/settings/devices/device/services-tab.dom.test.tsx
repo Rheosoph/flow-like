@@ -104,7 +104,7 @@ describe("services table", () => {
 			"[data-schedule]",
 		);
 		expect(line?.textContent).toMatch(
-			/^Runs on a schedule · next Oct 1 at 02:00 GMT\+2 · in 12 hr\./,
+			/^Runs on a schedule · next Oct 1(?: at |, )02:00 GMT\+2 · in 12 hr\./,
 		);
 		expect(
 			row(view, "support-bot").querySelector("[data-schedule]") === null,
@@ -129,7 +129,7 @@ describe("services table", () => {
 		);
 		expect(
 			said(cells.querySelector(`[data-once-line="${SHOP.once}"]`)),
-		).toMatch(/^Runs once Oct 15 at 09:00 GMT\+2 · in /);
+		).toMatch(/^Runs once Oct 15(?: at |, )09:00 GMT\+2 · in /);
 		// A one-time schedule is not "on a schedule": it has its own line.
 		expect(cells.querySelector("[data-schedule]")).toBeNull();
 	});

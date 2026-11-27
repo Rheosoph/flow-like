@@ -670,7 +670,7 @@ pub(super) async fn send_in<C: ConnectionTrait>(
 /// messages, leaves a tombstone for a plain deletion and hands the bots that received it to
 /// [`deliver_to_bots`]. `hops` counts the bot turns that led to the event. The caller holds the
 /// conversation's lock and checked for a repeat.
-pub(super) async fn fan_out<C: ConnectionTrait>(
+pub(crate) async fn fan_out<C: ConnectionTrait>(
     txn: &C,
     conversation_id: &str,
     sender: &str,
@@ -836,6 +836,18 @@ async fn deliver<'e, C: ConnectionTrait>(
     let conversation_kind =
         ConversationKind::parse(&conversation.kind).unwrap_or(ConversationKind::Group);
     let mut reading_along = reading_along(conversation_kind, event.sender_id, bots, members);
+    if let Some(partner) = continued_exchange(
+        txn,
+        event,
+        conversation_kind,
+        bots,
+        &reading_along,
+        outgoing,
+    )
+    .await?
+    {
+        reading_along.insert(partner);
+    }
     if event.kind == InboxEntryKind::Transcript {
         reading_along.retain(|id| {
             bots.iter().any(|bot| {
@@ -913,6 +925,43 @@ async fn deliver<'e, C: ConnectionTrait>(
         deliver_to_bots(txn, &delivery).await?;
     }
     Ok(delivery.recipients)
+}
+
+/// The bot that answers only when named whose exchange with the sender a person's group message
+/// continues ([`flow_like_types::bot_turn::talking_with`]), when the message names nobody and
+/// replies to nothing: the follow-up reaches the bot as reading along would, without naming it
+/// again.
+async fn continued_exchange<'e, C: ConnectionTrait>(
+    txn: &C,
+    event: &Event<'e>,
+    conversation_kind: ConversationKind,
+    bots: &[bot::Model],
+    reading_along: &HashSet<String>,
+    outgoing: &Outgoing,
+) -> Result<Option<String>, DbErr> {
+    let limited = |id: &str| bots.iter().any(|bot| bot.id == id) && !reading_along.contains(id);
+    let follows_up = conversation_kind == ConversationKind::Group
+        && matches!(
+            event.kind,
+            InboxEntryKind::Message | InboxEntryKind::Transcript
+        )
+        && matches!(outgoing.content, Content::Plain(_))
+        && outgoing.links.mentions.is_empty()
+        && outgoing.links.reply_to.is_none()
+        && bots.iter().all(|bot| bot.id != event.sender_id)
+        && bots.iter().any(|bot| limited(&bot.id));
+    if !follows_up {
+        return Ok(None);
+    }
+    let partner = crate::bot_host::history::partner_at(
+        txn,
+        event.sender_id,
+        event.conversation_id,
+        event.message_id,
+        event.seq,
+    )
+    .await?;
+    Ok(partner.filter(|partner| limited(partner)))
 }
 
 /// A person's line spoken in a direct conversation addresses its bot. Clients say so in

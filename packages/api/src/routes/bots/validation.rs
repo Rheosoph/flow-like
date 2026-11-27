@@ -64,6 +64,7 @@ fn new_bot(
         location: BotLocation::Server,
         execution_mode: BotExecutionMode::Native,
         device_id: None,
+        others_can_invite: false,
     };
     let fields = UpdateBotRequest {
         name: Some(Some(request.name)),
@@ -83,6 +84,7 @@ fn new_bot(
         location: request.location,
         execution_mode: request.execution_mode,
         device_id: Some(request.device_id),
+        others_can_invite: request.others_can_invite,
     };
     Ok((preset_id, empty, fields))
 }
@@ -201,7 +203,12 @@ fn patch_scope(
     replace(&mut next.execution_mode, patch.execution_mode.take(), Ok)?;
     replace(&mut next.device_id, patch.device_id.take(), |id| {
         reference_id("device_id", id)
-    })
+    })?;
+    replace(
+        &mut next.others_can_invite,
+        patch.others_can_invite.take(),
+        Ok,
+    )
 }
 
 /// `null` resets a built-in bot to its localized default name; a bot the owner created keeps one.
@@ -447,6 +454,7 @@ pub(super) fn system_defaults(kind: BotSystemKind) -> BotSettings {
         location: BotLocation::Server,
         execution_mode: BotExecutionMode::Native,
         device_id: None,
+        others_can_invite: false,
     }
 }
 

@@ -105,7 +105,8 @@ pub(super) async fn conversations_for<C: ConnectionTrait>(
     }
     let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
     let mut members = members_by_conversation(db, &ids).await?;
-    let muted = muted_conversations(reader, &members);
+    let muted = flagged_conversations(reader, &members, super::person_push::is_muted);
+    let watching = flagged_conversations(reader, &members, super::person_push::is_watching);
     reveal_own_bot_limits(db, reader, &mut members).await?;
     let mut pending = pending_by_conversation(db, &ids).await?;
     let mut last_entries = entries_by_id(db, &reader.inbox, &rows).await?;
@@ -124,6 +125,7 @@ pub(super) async fn conversations_for<C: ConnectionTrait>(
                 })
                 .unwrap_or_default(),
             muted: muted.contains(&row.id),
+            watching: watching.contains(&row.id),
             pinned_at: row.pinned_at,
             history_cleared_at: row.history_cleared_at,
             unread_count: u64::try_from(row.unread_count).unwrap_or(0),
@@ -144,9 +146,10 @@ pub(super) async fn conversations_for<C: ConnectionTrait>(
         .collect())
 }
 
-fn muted_conversations(
+fn flagged_conversations(
     reader: &Reader,
     members: &HashMap<String, Vec<ConversationMember>>,
+    flagged: fn(Option<&serde_json::Value>) -> bool,
 ) -> HashSet<String> {
     if reader.owner.is_some() {
         return HashSet::new();
@@ -156,7 +159,7 @@ fn muted_conversations(
         .filter(|(_, members)| {
             members.iter().any(|member| {
                 member.principal_id == reader.inbox
-                    && super::person_push::is_muted(member.limits.as_ref())
+                    && flagged(member.limits.as_ref())
             })
         })
         .map(|(id, _)| id.clone())

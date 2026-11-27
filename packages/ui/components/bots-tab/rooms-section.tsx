@@ -20,6 +20,7 @@ import {
 	ConversationTimeline,
 	useConversationPreview,
 } from "./conversation-timeline";
+import { unreadOf } from "./crew-model";
 import { CrewSection, UnreadBadge, crewCardClass } from "./crew-section";
 
 export interface RoomsStatus {
@@ -96,7 +97,7 @@ export function ConversationRow({
 						{line}
 					</span>
 				</span>
-				<UnreadBadge count={conversation.unread_count} />
+				<UnreadBadge count={unreadOf(conversation)} />
 			</button>
 			<ConversationOptions
 				conversation={conversation}

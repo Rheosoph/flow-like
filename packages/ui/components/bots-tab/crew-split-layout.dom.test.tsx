@@ -38,6 +38,7 @@ beforeAll(async () => {
 		} as DOMRect;
 	};
 	window.localStorage.removeItem("flow-like:bots:chat-width");
+	window.localStorage.removeItem("flow-like:bots:list-width");
 	host = window.document.createElement("div") as unknown as HTMLElement;
 	window.document.body.appendChild(host as never);
 	root = createRoot(host);
@@ -55,6 +56,7 @@ afterAll(async () => {
 	host.remove();
 	HTMLElement.prototype.getBoundingClientRect = originalRect;
 	window.localStorage.removeItem("flow-like:bots:chat-width");
+	window.localStorage.removeItem("flow-like:bots:list-width");
 	restoreDomGlobals();
 });
 
@@ -220,6 +222,13 @@ test("a narrower tab opens it over the chat, and a closed panel takes no room", 
 	});
 });
 
+function listWidth() {
+	const list = window.document.getElementById(
+		handle().getAttribute("aria-controls") ?? "",
+	) as unknown as HTMLElement | null;
+	return list?.style.getPropertyValue("--bots-list-width");
+}
+
 async function renderListFirst(dock?: ReactNode) {
 	await act(async () =>
 		root.render(
@@ -239,8 +248,8 @@ test("a list-first layout fills the empty dock beside the list, and a phone show
 	await resizeTo(1200);
 	await renderListFirst();
 	expect(host.querySelector("aside")?.textContent).toBe("Pick a chat");
-	expect(host.querySelector('[role="separator"]')).toBeNull();
 	expect(host.querySelector("header")?.textContent).toBe("Chats");
+	expect(handle().getAttribute("aria-label")).toBe("Resize chat list");
 
 	await resizeTo(500);
 	expect(host.querySelector("aside")).toBeNull();
@@ -256,4 +265,19 @@ test("an open chat on a phone covers the list and drops the header", async () =>
 	await resizeTo(1200);
 	expect(host.querySelector("header")?.textContent).toBe("Chats");
 	expect(host.querySelector("aside textarea")).not.toBeNull();
+});
+
+test("the list column drags wider and narrower, keeping the chat its minimum", async () => {
+	await resizeTo(1200);
+	await renderListFirst();
+	expect(listWidth()).toBe("340px");
+	await key("ArrowRight");
+	expect(listWidth()).toBe("360px");
+	await key("End");
+	expect(listWidth()).toBe("560px");
+	await resizeTo(900);
+	expect(listWidth()).toBe("540px");
+	await key("Home");
+	expect(listWidth()).toBe("260px");
+	expect(window.localStorage.getItem("flow-like:bots:list-width")).toBe("260");
 });

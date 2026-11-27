@@ -11,7 +11,7 @@ use dotenv::dotenv;
 use flow_like_catalog::initialize as initialize_catalog;
 use flow_like_execution_queue::{QueueConfig, QueueWorker, QueuedJob};
 use flow_like_executor::{
-    ExecutionRequest, ExecutorConfig, ExecutorState, execute, executor_router,
+    execute, executor_router, ExecutionRequest, ExecutorConfig, ExecutorState,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 

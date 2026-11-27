@@ -34,7 +34,7 @@ pub use jobs::{
     JobListing, JobReply, MAX_JOB_EVENTS, MAX_REPLY_BYTES, account_entry, calendar_job,
     discover_with,
 };
-pub use provider::{EventDraft, ExternalEvent, Listed};
+pub use provider::{EventDraft, ExternalEvent, Listed, calendar_provider};
 pub use tools::{
     CALENDAR_CREATE, CALENDAR_DELETE, CALENDAR_FREE_SLOTS, CALENDAR_LIST, CALENDAR_UPDATE,
     CALENDAR_WAKE_SETTINGS, CalendarCreateArgs, CalendarDeleteArgs, CalendarFreeSlotsArgs,

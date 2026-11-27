@@ -320,6 +320,12 @@ pub async fn execute_commands(
             // `If-None-Match` misses and pays a full board load and normalisation sweep for an
             // object this instance is already holding.
             cached = state.seed_board_cache(&app_id, &board_id, board, &put);
+            if let Some(cached) = &cached {
+                crate::routes::app::prerun_shared::prewarm_draft_revision(
+                    &state, &app_id, &board_id, cached,
+                )
+                .await;
+            }
         }
         drop(mutation_guard);
         let sync = match &sync_request {
@@ -491,7 +497,12 @@ pub async fn execute_commands(
             )
         }
         None => {
-            state.seed_board_cache(&app_id, &board_id, board, &put);
+            if let Some(cached) = state.seed_board_cache(&app_id, &board_id, board, &put) {
+                crate::routes::app::prerun_shared::prewarm_draft_revision(
+                    &state, &app_id, &board_id, &cached,
+                )
+                .await;
+            }
             None
         }
     };

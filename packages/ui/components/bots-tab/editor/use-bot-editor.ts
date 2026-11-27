@@ -91,6 +91,7 @@ export interface BotEditor {
 	setDeviceId: (deviceId: string) => void;
 	setExecutionMode: (executionMode: BotExecutionMode) => void;
 	setClassification: (classification: IDataSensitivity) => void;
+	setOthersCanInvite: (othersCanInvite: boolean) => void;
 }
 
 /** The free-text description, the presets it matches and what was applied from them. */
@@ -376,5 +377,6 @@ export function useBotEditor(
 		setDeviceId: (deviceId) => update({ deviceId }),
 		setExecutionMode: (executionMode) => update({ executionMode }),
 		setClassification: (classification) => update({ classification }),
+		setOthersCanInvite: (othersCanInvite) => update({ othersCanInvite }),
 	};
 }

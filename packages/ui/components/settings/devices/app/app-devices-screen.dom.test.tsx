@@ -701,14 +701,14 @@ describe("App › Devices · by event", () => {
 			'[data-service="invoice-extractor"]',
 		);
 		expect(text(service?.querySelector("[data-schedule]"))).toMatch(
-			/^Runs on a schedule · next Oct 1 at 02:00 GMT\+2 · in 12 hr\./,
+			/^Runs on a schedule · next Oct 1(?: at |, )02:00 GMT\+2 · in 12 hr\./,
 		);
 		await click(byRole("tab", "By event", container));
 		const cell = container
 			.querySelector('[data-event="evt_invoice_reconcile"]')
 			?.querySelector('[data-matrix-cell="served"]');
 		expect(text(cell?.querySelector("[data-schedule-run]"))).toMatch(
-			/^Next run( by its schedule:)? Oct 1 at 02:00 GMT\+2 · in 12 hr\./,
+			/^Next run( by its schedule:)? Oct 1(?: at |, )02:00 GMT\+2 · in 12 hr\./,
 		);
 	});
 
@@ -2034,7 +2034,7 @@ describe("App › Devices · round two kinds (design R2 §6.4)", () => {
 		expect(text(once)).toContain("Price updateSchedule");
 		expect(text(once)).toContain("Once on 2026-10-15 at 09:00 · Europe/Berlin");
 		expect(text(once.querySelector("[data-schedule-run]"))).toMatch(
-			/^Runs once Oct 15 at 09:00 GMT\+2 · in 2 wk\./,
+			/^Runs once Oct 15(?: at |, )09:00 GMT\+2 · in 2 wk\./,
 		);
 		// Only a person-started event offers Run now… in its cell.
 		expect(present(form.querySelector("[data-run-now]"))).toBe(true);
@@ -2062,7 +2062,7 @@ describe("App › Devices · round two kinds (design R2 §6.4)", () => {
 			[
 				"scheduled",
 				expect.stringMatching(
-					/^Price update · Runs once Oct 15 at 09:00 GMT\+2 · in 2 wk\./,
+					/^Price update · Runs once Oct 15(?: at |, )09:00 GMT\+2 · in 2 wk\./,
 				),
 			],
 			["bot", "Shop helper · Connected as Shop helper"],

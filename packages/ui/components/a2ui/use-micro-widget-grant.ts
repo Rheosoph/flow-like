@@ -1731,6 +1731,18 @@ export class MicroWidgetGrantController {
 		}
 		const entry: MintState = { kind: "minting", forgotten };
 		this.mints.set(key, entry);
+		// Sandbox access depends only on the package version and the app, so the
+		// frame finds it cached instead of asking only once the grant arrived.
+		loadMicroWidgetAccess(
+			inputs.registry,
+			{
+				packageId: descriptor.packageId,
+				packageVersion:
+					descriptor.packageVersion ?? inputs.packageVersion ?? "",
+				appId: inputs.appId ?? null,
+			},
+			this.clock,
+		).catch(() => {});
 		const withRuntime = descriptor.runtime?.runtimeDigest !== undefined;
 		const target = this.targetFor(descriptor);
 		Promise.resolve()

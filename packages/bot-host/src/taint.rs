@@ -56,7 +56,7 @@ pub fn reads_of(
             reads.external_trigger |= TriggerBody::parse(body).is_ok_and(|trigger| {
                 matches!(
                     trigger.source,
-                    TriggerSource::Email | TriggerSource::Webhook
+                    TriggerSource::Email | TriggerSource::Webhook | TriggerSource::Channel
                 )
             });
         }

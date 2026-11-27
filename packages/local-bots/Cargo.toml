@@ -8,7 +8,7 @@ description = "Bots and their inbox kept on a desktop without an account"
 chacha20poly1305.workspace = true
 chrono.workspace = true
 flow-like-types.workspace = true
-rusqlite = { version = "0.32.1", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled", "fallible_uint"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
@@ -17,6 +17,6 @@ zeroize.workspace = true
 
 [dev-dependencies]
 # The desktop enables `extra_check`, which rejects row-returning statements in `execute_batch`.
-rusqlite = { version = "0.32.1", features = ["bundled", "extra_check"] }
+rusqlite = { version = "0.43", features = ["bundled", "extra_check", "fallible_uint"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }

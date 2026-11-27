@@ -17,7 +17,7 @@ export function OrgOutline() {
 					style={{ marginLeft: node.depth * INDENT_PX }}
 					className={node.depth > 0 ? "border-l pl-2" : undefined}
 				>
-					<TeamBox team={node.team} className="w-full" />
+					<TeamBox team={node.team} className="w-full" layout="inline" />
 				</div>
 			))}
 			<Bench />

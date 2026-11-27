@@ -6,8 +6,7 @@ use crate::document::styles::{defaults, hex_to_ooxml};
 
 use super::chart::add_chart_parts;
 use super::{
-    Built, add_override, add_relationship, ensure_default_content_type, office_image,
-    xml_text,
+    Built, add_override, add_relationship, ensure_default_content_type, office_image, xml_text,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,7 +145,9 @@ impl SlideXml {
             .rels
             .iter()
             .map(|(id, kind, target)| {
-                format!("<Relationship Id=\"{id}\" Type=\"{REL_BASE}/{kind}\" Target=\"{target}\"/>")
+                format!(
+                    "<Relationship Id=\"{id}\" Type=\"{REL_BASE}/{kind}\" Target=\"{target}\"/>"
+                )
             })
             .collect();
         format!(
@@ -170,13 +171,19 @@ fn table_graphic(headers: &[String], rows: &[Vec<String>]) -> String {
         let (fill, color, weight) = if header {
             (accent.clone(), "FFFFFF".to_string(), " b=\"1\"")
         } else if band {
-            (hex_to_ooxml(defaults::SURFACE), hex_to_ooxml(defaults::TEXT), "")
+            (
+                hex_to_ooxml(defaults::SURFACE),
+                hex_to_ooxml(defaults::TEXT),
+                "",
+            )
         } else {
             ("FFFFFF".to_string(), hex_to_ooxml(defaults::TEXT), "")
         };
         let border = hex_to_ooxml(defaults::BORDER);
         let line = |side: &str| {
-            format!("<a:{side} w=\"6350\"><a:solidFill><a:srgbClr val=\"{border}\"/></a:solidFill></a:{side}>")
+            format!(
+                "<a:{side} w=\"6350\"><a:solidFill><a:srgbClr val=\"{border}\"/></a:solidFill></a:{side}>"
+            )
         };
         format!(
             "<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1400\"{weight}><a:solidFill><a:srgbClr val=\"{color}\"/></a:solidFill></a:rPr><a:t>{}</a:t></a:r></a:p></a:txBody><a:tcPr>{}{}{}{}<a:solidFill><a:srgbClr val=\"{fill}\"/></a:solidFill></a:tcPr></a:tc>",
@@ -215,7 +222,12 @@ fn chart_graphic(rel_id: &str) -> String {
 fn notes_xml(text: &str) -> String {
     let paragraphs: String = text
         .lines()
-        .map(|line| format!("<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r></a:p>", xml_text(line)))
+        .map(|line| {
+            format!(
+                "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r></a:p>",
+                xml_text(line)
+            )
+        })
         .collect();
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<p:notes {NS}><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Notes Placeholder 1\"/><p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr><p:nvPr><p:ph type=\"body\" idx=\"1\"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>{paragraphs}</p:txBody></p:sp></p:spTree></p:cSld></p:notes>"
@@ -229,10 +241,18 @@ fn notes_master() -> String {
 }
 
 fn fit(width: u32, height: u32) -> (i64, i64, i64, i64) {
-    let (w, h) = (i64::from(width.max(1)) * EMU_PER_PIXEL, i64::from(height.max(1)) * EMU_PER_PIXEL);
+    let (w, h) = (
+        i64::from(width.max(1)) * EMU_PER_PIXEL,
+        i64::from(height.max(1)) * EMU_PER_PIXEL,
+    );
     let scale = (CONTENT_WIDTH as f64 / w as f64).min(CONTENT_HEIGHT as f64 / h as f64);
     let (cx, cy) = ((w as f64 * scale) as i64, (h as f64 * scale) as i64);
-    (MARGIN + (CONTENT_WIDTH - cx) / 2, CONTENT_TOP + (CONTENT_HEIGHT - cy) / 2, cx, cy)
+    (
+        MARGIN + (CONTENT_WIDTH - cx) / 2,
+        CONTENT_TOP + (CONTENT_HEIGHT - cy) / 2,
+        cx,
+        cy,
+    )
 }
 
 struct Deck {
@@ -254,7 +274,12 @@ impl Deck {
             xml.rect(0, 0, 228_600, 6_858_000, &accent);
             xml.text(
                 "Title",
-                (MARGIN + 300_000, 2_150_000, CONTENT_WIDTH - 300_000, 1_500_000),
+                (
+                    MARGIN + 300_000,
+                    2_150_000,
+                    CONTENT_WIDTH - 300_000,
+                    1_500_000,
+                ),
                 std::slice::from_ref(&slide.title),
                 44,
                 true,
@@ -265,7 +290,12 @@ impl Deck {
             if !slide.bullets.is_empty() {
                 xml.text(
                     "Subtitle",
-                    (MARGIN + 300_000, 3_750_000, CONTENT_WIDTH - 300_000, 1_300_000),
+                    (
+                        MARGIN + 300_000,
+                        3_750_000,
+                        CONTENT_WIDTH - 300_000,
+                        1_300_000,
+                    ),
                     &slide.bullets,
                     24,
                     false,
@@ -291,22 +321,31 @@ impl Deck {
 
         let key = |part: &str, ext: &str| format!("ppt/{part}{number}.{ext}");
         if let Some(notes) = slide.notes.as_deref().filter(|n| !n.trim().is_empty()) {
-            xml.relate("notesSlide", format!("../notesSlides/notesSlide{number}.xml"));
-            self.files
-                .insert(key("notesSlides/notesSlide", "xml"), notes_xml(notes).into_bytes());
+            xml.relate(
+                "notesSlide",
+                format!("../notesSlides/notesSlide{number}.xml"),
+            );
+            self.files.insert(
+                key("notesSlides/notesSlide", "xml"),
+                notes_xml(notes).into_bytes(),
+            );
             let rels = format!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"{REL_BASE}/notesMaster\" Target=\"../notesMasters/notesMaster1.xml\"/><Relationship Id=\"rId2\" Type=\"{REL_BASE}/slide\" Target=\"../slides/slide{number}.xml\"/></Relationships>"
             );
-            self.files
-                .insert(format!("ppt/notesSlides/_rels/notesSlide{number}.xml.rels"), rels.into_bytes());
+            self.files.insert(
+                format!("ppt/notesSlides/_rels/notesSlide{number}.xml.rels"),
+                rels.into_bytes(),
+            );
             add_override(
                 &mut self.files,
                 &format!("ppt/notesSlides/notesSlide{number}.xml"),
                 "application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml",
             );
         }
-        self.files
-            .insert(format!("ppt/slides/slide{number}.xml"), xml.xml().into_bytes());
+        self.files.insert(
+            format!("ppt/slides/slide{number}.xml"),
+            xml.xml().into_bytes(),
+        );
         self.files.insert(
             format!("ppt/slides/_rels/slide{number}.xml.rels"),
             xml.rels_xml().into_bytes(),
@@ -356,7 +395,16 @@ impl Deck {
             bullets_area.3 = 0;
         }
         if !slide.bullets.is_empty() && bullets_area.3 > 0 {
-            xml.text("Content", bullets_area, &slide.bullets, 22, false, text_color, true, "t");
+            xml.text(
+                "Content",
+                bullets_area,
+                &slide.bullets,
+                22,
+                false,
+                text_color,
+                true,
+                "t",
+            );
         } else if !slide.bullets.is_empty() {
             self.warnings.push(format!(
                 "Slide {number}: bullets are not shown next to an image, table or chart; give them their own slide"
@@ -370,7 +418,11 @@ fn register_slides(files: &mut HashMap<String, Vec<u8>>, count: usize, has_notes
     let mut rels = String::new();
     let first = if has_notes { 4 } else { 3 };
     for index in 0..count {
-        ids.push_str(&format!("<p:sldId id=\"{}\" r:id=\"rId{}\"/>", 256 + index, first + index));
+        ids.push_str(&format!(
+            "<p:sldId id=\"{}\" r:id=\"rId{}\"/>",
+            256 + index,
+            first + index
+        ));
         rels.push_str(&format!(
             "<Relationship Id=\"rId{}\" Type=\"{REL_BASE}/slide\" Target=\"slides/slide{}.xml\"/>",
             first + index,
@@ -388,14 +440,18 @@ fn register_slides(files: &mut HashMap<String, Vec<u8>>, count: usize, has_notes
         &format!("</p:sldMasterIdLst>{notes_list}<p:sldIdLst>{ids}</p:sldIdLst>"),
         1,
     );
-    files.insert("ppt/presentation.xml".to_string(), presentation.into_bytes());
+    files.insert(
+        "ppt/presentation.xml".to_string(),
+        presentation.into_bytes(),
+    );
     if has_notes {
         rels.insert_str(
             0,
             &format!("<Relationship Id=\"rId3\" Type=\"{REL_BASE}/notesMaster\" Target=\"notesMasters/notesMaster1.xml\"/>"),
         );
     }
-    let presentation_rels = String::from_utf8_lossy(&files["ppt/_rels/presentation.xml.rels"]).into_owned();
+    let presentation_rels =
+        String::from_utf8_lossy(&files["ppt/_rels/presentation.xml.rels"]).into_owned();
     files.insert(
         "ppt/_rels/presentation.xml.rels".to_string(),
         presentation_rels
@@ -405,8 +461,14 @@ fn register_slides(files: &mut HashMap<String, Vec<u8>>, count: usize, has_notes
 }
 
 fn add_notes_master(files: &mut HashMap<String, Vec<u8>>) {
-    files.insert("ppt/notesMasters/notesMaster1.xml".to_string(), notes_master().into_bytes());
-    files.insert("ppt/theme/theme2.xml".to_string(), THEME.as_bytes().to_vec());
+    files.insert(
+        "ppt/notesMasters/notesMaster1.xml".to_string(),
+        notes_master().into_bytes(),
+    );
+    files.insert(
+        "ppt/theme/theme2.xml".to_string(),
+        THEME.as_bytes().to_vec(),
+    );
     add_relationship(
         files,
         "ppt/notesMasters/_rels/notesMaster1.xml.rels",
@@ -435,7 +497,11 @@ fn core_properties(options: &DeckOptions) -> String {
             .unwrap_or_default()
     };
     let creator = field("dc:creator", &options.author);
-    let creator = if creator.is_empty() { "<dc:creator>Flow Like</dc:creator>".to_string() } else { creator };
+    let creator = if creator.is_empty() {
+        "<dc:creator>Flow Like</dc:creator>".to_string()
+    } else {
+        creator
+    };
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">{creator}{}</cp:coreProperties>",
         field("dc:title", &options.title)
@@ -461,11 +527,16 @@ pub fn pptx_from_slides(options: &DeckOptions, slides: &[Slide]) -> flow_like_ty
         deck.slide(index + 1, slide);
     }
     register_slides(&mut deck.files, slides.len(), has_notes);
+    deck.files.insert(
+        "docProps/core.xml".to_string(),
+        core_properties(options).into_bytes(),
+    );
+    let app = String::from_utf8_lossy(&deck.files["docProps/app.xml"]).replace(
+        "<Slides>0</Slides>",
+        &format!("<Slides>{}</Slides>", slides.len()),
+    );
     deck.files
-        .insert("docProps/core.xml".to_string(), core_properties(options).into_bytes());
-    let app = String::from_utf8_lossy(&deck.files["docProps/app.xml"])
-        .replace("<Slides>0</Slides>", &format!("<Slides>{}</Slides>", slides.len()));
-    deck.files.insert("docProps/app.xml".to_string(), app.into_bytes());
+        .insert("docProps/app.xml".to_string(), app.into_bytes());
     Ok(Built {
         bytes: write_zip(&deck.files)?,
         count: Some(slides.len()),

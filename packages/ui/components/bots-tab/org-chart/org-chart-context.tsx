@@ -48,6 +48,8 @@ export interface OrgChartContextValue {
 	selectedBotId: string | null;
 	highlight: Highlight;
 	showAsk: boolean;
+	/** Mail addresses, webhooks and sent mail beside the teams. */
+	showIo: boolean;
 	dragBotId: string | null;
 	setDragBotId: (id: string | null) => void;
 	dialog: DialogState;
@@ -71,6 +73,7 @@ export function OrgChartProvider({
 	me,
 	bots,
 	showAsk,
+	showIo,
 	onOpenChat,
 	onOpenConversation,
 	children,
@@ -79,6 +82,7 @@ export function OrgChartProvider({
 	me: string | null;
 	bots: readonly IBot[];
 	showAsk: boolean;
+	showIo: boolean;
 	onOpenChat: (botId: string) => void;
 	onOpenConversation: (conversationId: string) => void;
 	children: ReactNode;
@@ -154,6 +158,7 @@ export function OrgChartProvider({
 			selectedBotId,
 			highlight,
 			showAsk,
+			showIo,
 			dragBotId,
 			setDragBotId,
 			dialog,
@@ -173,6 +178,7 @@ export function OrgChartProvider({
 			selectedBotId,
 			highlight,
 			showAsk,
+			showIo,
 			dragBotId,
 			dialog,
 			actions,

@@ -1,9 +1,12 @@
-import type {
-	IOrgBot,
-	IOrgView,
-	ITeam,
-	ITeamBot,
+import {
+	CHAT_RETRY_DAYS,
+	type IBotReach,
+	type IOrgBot,
+	type IOrgView,
+	type ITeam,
+	type ITeamBot,
 } from "../../state/backend-state/bot-team-state";
+import type { DataClassification } from "../data-classification";
 
 /** How one bot may reach another, the way the hub decides it. */
 export type AskStatus =
@@ -219,4 +222,95 @@ export function isTeamConversation(
 			(thread) => thread.conversation_id === conversationId,
 		)
 	);
+}
+
+/** The level of a person in an org; no row counts as internal, like an unclassified bot. */
+export function classificationOf(
+	org: IOrgView,
+	orgId: string,
+	userId: string,
+): DataClassification {
+	return (
+		org.classifications?.find(
+			(entry) => entry.org_id === orgId && entry.user_id === userId,
+		)?.classification ?? "internal"
+	);
+}
+
+export function personLevel(classification: DataClassification): number {
+	return CLASSIFICATION_LEVEL[classification] ?? 1;
+}
+
+/** The bot is silent in its team's room while someone there is classified below it. */
+export function isGatedInRoom(team: ITeam, botId: string): boolean {
+	return team.gated_bots?.includes(botId) ?? false;
+}
+
+/** The bot a team's admins asked to lead it, until its owner answers. */
+export function leadOfferFor(team: ITeam): ITeamBot | undefined {
+	const offered = team.lead_offer_bot_id;
+	return offered ? team.bots.find((bot) => bot.bot_id === offered) : undefined;
+}
+
+function computeReach(
+	org: IOrgView,
+	viewerId: string,
+	botId: string,
+): IBotReach {
+	const bot = orgBot(org, botId);
+	if (!bot || bot.owner_id === viewerId) return { bot_id: botId, reach: "own" };
+	const team = activeTeamOf(org, botId);
+	if (!team) return { bot_id: botId, reach: "unavailable" };
+	const orgId = rootTeamId(org, team.id) ?? team.id;
+	const mine = personLevel(classificationOf(org, orgId, viewerId));
+	if (classificationLevel(bot) > mine)
+		return { bot_id: botId, reach: "classified" };
+	if (isTeamMember(team, viewerId))
+		return {
+			bot_id: botId,
+			reach: "team_room",
+			conversation_id: team.conversation_id ?? null,
+		};
+	if (team.lead_bot_id === botId) {
+		const thread = org.threads?.find((entry) => entry.team_id === team.id);
+		return {
+			bot_id: botId,
+			reach: "lead",
+			conversation_id: thread?.conversation_id ?? null,
+		};
+	}
+	const chat = org.chats?.find(
+		(entry) => entry.bot_id === botId && entry.user_id === viewerId,
+	);
+	if (chat?.status === "active")
+		return {
+			bot_id: botId,
+			reach: "chat",
+			conversation_id: chat.conversation_id ?? null,
+		};
+	if (chat?.status === "pending") return { bot_id: botId, reach: "requested" };
+	if (chat?.status === "declined" && chat.decided_at) {
+		const retryAt = new Date(
+			new Date(chat.decided_at).getTime() + CHAT_RETRY_DAYS * 86_400_000,
+		);
+		if (retryAt.getTime() > Date.now())
+			return {
+				bot_id: botId,
+				reach: "declined",
+				retry_at: retryAt.toISOString(),
+			};
+	}
+	return { bot_id: botId, reach: "request" };
+}
+
+/** How the viewer reaches a bot: the hub's answer, or the same rules computed here for older hubs. */
+export function reachOf(
+	org: IOrgView,
+	viewerId: string | null | undefined,
+	botId: string,
+): IBotReach {
+	const served = org.reach?.find((entry) => entry.bot_id === botId);
+	if (served) return served;
+	if (!viewerId) return { bot_id: botId, reach: "unavailable" };
+	return computeReach(org, viewerId, botId);
 }

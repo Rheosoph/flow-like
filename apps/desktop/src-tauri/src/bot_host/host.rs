@@ -454,7 +454,7 @@ impl Inner {
                     &prior,
                     trigger.created_at - Age::seconds(1),
                     hold,
-                    false,
+                    rule::ReadAlong::Every,
                     bot.model.decision.is_some(),
                 )
                 .filter(|waiting| waiting.message_id == trigger.message_id)
@@ -504,7 +504,11 @@ impl Inner {
             entries,
             not_before,
             Some(hold),
-            mentioned_only || waiting_pending,
+            if waiting_pending {
+                rule::ReadAlong::Off
+            } else {
+                rule::ReadAlong::of(mentioned_only)
+            },
             bot.model.decision.is_some(),
         );
         let resumed = decision_state

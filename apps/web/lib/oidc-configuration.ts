@@ -14,14 +14,55 @@ interface ConfigurationRequest {
 
 // Only bridge the provider chunk load. Later auth mounts fetch current settings.
 const PREFETCH_MAX_AGE_MS = 30_000;
+const STORED_CONFIGURATION_KEY = "flow-like:oidc-configuration";
 let configurationRequest: ConfigurationRequest | undefined;
+
+interface StoredConfiguration {
+	url: string;
+	configuration: WebOidcConfiguration;
+}
+
+function configurationUrl(): string {
+	return getApiUrl({ hub: getPublicApiUrl() }, "auth/openid");
+}
+
+function storeConfiguration(
+	url: string,
+	configuration: WebOidcConfiguration,
+): void {
+	try {
+		localStorage.setItem(
+			STORED_CONFIGURATION_KEY,
+			JSON.stringify({ url, configuration } satisfies StoredConfiguration),
+		);
+	} catch {
+		// Storage can be unavailable; the next start fetches the configuration again.
+	}
+}
+
+/**
+ * The configuration this browser last received from the current API. Lets a
+ * returning visitor start the session without waiting for `auth/openid`.
+ */
+export function storedWebOidcConfiguration(): WebOidcConfiguration | undefined {
+	try {
+		const raw = localStorage.getItem(STORED_CONFIGURATION_KEY);
+		if (!raw) return undefined;
+		const stored = JSON.parse(raw) as StoredConfiguration;
+		return stored.url === configurationUrl() && stored.configuration
+			? stored.configuration
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 function clearRequest(request: ConfigurationRequest): void {
 	if (configurationRequest === request) configurationRequest = undefined;
 }
 
 function requestConfiguration(prefetch: boolean) {
-	const url = getApiUrl({ hub: getPublicApiUrl() }, "auth/openid");
+	const url = configurationUrl();
 	let request = configurationRequest;
 	if (!request || request.url !== url || request.reuseUntil <= Date.now()) {
 		request = {
@@ -33,7 +74,9 @@ function requestConfiguration(prefetch: boolean) {
 					console.error(`HTTP error: ${response.status}`);
 					return undefined;
 				}
-				return (await response.json()) as WebOidcConfiguration;
+				const configuration = (await response.json()) as WebOidcConfiguration;
+				storeConfiguration(url, configuration);
+				return configuration;
 			}),
 		};
 		configurationRequest = request;

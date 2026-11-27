@@ -6,6 +6,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
+import type { DataClassification } from "../lib/data-classification";
 import { useBackend } from "../state/backend-state";
 import type {
 	IBotTeamState,
@@ -27,7 +28,15 @@ export const botTeamKeys = {
 const ORG_STALE_TIME = 30_000;
 const ORG_REFRESH = 60_000;
 
-const EMPTY_ORG: IOrgView = { teams: [], bots: [], invitations: [] };
+const EMPTY_ORG: IOrgView = {
+	teams: [],
+	bots: [],
+	invitations: [],
+	threads: [],
+	reach: [],
+	chats: [],
+	classifications: [],
+};
 
 function requireTeamState(state: IBotTeamState | undefined): IBotTeamState {
 	if (!state) throw new Error("Bot teams need a hub account");
@@ -69,16 +78,16 @@ export function useTeamBriefing(botId: string | null | undefined) {
 	});
 }
 
-function useTeamMutation<TArgs>(
-	run: (state: IBotTeamState, args: TArgs) => Promise<unknown>,
+function useTeamMutation<TArgs, TResult>(
+	run: (state: IBotTeamState, args: TArgs) => Promise<TResult>,
 ) {
 	const state = useBackend().botTeamState;
 	const queryClient = useQueryClient();
-	return useMutation({
+	return useMutation<TResult, Error, TArgs>({
 		mutationFn: (args: TArgs) => run(requireTeamState(state), args),
 		onSuccess: (result) => {
 			if (result && typeof result === "object" && "id" in result) {
-				const team = result as ITeam;
+				const team = result as unknown as ITeam;
 				queryClient.setQueryData<IOrgView>(botTeamKeys.org(), (org) =>
 					org
 						? {
@@ -151,6 +160,49 @@ export function useTeamActions() {
 		setDirectAgreement: useTeamMutation(
 			(state, args: { teamId: string; botId: string; agreed: boolean }) =>
 				state.setDirectAgreement(args.teamId, args.botId, args.agreed),
+		),
+		acceptLead: useTeamMutation(
+			(state, args: { teamId: string; botId: string }) =>
+				state.acceptLead(args.teamId, args.botId),
+		),
+		declineLead: useTeamMutation(
+			(state, args: { teamId: string; botId: string }) =>
+				state.declineLead(args.teamId, args.botId),
+		),
+		resignLead: useTeamMutation(
+			(state, args: { teamId: string; botId: string }) =>
+				state.resignLead(args.teamId, args.botId),
+		),
+		openThread: useTeamMutation((state, teamId: string) =>
+			state.openThread(teamId),
+		),
+		requestChat: useTeamMutation(
+			(state, args: { botId: string; note?: string | null }) =>
+				state.requestChat(args.botId, args.note),
+		),
+		acceptChat: useTeamMutation(
+			(
+				state,
+				args: { botId: string; userId: string; limits?: IBotRoomLimits | null },
+			) => state.acceptChat(args.botId, args.userId, args.limits),
+		),
+		declineChat: useTeamMutation(
+			(state, args: { botId: string; userId: string }) =>
+				state.declineChat(args.botId, args.userId),
+		),
+		endChat: useTeamMutation((state, args: { botId: string; userId: string }) =>
+			state.endChat(args.botId, args.userId),
+		),
+		setClassification: useTeamMutation(
+			(
+				state,
+				args: {
+					orgId: string;
+					userId: string;
+					classification: DataClassification | null;
+				},
+			) =>
+				state.setClassification(args.orgId, args.userId, args.classification),
 		),
 	};
 }

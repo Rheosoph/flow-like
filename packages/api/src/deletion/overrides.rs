@@ -156,6 +156,16 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                     "storage event deduplication outlives the app",
                 ),
                 keep(
+                    "BotTeamChat",
+                    "ownerId",
+                    "the owner's bots cascade with the account, and their chats with them",
+                ),
+                keep(
+                    "BotOrgClassification",
+                    "setBy",
+                    "attribution only; the classification belongs to the org and outlives the admin",
+                ),
+                keep(
                     "LockedItem",
                     "appId",
                     "revision-safe records outlive the app while their objects are retained",

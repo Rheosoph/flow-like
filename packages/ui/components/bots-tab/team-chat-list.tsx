@@ -4,11 +4,14 @@ import { useTranslation } from "@flow-like/locales";
 import {
 	ChevronDownIcon,
 	ChevronRightIcon,
+	EyeOffIcon,
+	PencilIcon,
 	Settings2Icon,
 	StarIcon,
 	UsersIcon,
 } from "lucide-react";
-import { useCallback, useId, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useId, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useBotLabels } from "../../hooks/use-bots";
 import { cn } from "../../lib/utils";
 import type { IBot } from "../../state/backend-state/bot-state";
@@ -23,28 +26,34 @@ import { PinnedMark } from "./conversation-menu";
 import {
 	ConversationAvatar,
 	type ConversationListContext,
-	ConversationOptions,
+	ConversationRowMenu,
+	useListConversationMenu,
 } from "./conversation-timeline";
-import type { CrewMember } from "./crew-grid";
+import { type CrewMember, crewVisibilityKey } from "./crew-grid";
 import { matchesSearch } from "./crew-model";
 import { isSelfPrincipal } from "./crew-model";
 import { UnreadBadge } from "./crew-section";
 import { dockSelectionKey } from "./dock-selection";
 import { type NeedsYouItem, NeedsYouSection } from "./needs-you-section";
 import { type RoomsStatus, RoomsStatusLine } from "./rooms-section";
+import { type MenuItems, type MenuKit, RowContextMenu } from "./row-menu";
 import {
+	type BotRow,
 	type ChatFilter,
 	type ChatGroup,
 	type ChatRow,
 	type ColleagueBotRow,
+	type PersonRow,
 	buildChatGroups,
 } from "./team-chat-list-model";
 import {
 	TeamInvitationCards,
 	useTeamInvitations,
 } from "./team-invitation-cards";
+import { useSetBotHidden } from "./use-bot-visibility";
 
 const COLLAPSED_KEY = "flow-like:bots:collapsed-chat-groups";
+const OPT_IN_GROUPS: ReadonlySet<string> = new Set(["watching"]);
 const DEPTH_INDENT_PX = 12;
 const FILTERS: readonly ChatFilter[] = ["all", "unread", "pinned"];
 
@@ -77,7 +86,11 @@ function useCollapsedGroups() {
 			return next;
 		});
 	}, []);
-	return { collapsed, toggle };
+	const isOpen = useCallback(
+		(key: string) => collapsed.has(key) === OPT_IN_GROUPS.has(key),
+		[collapsed],
+	);
+	return { isOpen, toggle };
 }
 
 function useChatSnippet(context: ConversationListContext) {
@@ -231,12 +244,131 @@ function ColleagueRow({
 	);
 }
 
+function PersonChatRow({
+	row,
+	onMessage,
+}: Readonly<{ row: PersonRow; onMessage: (userId: string) => void }>) {
+	const { t } = useTranslation("bots");
+	return (
+		<RowButton
+			selected={false}
+			onClick={() => onMessage(row.userId)}
+			avatar={<IdentityAvatar subject={row.userId} size={36} />}
+			title={<span className="truncate">{row.name}</span>}
+			subtitle={t("teams.chats.startChat", "Start a chat")}
+			unread={0}
+		/>
+	);
+}
+
 interface RowActions {
 	context: ConversationListContext;
 	selectedKey: string | null;
 	onOpenConversation: (conversationId: string) => void;
 	onOpenMember: (member: CrewMember) => void;
 	onSettings: (bot: IBot) => void;
+	onMessagePerson: (userId: string) => void;
+}
+
+/** Hides a bot in the current profile, with a way back in the toast. */
+function useHideBot() {
+	const { t } = useTranslation("bots");
+	const { mutateAsync } = useSetBotHidden();
+	return useCallback(
+		(key: string, name: string) => {
+			const failed = (error: unknown) => {
+				console.error(`Bot ${key} kept its visibility in the profile:`, error);
+				toast.error(
+					t(
+						"crew.visibility.failed",
+						"Couldn't change which bots this profile shows.",
+					),
+				);
+			};
+			mutateAsync({ key, hidden: true })
+				.then(() =>
+					toast.success(
+						t("teams.chats.botHidden", "{{name}} is hidden in this profile", {
+							name,
+						}),
+						{
+							action: {
+								label: t("teams.chats.undo", "Undo"),
+								onClick: () =>
+									void mutateAsync({ key, hidden: false }).catch(failed),
+							},
+						},
+					),
+				)
+				.catch(failed);
+		},
+		[mutateAsync, t],
+	);
+}
+
+/** The direct chat's options when the bot has one; rendered through `children` to keep hooks unconditional. */
+function WithChatMenu({
+	conversation,
+	context,
+	children,
+}: Readonly<{
+	conversation: IConversation;
+	context: ConversationListContext;
+	children: (items: MenuItems, dialogs: ReactNode) => ReactNode;
+}>) {
+	const { items, dialogs } = useListConversationMenu(conversation, context);
+	return children(items, dialogs);
+}
+
+/** A bot's row: right-click or long press for its settings, its chat's pin and hiding it. */
+function BotRowMenu({
+	row,
+	actions,
+	children,
+}: Readonly<{ row: BotRow; actions: RowActions; children: ReactNode }>) {
+	const { t } = useTranslation("bots");
+	const hide = useHideBot();
+	const { member } = row;
+	const bot = member.bot;
+	const frame = (chatItems: MenuItems | null, dialogs: ReactNode) => {
+		const items = (kit: MenuKit) => (
+			<>
+				{bot && !bot.system && (
+					<kit.Item onSelect={() => actions.onSettings(bot)}>
+						<PencilIcon aria-hidden />
+						{t("teams.chats.editBot", "Edit bot")}
+					</kit.Item>
+				)}
+				<kit.Item onSelect={() => hide(crewVisibilityKey(member), row.name)}>
+					<EyeOffIcon aria-hidden />
+					{t("teams.chats.hideBot", "Hide in this profile")}
+				</kit.Item>
+				{chatItems && (
+					<>
+						<kit.Separator />
+						{chatItems(kit)}
+					</>
+				)}
+			</>
+		);
+		return (
+			<>
+				<RowContextMenu
+					items={items}
+					className="group/conversation relative min-w-0"
+				>
+					{children}
+				</RowContextMenu>
+				{dialogs}
+			</>
+		);
+	};
+	if (!row.conversation) return frame(null, null);
+	return (
+		<WithChatMenu conversation={row.conversation} context={actions.context}>
+			{frame}
+		</WithChatMenu>
+	);
 }
 
 function ChatRowItem({
@@ -249,11 +381,13 @@ function ChatRowItem({
 		return (
 			<ColleagueRow row={row} onOpenConversation={actions.onOpenConversation} />
 		);
+	if (row.kind === "person")
+		return <PersonChatRow row={row} onMessage={actions.onMessagePerson} />;
 	if (row.kind === "bot") {
 		const { member } = row;
 		const bot = member.bot;
 		return (
-			<div className="group/conversation relative min-w-0">
+			<BotRowMenu row={row} actions={actions}>
 				<RowButton
 					selected={selectedKey === dockSelectionKey(member.selection)}
 					onClick={() => actions.onOpenMember(member)}
@@ -286,13 +420,19 @@ function ChatRowItem({
 						<Settings2Icon className="size-4" aria-hidden />
 					</button>
 				)}
-			</div>
+			</BotRowMenu>
 		);
 	}
 	const { conversation } = row;
 	return (
-		<div className="group/conversation relative min-w-0">
+		<ConversationRowMenu
+			conversation={conversation}
+			context={context}
+			className="group/conversation relative min-w-0"
+			buttonClassName="absolute top-2 right-2 bg-popover shadow-sm"
+		>
 			<RowButton
+				dim={row.watching}
 				selected={selectedKey === `conversation:${conversation.id}`}
 				onClick={() => actions.onOpenConversation(conversation.id)}
 				avatar={
@@ -310,7 +450,14 @@ function ChatRowItem({
 								{row.tag}
 							</span>
 						)}
-						{conversation.kind === "group" && !row.tag && (
+						{row.botChat && (
+							<span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+								{t("teams.chats.ownerBot", "{{name}}'s bot", {
+									name: row.botChat.ownerName,
+								})}
+							</span>
+						)}
+						{conversation.kind === "group" && !row.tag && !row.botChat && (
 							<UsersIcon
 								className="size-3 shrink-0 self-center text-muted-foreground"
 								aria-label={t("crew.roomTag", "Room")}
@@ -320,15 +467,10 @@ function ChatRowItem({
 				}
 				subtitle={row.snippet}
 				time={context.text.activity(conversation.last_activity_at)}
-				unread={conversation.unread_count}
+				unread={row.unread}
 				pinned={row.pinned}
 			/>
-			<ConversationOptions
-				conversation={conversation}
-				context={context}
-				className="absolute top-2 right-2 bg-popover shadow-sm"
-			/>
-		</div>
+		</ConversationRowMenu>
 	);
 }
 
@@ -342,8 +484,12 @@ function useGroupLabel() {
 				return t("teams.chats.group.pinned", "Pinned");
 			case "bots":
 				return t("teams.chats.group.bots", "Your bots");
+			case "colleagues":
+				return t("teams.chats.group.colleagues", "Colleagues' bots");
 			case "rooms":
 				return t("teams.chats.group.rooms", "Rooms");
+			case "watching":
+				return t("teams.chats.group.watching", "Your bots at work");
 			case "people":
 				return t("teams.chats.group.people", "People");
 		}
@@ -448,6 +594,8 @@ export interface TeamChatListProps {
 	onOpenMember: (member: CrewMember) => void;
 	onOpenAssistant: () => void;
 	onSettings: (bot: IBot) => void;
+	/** Opens the direct chat with a teammate, starting it when there is none. */
+	onMessagePerson: (userId: string) => void;
 }
 
 /**
@@ -468,11 +616,12 @@ export function TeamChatList({
 	onOpenMember,
 	onOpenAssistant,
 	onSettings,
+	onMessagePerson,
 }: Readonly<TeamChatListProps>) {
 	const { t } = useTranslation("bots");
 	const labels = useBotLabels();
 	const [filter, setFilter] = useState<ChatFilter>("all");
-	const { collapsed, toggle } = useCollapsedGroups();
+	const { isOpen, toggle } = useCollapsedGroups();
 	const groupLabel = useGroupLabel();
 	const snippet = useChatSnippet(context);
 	const query = search.trim();
@@ -510,6 +659,7 @@ export function TeamChatList({
 		onOpenConversation,
 		onOpenMember,
 		onSettings,
+		onMessagePerson,
 	};
 	const showNeeds = filter !== "pinned";
 	const needsShown = showNeeds ? needs : [];
@@ -552,7 +702,9 @@ export function TeamChatList({
 					key={group.key}
 					group={group}
 					label={groupLabel(group)}
-					open={!collapsed.has(group.key)}
+					open={
+						isOpen(group.key) || (group.kind === "watching" && query !== "")
+					}
 					onToggle={() => toggle(group.key)}
 					actions={actions}
 				/>

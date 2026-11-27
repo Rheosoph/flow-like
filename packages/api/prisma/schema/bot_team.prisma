@@ -11,6 +11,11 @@ model BotTeam {
   /// One of the team's active bots; null while the team has no lead.
   leadBotId      String?
   lead           Bot?            @relation("BotTeamLead", fields: [leadBotId], references: [id], onDelete: SetNull)
+  /// Another owner's bot an admin asked to lead the team; it leads once its owner accepts.
+  leadOfferBotId String?
+  leadOffer      Bot?            @relation("BotTeamLeadOffer", fields: [leadOfferBotId], references: [id], onDelete: SetNull)
+  leadOfferBy    String?
+  leadOfferAt    DateTime?       @db.Timestamptz(3)
   /// Teammates ask each other without the first-time Allow card once their owners agreed.
   directAsks     Boolean         @default(false)
   /// The team room: a group conversation of the team's active people and bots.
@@ -23,6 +28,8 @@ model BotTeam {
   people         BotTeamPerson[]
   bots           BotTeamBot[]
   threads        BotTeamThread[]
+  /// People's classifications in the org this team is the top-level team of.
+  classifications BotOrgClassification[]
 
   @@index([parentId])
 }
@@ -78,5 +85,49 @@ model BotTeamThread {
   createdAt      DateTime     @default(now()) @db.Timestamptz(3)
 
   @@id([teamId, userId])
+  @@index([userId])
+}
+
+/// A person's chat with another owner's bot of an org they share. The person asks, the bot's
+/// owner decides; the chat's members are the person, the bot and the owner, who watches it.
+model BotTeamChat {
+  botId          String
+  bot            Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The bot's owner when the person asked: who decides and watches.
+  ownerId        String
+  /// PENDING | ACTIVE | DECLINED | ENDED
+  status         String        @default("PENDING")
+  /// Created on approval; the person keeps it with its history after the chat ends.
+  conversationId String?       @unique
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  /// The BotRoomLimits the owner set on approval; null adds none.
+  limits         Json?
+  /// Why the person asks.
+  note           String?
+  requestedAt    DateTime      @default(now()) @db.Timestamptz(3)
+  decidedAt      DateTime?     @db.Timestamptz(3)
+  endedAt        DateTime?     @db.Timestamptz(3)
+
+  @@id([botId, userId])
+  @@index([userId])
+  @@index([ownerId, status])
+}
+
+/// A person's classification in an org, set by an admin of its top-level team. A person without a
+/// row counts as internal.
+model BotOrgClassification {
+  /// The org's top-level team.
+  orgId          String
+  org            BotTeam  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// DataClassification, lowercase.
+  classification String
+  setBy          String
+  updatedAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([orgId, userId])
   @@index([userId])
 }

@@ -8,11 +8,15 @@ import type {
 import {
 	activeTeamOf,
 	askStatus,
+	classificationOf,
 	flattenForest,
+	isGatedInRoom,
 	isTeamAdmin,
 	isTeamConversation,
+	leadOfferFor,
 	orgForest,
 	pendingTeamsOf,
+	reachOf,
 	reportingLine,
 	teamPath,
 	teamTag,
@@ -219,3 +223,129 @@ describe("isTeamConversation", () => {
 		expect(isTeamConversation(org, "other")).toBe(false);
 	});
 });
+
+describe("reach", () => {
+	const days = (n: number) =>
+		new Date(Date.now() + n * 86_400_000).toISOString();
+	const base = (over: Partial<IOrgView> = {}): IOrgView => ({
+		invitations: [],
+		bots: [
+			bot("lead", "owner"),
+			bot("peer", "owner"),
+			bot("mine", "viewer"),
+			bot("top", "owner", "restricted"),
+			bot("joining", "owner"),
+		],
+		teams: [
+			team("Org", {
+				lead_bot_id: "lead",
+				conversation_id: "room",
+				people: [{ user_id: "owner", role: "admin", status: "active" }],
+				bots: [
+					member("lead", "owner"),
+					member("peer", "owner"),
+					member("top", "owner"),
+					member("mine", "viewer"),
+					member("joining", "owner", { status: "pending" }),
+				],
+			}),
+		],
+		...over,
+	});
+
+	test("the hub's entry wins", () => {
+		const org = base({ reach: [{ bot_id: "peer", reach: "chat" }] });
+		expect(reachOf(org, "viewer", "peer").reach).toBe("chat");
+	});
+
+	test("older hubs: own, joining, classified, lead, request", () => {
+		const org = base();
+		expect(reachOf(org, "viewer", "mine").reach).toBe("own");
+		expect(reachOf(org, "viewer", "joining").reach).toBe("unavailable");
+		expect(reachOf(org, "viewer", "top").reach).toBe("classified");
+		expect(reachOf(org, "viewer", "lead").reach).toBe("lead");
+		expect(reachOf(org, "viewer", "peer").reach).toBe("request");
+	});
+
+	test("older hubs: a teammate reaches the team room", () => {
+		const org = base();
+		org.teams[0].people.push({
+			user_id: "viewer",
+			role: "member",
+			status: "active",
+		});
+		const reach = reachOf(org, "viewer", "peer");
+		expect(reach.reach).toBe("team_room");
+		expect(reach.conversation_id).toBe("room");
+	});
+
+	test("older hubs: a raised classification opens a restricted bot", () => {
+		const org = base({
+			classifications: [
+				{ org_id: "Org", user_id: "viewer", classification: "restricted" },
+			],
+		});
+		expect(reachOf(org, "viewer", "top").reach).toBe("request");
+	});
+
+	test("older hubs: chats", () => {
+		const chat = (
+			status: "pending" | "active" | "declined",
+			decided_at?: string,
+		) =>
+			base({
+				chats: [
+					{
+						bot_id: "peer",
+						user_id: "viewer",
+						owner_id: "owner",
+						status,
+						conversation_id: "chat-1",
+						requested_at: "",
+						decided_at,
+					},
+				],
+			});
+		expect(reachOf(chat("active"), "viewer", "peer")).toMatchObject({
+			reach: "chat",
+			conversation_id: "chat-1",
+		});
+		expect(reachOf(chat("pending"), "viewer", "peer").reach).toBe("requested");
+		expect(reachOf(chat("declined", days(-1)), "viewer", "peer").reach).toBe(
+			"declined",
+		);
+		expect(reachOf(chat("declined", days(-30)), "viewer", "peer").reach).toBe(
+			"request",
+		);
+	});
+});
+
+describe("classification, gating and lead offers", () => {
+	test("people default to internal", () => {
+		const org: IOrgView = {
+			...base0(),
+			classifications: [
+				{ org_id: "o", user_id: "a", classification: "confidential" },
+			],
+		};
+		expect(classificationOf(org, "o", "a")).toBe("confidential");
+		expect(classificationOf(org, "o", "b")).toBe("internal");
+		expect(classificationOf(org, "other", "a")).toBe("internal");
+	});
+
+	test("gated bots and the lead offer", () => {
+		const t = team("t", {
+			gated_bots: ["x"],
+			lead_offer_bot_id: "x",
+			bots: [member("x", "o")],
+		});
+		expect(isGatedInRoom(t, "x")).toBe(true);
+		expect(isGatedInRoom(t, "y")).toBe(false);
+		expect(leadOfferFor(t)?.bot_id).toBe("x");
+		expect(leadOfferFor(team("u"))).toBeUndefined();
+	});
+});
+
+function base0(): IOrgView {
+	return { teams: [], bots: [], invitations: [] };
+}

@@ -50,6 +50,8 @@ export interface BotDraft {
 	location: BotLocation;
 	executionMode: BotExecutionMode;
 	deviceId: string | null;
+	/** People who share an app with the owner find the bot and can invite it. */
+	othersCanInvite: boolean;
 }
 
 /**
@@ -146,6 +148,7 @@ export function createEmptyBotDraft(): BotDraft {
 		location: "server",
 		executionMode: "native",
 		deviceId: null,
+		othersCanInvite: false,
 	};
 }
 
@@ -190,6 +193,7 @@ export function botDraftFromBot(bot: IBot): BotDraft {
 		location: bot.location,
 		executionMode: bot.execution_mode ?? "native",
 		deviceId: bot.device_id,
+		othersCanInvite: bot.others_can_invite === true,
 	};
 }
 
@@ -309,6 +313,7 @@ function draftFields(draft: BotDraft): BotFields {
 		location: draft.location,
 		execution_mode: draft.executionMode,
 		device_id: draft.location === "device" ? draft.deviceId : null,
+		others_can_invite: draft.othersCanInvite,
 	};
 }
 
@@ -331,6 +336,7 @@ function botFields(bot: IBot): BotFields {
 		location: bot.location,
 		execution_mode: bot.execution_mode ?? "native",
 		device_id: bot.device_id ?? null,
+		others_can_invite: bot.others_can_invite === true,
 	};
 }
 
@@ -358,6 +364,7 @@ export function buildCreateBotRequest(draft: BotDraft): ICreateBotRequest {
 		image_model,
 		vision_model,
 		subtask_model,
+		others_can_invite,
 		...fields
 	} = draftFields(draft);
 	const { execution_mode, ...compatibleFields } = fields;
@@ -370,6 +377,7 @@ export function buildCreateBotRequest(draft: BotDraft): ICreateBotRequest {
 		...(image_model ? { image_model } : {}),
 		...(vision_model ? { vision_model } : {}),
 		...(subtask_model ? { subtask_model } : {}),
+		...(others_can_invite ? { others_can_invite } : {}),
 		name: draft.name.trim(),
 		preset_id: draft.presetId,
 	};

@@ -4,7 +4,7 @@
 
 use crate::{
     db::coordination::coordinate,
-    entity::{bot_team, bot_team_bot, bot_team_thread},
+    entity::{bot_team, bot_team_bot, bot_team_chat, bot_team_thread},
     routes::{bots::lock_bot, inbox::team_room::lock_room},
     state::AppState,
 };
@@ -16,14 +16,24 @@ use sea_orm::{ColumnTrait, DatabaseTransaction, DbErr, EntityTrait, QueryFilter}
 
 pub(crate) mod access;
 pub mod bots;
+pub mod chats;
+pub mod classification;
 pub(crate) mod effects;
+mod inputs;
+pub mod lead;
+pub(crate) mod levels;
 pub mod model;
 pub mod people;
+pub(crate) mod reach;
 pub(crate) mod room;
 pub mod teams;
 pub(crate) mod threads;
 pub(crate) mod view;
 
+#[cfg(test)]
+mod chats_tests;
+#[cfg(test)]
+mod reach_tests;
 #[cfg(test)]
 mod request_tests;
 #[cfg(test)]
@@ -47,7 +57,7 @@ pub(crate) async fn lock_scope(
         lock_bot(txn, bot_id).await?;
     }
     let active_rows = bot_team_bot::Entity::find()
-        .filter(bot_team_bot::Column::BotId.is_in(bots))
+        .filter(bot_team_bot::Column::BotId.is_in(bots.clone()))
         .filter(bot_team_bot::Column::Status.eq(access::active()))
         .all(txn)
         .await?;
@@ -74,6 +84,16 @@ pub(crate) async fn lock_scope(
         .collect();
     for thread_id in sorted(&mut threads) {
         lock_room(txn, thread_id).await?;
+    }
+    let mut chats: Vec<String> = bot_team_chat::Entity::find()
+        .filter(bot_team_chat::Column::BotId.is_in(bots))
+        .all(txn)
+        .await?
+        .into_iter()
+        .filter_map(|chat| chat.conversation_id)
+        .collect();
+    for chat_id in sorted(&mut chats) {
+        lock_room(txn, chat_id).await?;
     }
     Ok(())
 }
@@ -116,11 +136,16 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(teams::list_org).post(teams::create_team))
         .route("/bots/{bot_id}/briefing", get(bots::briefing))
+        .route("/chats", post(chats::request_chat))
+        .route("/chats/{bot_id}/{user_id}", delete(chats::end_chat))
+        .route("/chats/{bot_id}/{user_id}/accept", post(chats::accept_chat))
+        .route("/chats/{bot_id}/{user_id}/decline", post(chats::decline_chat))
         .route(
             "/{team_id}",
             axum::routing::patch(teams::patch_team).delete(teams::delete_team),
         )
         .route("/{team_id}/people", post(people::add_people))
+        .route("/{team_id}/thread", post(threads::open_thread))
         .route("/{team_id}/join", post(people::join_team))
         .route("/{team_id}/decline", post(people::decline_team))
         .route("/{team_id}/people/{user_id}/role", put(people::set_role))
@@ -130,4 +155,11 @@ pub fn routes() -> Router<AppState> {
         .route("/{team_id}/bots/{bot_id}/accept", post(bots::accept_bot))
         .route("/{team_id}/bots/{bot_id}/decline", post(bots::decline_bot))
         .route("/{team_id}/bots/{bot_id}/direct", put(bots::set_direct))
+        .route("/{team_id}/bots/{bot_id}/lead/accept", post(lead::accept_lead))
+        .route("/{team_id}/bots/{bot_id}/lead/decline", post(lead::decline_lead))
+        .route("/{team_id}/bots/{bot_id}/lead/resign", post(lead::resign_lead))
+        .route(
+            "/{team_id}/classifications/{user_id}",
+            put(classification::set_classification),
+        )
 }

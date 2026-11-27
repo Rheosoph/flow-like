@@ -1,0 +1,26 @@
+/// One outside chat a bot is part of: a Microsoft Teams conversation or a Discord channel or
+/// thread. Its messages go into `conversationId`, a group room of the owner and the bot where the
+/// people writing in the chat are guests. `id` is derived from (botId, provider, chatKey), so the
+/// same chat finds its room again; removing the row keeps the room and the next message opens a
+/// new one.
+model BotChannelLink {
+  id             String       @id
+  botId          String
+  bot            Bot          @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId        String
+  /// teams | discord
+  provider       String
+  /// The provider's stable id of the chat (tenant + conversation for Teams, guild + channel for Discord).
+  chatKey        String
+  chatTitle      String
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// Provider data for replies, JSON, at most 4 KB.
+  meta           String       @default("{}")
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  lastSeenAt     DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@unique([botId, provider, chatKey])
+  @@index([ownerId])
+  @@index([conversationId])
+}

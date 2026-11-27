@@ -108,7 +108,7 @@ toml.workspace = true
 toml_edit.workspace = true
 tauri-plugin-opener = "2.7.2"
 
-rusqlite = { version = "0.32.0", features = ["bundled-full", "serde_json"] }
+rusqlite = { version = "0.43", features = ["bundled-full", "serde_json", "fallible_uint"] }
 serenity = { version = "0.12.4", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "cache"] }
 teloxide = { version = "0.17", default-features = false, features = ["macros", "rustls", "ctrlc_handler"] }
 flow-like-bots = { workspace = true, features = ["telegram", "discord"] }

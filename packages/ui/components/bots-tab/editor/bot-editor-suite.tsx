@@ -276,8 +276,10 @@ function SafetyView({ editor }: StepViewProps) {
 		<SafetyStep
 			draft={editor.draft}
 			locked={editor.flowPilot}
+			localOnly={editor.localOnly}
 			onClassificationChange={editor.setClassification}
 			onToggle={editor.toggleCapability}
+			onOthersCanInviteChange={editor.setOthersCanInvite}
 		/>
 	);
 }

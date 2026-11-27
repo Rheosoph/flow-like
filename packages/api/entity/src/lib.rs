@@ -14,10 +14,13 @@ mod generated;
 
 pub use generated::*;
 
+pub mod bot_channel_link;
 pub mod bot_decision_wait;
 pub mod bot_note;
+pub mod bot_org_classification;
 pub mod bot_team;
 pub mod bot_team_bot;
+pub mod bot_team_chat;
 pub mod bot_team_person;
 pub mod bot_team_thread;
 pub mod bot_turn_checkpoint;

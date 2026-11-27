@@ -2,16 +2,16 @@ use std::collections::HashMap;
 
 use crate::document::docx::add_table::build_table;
 use crate::document::docx::create::docx_package;
-use crate::document::pdf::render::{Block, Span, parse_markdown};
 use crate::document::openxml::write_zip;
+use crate::document::pdf::render::{Block, Span, parse_markdown};
 use crate::document::styles::{defaults, hex_to_ooxml};
 
 use super::chart::{ChartKind, ChartSpec, WorkbookFn, add_chart_parts};
-use crate::document::chart::{ChartType, OfficeChartData};
 use super::{
     Built, Images, REL_IMAGE, add_override, add_relationship, ensure_default_content_type,
     office_image, xml_text,
 };
+use crate::document::chart::{ChartType, OfficeChartData};
 
 #[derive(Debug, Clone, Default)]
 pub struct DocxOptions {
@@ -184,7 +184,8 @@ impl Lists {
                 })
                 .collect()
         };
-        let mut nums = format!("<w:num w:numId=\"{BULLET_NUM_ID}\"><w:abstractNumId w:val=\"0\"/></w:num>");
+        let mut nums =
+            format!("<w:num w:numId=\"{BULLET_NUM_ID}\"><w:abstractNumId w:val=\"0\"/></w:num>");
         for (index, (level, start)) in self.ordered.iter().enumerate() {
             nums.push_str(&format!(
                 "<w:num w:numId=\"{}\"><w:abstractNumId w:val=\"1\"/><w:lvlOverride w:ilvl=\"{level}\"><w:startOverride w:val=\"{start}\"/></w:lvlOverride></w:num>",
@@ -249,7 +250,8 @@ impl Builder<'_> {
         let (bytes, extension, width, height) = match office_image(source) {
             Ok(image) => image,
             Err(error) => {
-                self.warnings.push(format!("Image '{url}' was skipped: {error}"));
+                self.warnings
+                    .push(format!("Image '{url}' was skipped: {error}"));
                 return;
             }
         };
@@ -296,8 +298,9 @@ impl Builder<'_> {
         let part = match add_chart_parts(&mut self.files, "word", number, &spec, self.workbook) {
             Ok(part) => part,
             Err(error) => {
-                self.warnings
-                    .push(format!("A chart could not be built ({error}), so it is shown as a table"));
+                self.warnings.push(format!(
+                    "A chart could not be built ({error}), so it is shown as a table"
+                ));
                 self.chart_table(data);
                 return;
             }
@@ -319,10 +322,18 @@ impl Builder<'_> {
 
     fn chart_table(&mut self, data: &OfficeChartData) {
         if let Some(title) = data.title.as_deref().filter(|t| !t.is_empty()) {
-            self.body.push_str(&paragraph(None, "", &run_xml(
-                &Span { text: title.to_string(), bold: true, ..Span::default() },
-                false,
-            )));
+            self.body.push_str(&paragraph(
+                None,
+                "",
+                &run_xml(
+                    &Span {
+                        text: title.to_string(),
+                        bold: true,
+                        ..Span::default()
+                    },
+                    false,
+                ),
+            ));
         }
         let mut grid = vec![
             std::iter::once(String::new())
@@ -332,7 +343,11 @@ impl Builder<'_> {
         for (index, category) in data.categories.iter().enumerate() {
             grid.push(
                 std::iter::once(category.clone())
-                    .chain(data.series.iter().map(|s| s.values.get(index).map_or(String::new(), |v| v.to_string())))
+                    .chain(
+                        data.series
+                            .iter()
+                            .map(|s| s.values.get(index).map_or(String::new(), |v| v.to_string())),
+                    )
                     .collect(),
             );
         }
@@ -462,7 +477,11 @@ pub fn docx_from_markdown(
     options: &DocxOptions,
     images: &Images,
 ) -> flow_like_types::Result<Built> {
-    let files = docx_package(defaults::FONT_SANS, f64::from(defaults::DOCX_FONT_SIZE), defaults::PRIMARY)?;
+    let files = docx_package(
+        defaults::FONT_SANS,
+        f64::from(defaults::DOCX_FONT_SIZE),
+        defaults::PRIMARY,
+    )?;
     let mut builder = Builder {
         files,
         images,

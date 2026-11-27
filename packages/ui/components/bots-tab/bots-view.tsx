@@ -10,7 +10,9 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { useOrg } from "../../hooks/use-bot-teams";
+import { useCreateConversation } from "../../hooks/use-inbox";
 import { emitGuideEvent } from "../../lib/guide/guide-events";
 import { useBackend } from "../../state/backend-state";
 import type { IBot } from "../../state/backend-state/bot-state";
@@ -238,6 +240,23 @@ function CrewLayout(data: Readonly<CrewData>) {
 			select({ type: "conversation", conversationId });
 		},
 		[panelCoversChat, select, selectPanel, selection],
+	);
+	const { mutateAsync: createConversation } = useCreateConversation();
+	const messagePerson = useCallback(
+		(userId: string) => {
+			createConversation({ kind: "direct", members: [userId] })
+				.then((conversation) => openConversation(conversation.id))
+				.catch((error: unknown) => {
+					console.error(`Starting a chat with ${userId} failed:`, error);
+					toast.error(
+						t(
+							"teams.chats.startChatFailed",
+							"Couldn't start the chat. Try again.",
+						),
+					);
+				});
+		},
+		[createConversation, openConversation, t],
 	);
 	const openStarred = useCallback(
 		(conversationId: string, messageId: string) => {
@@ -513,6 +532,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 						onOpenMember={openMember}
 						onOpenAssistant={openPromptChat}
 						onSettings={openSettings}
+						onMessagePerson={messagePerson}
 					/>
 				</CrewSplitLayout>
 			)}

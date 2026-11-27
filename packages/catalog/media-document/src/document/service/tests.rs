@@ -2,13 +2,11 @@ use std::collections::HashMap;
 
 use flow_like_types::images::image;
 
+use super::chart::{WorkbookCell, WorkbookFn};
 use super::docx::{DocxOptions, docx_from_markdown};
 use super::fill::{FillInput, TableRows, TemplateKind, fill_template};
 use super::pdf::{PdfOptions, pdf_from_markdown};
-use super::pptx::{
-    ChartKind, DeckOptions, Slide, SlideChart, SlideLayout, pptx_from_slides,
-};
-use super::chart::{WorkbookCell, WorkbookFn};
+use super::pptx::{ChartKind, DeckOptions, Slide, SlideChart, SlideLayout, pptx_from_slides};
 use super::xml_text;
 use crate::document::openxml::read_zip;
 
@@ -72,7 +70,10 @@ fn deck() -> Vec<Slide> {
     chart.chart = Some(SlideChart {
         kind: ChartKind::Bar,
         categories: vec!["Q1".into(), "Q2".into()],
-        series: vec![("Sales".into(), vec![1.0, 2.5]), ("Costs".into(), vec![0.5, 1.0])],
+        series: vec![
+            ("Sales".into(), vec![1.0, 2.5]),
+            ("Costs".into(), vec![0.5, 1.0]),
+        ],
         ..SlideChart::default()
     });
     vec![opening, points, picture, table, chart]
@@ -140,7 +141,12 @@ fn docx_keeps_the_block_structure() {
 
 #[test]
 fn docx_without_the_image_bytes_warns_and_keeps_the_description() {
-    let built = docx_from_markdown("![chart](gone.png)", &DocxOptions::default(), &HashMap::new()).unwrap();
+    let built = docx_from_markdown(
+        "![chart](gone.png)",
+        &DocxOptions::default(),
+        &HashMap::new(),
+    )
+    .unwrap();
     assert_eq!(built.warnings.len(), 1);
     let files = read_zip(&built.bytes).unwrap();
     assert!(text_of(&files, "word/document.xml").contains("[chart]"));
@@ -165,7 +171,12 @@ fn pptx_has_slides_chart_notes_and_valid_parts() {
         .filter(|k| k.starts_with("ppt/slides/slide") && k.ends_with(".xml"))
         .count();
     assert_eq!(slides, 5);
-    assert_eq!(text_of(&files, "ppt/presentation.xml").matches("<p:sldId ").count(), 5);
+    assert_eq!(
+        text_of(&files, "ppt/presentation.xml")
+            .matches("<p:sldId ")
+            .count(),
+        5
+    );
     assert!(files.contains_key("ppt/charts/chart1.xml"));
     let chart = text_of(&files, "ppt/charts/chart1.xml");
     assert!(chart.contains("<c:barChart>") && chart.matches("<c:ser>").count() == 2);
@@ -182,18 +193,34 @@ fn pptx_has_slides_chart_notes_and_valid_parts() {
 fn fill_replaces_docx_text_rows_and_images() {
     let markdown = "Dear {{name}}, welcome.\n\n![logo](logo.png)\n\n| Item | Qty |\n|---|---|\n| {{item}} | {{qty}} |\n";
     let images = HashMap::from([("logo.png".to_string(), png([0, 0, 255]))]);
-    let template = docx_from_markdown(markdown, &DocxOptions::default(), &images).unwrap().bytes;
+    let template = docx_from_markdown(markdown, &DocxOptions::default(), &images)
+        .unwrap()
+        .bytes;
     assert_eq!(TemplateKind::detect(&template), Some(TemplateKind::Docx));
 
     let replacement = png([255, 0, 0]);
     let input = FillInput {
-        values: vec![("name".into(), "Ada & Bob".into()), ("nothing".into(), "x".into())],
-        images: vec![("logo".into(), replacement.clone()), ("ghost".into(), replacement.clone())],
+        values: vec![
+            ("name".into(), "Ada & Bob".into()),
+            ("nothing".into(), "x".into()),
+        ],
+        images: vec![
+            ("logo".into(), replacement.clone()),
+            ("ghost".into(), replacement.clone()),
+        ],
         tables: vec![(
             "item".into(),
             TableRows::Records(vec![
-                [("item".to_string(), "Apple".to_string()), ("qty".to_string(), "3".to_string())].into(),
-                [("item".to_string(), "Pear".to_string()), ("qty".to_string(), "5".to_string())].into(),
+                [
+                    ("item".to_string(), "Apple".to_string()),
+                    ("qty".to_string(), "3".to_string()),
+                ]
+                .into(),
+                [
+                    ("item".to_string(), "Pear".to_string()),
+                    ("qty".to_string(), "5".to_string()),
+                ]
+                .into(),
             ]),
         )],
         ..FillInput::default()
@@ -212,7 +239,9 @@ fn fill_replaces_docx_text_rows_and_images() {
 
 #[test]
 fn fill_replaces_pptx_text_and_table() {
-    let template = pptx_from_slides(&DeckOptions::default(), &deck()).unwrap().bytes;
+    let template = pptx_from_slides(&DeckOptions::default(), &deck())
+        .unwrap()
+        .bytes;
     assert_eq!(TemplateKind::detect(&template), Some(TemplateKind::Pptx));
     let input = FillInput {
         values: vec![("who".into(), "Ada".into())],
@@ -267,7 +296,10 @@ fn fill_sets_acroform_fields_and_reports_unknown_ones() {
     let template = form_pdf();
     assert_eq!(TemplateKind::detect(&template), Some(TemplateKind::Pdf));
     let input = FillInput {
-        values: vec![("customer".into(), "Ada".into()), ("nope".into(), "x".into())],
+        values: vec![
+            ("customer".into(), "Ada".into()),
+            ("nope".into(), "x".into()),
+        ],
         ..FillInput::default()
     };
     let filled = fill_template(TemplateKind::Pdf, &template, &input).unwrap();
@@ -311,10 +343,20 @@ fn docx_lists_use_numbering_xml_with_levels_and_restarts() {
     assert!(numbering.contains("w:numFmt w:val=\"bullet\""));
     assert!(numbering.contains("w:numFmt w:val=\"decimal\""));
     assert!(numbering.contains("<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/>"));
-    assert_eq!(numbering.matches("<w:startOverride").count(), 3, "{numbering}");
-    assert!(numbering.contains("<w:lvlOverride w:ilvl=\"0\">") && numbering.contains("<w:startOverride w:val=\"3\"/>"));
+    assert_eq!(
+        numbering.matches("<w:startOverride").count(),
+        3,
+        "{numbering}"
+    );
+    assert!(
+        numbering.contains("<w:lvlOverride w:ilvl=\"0\">")
+            && numbering.contains("<w:startOverride w:val=\"3\"/>")
+    );
     let first_ordered = document.find("w:numId w:val=\"2\"").unwrap();
-    assert!(document[first_ordered..].contains("w:numId w:val=\"4\""), "{document}");
+    assert!(
+        document[first_ordered..].contains("w:numId w:val=\"4\""),
+        "{document}"
+    );
     assert!(text_of(&files, "word/_rels/document.xml.rels").contains("relationships/numbering"));
     assert!(text_of(&files, "[Content_Types].xml").contains("/word/numbering.xml"));
 }
@@ -322,13 +364,20 @@ fn docx_lists_use_numbering_xml_with_levels_and_restarts() {
 #[test]
 fn docx_without_lists_has_no_numbering_part() {
     let built = docx_from_markdown("plain", &DocxOptions::default(), &HashMap::new()).unwrap();
-    assert!(!read_zip(&built.bytes).unwrap().contains_key("word/numbering.xml"));
+    assert!(
+        !read_zip(&built.bytes)
+            .unwrap()
+            .contains_key("word/numbering.xml")
+    );
 }
 
 #[test]
 fn docx_charts_are_native_parts_with_an_embedded_workbook() {
     let markdown = "Before\n\n```nivo\ntype: bar\ntitle: Sales\nstacked: true\nlayout: horizontal\n---\nQuarter,Sales,Costs\nQ1,10,4\nQ2,12,5\n```\n\n```plotly\ntype: pie\n---\nPart,Share\nA,60\nB,40\n```\n";
-    let options = DocxOptions { workbook: STUB, ..DocxOptions::default() };
+    let options = DocxOptions {
+        workbook: STUB,
+        ..DocxOptions::default()
+    };
     let built = docx_from_markdown(markdown, &options, &HashMap::new()).unwrap();
     assert!(built.warnings.is_empty(), "{:?}", built.warnings);
     let files = read_zip(&built.bytes).unwrap();
@@ -337,14 +386,23 @@ fn docx_charts_are_native_parts_with_an_embedded_workbook() {
         assert!(files.contains_key(&format!("word/charts/chart{n}.xml")));
         assert!(files.contains_key(&format!("word/embeddings/Microsoft_Excel_Sheet{n}.xlsx")));
         let rels = text_of(&files, &format!("word/charts/_rels/chart{n}.xml.rels"));
-        assert!(rels.contains("relationships/package") && rels.contains(&format!("../embeddings/Microsoft_Excel_Sheet{n}.xlsx")));
+        assert!(
+            rels.contains("relationships/package")
+                && rels.contains(&format!("../embeddings/Microsoft_Excel_Sheet{n}.xlsx"))
+        );
     }
     let chart = text_of(&files, "word/charts/chart1.xml");
-    assert!(chart.contains("<c:barDir val=\"bar\"/>") && chart.contains("<c:grouping val=\"stacked\"/>"));
+    assert!(
+        chart.contains("<c:barDir val=\"bar\"/>")
+            && chart.contains("<c:grouping val=\"stacked\"/>")
+    );
     assert!(chart.contains("Sheet1!$B$1") && chart.contains("Sheet1!$C$2:$C$3"));
     assert!(chart.contains("<c:externalData r:id=\"rId1\">") && chart.contains(">Sales<"));
     assert!(text_of(&files, "word/charts/chart2.xml").contains("<c:pieChart>"));
-    assert!(String::from_utf8_lossy(&files["word/embeddings/Microsoft_Excel_Sheet1.xlsx"]).contains("rows=3"));
+    assert!(
+        String::from_utf8_lossy(&files["word/embeddings/Microsoft_Excel_Sheet1.xlsx"])
+            .contains("rows=3")
+    );
     let document = text_of(&files, "word/document.xml");
     assert_eq!(document.matches("<c:chart ").count(), 2);
     let rels = text_of(&files, "word/_rels/document.xml.rels");
@@ -378,17 +436,30 @@ fn docx_charts_that_cannot_be_native_fall_back_to_a_table_with_a_warning() {
 
 #[test]
 fn pptx_charts_embed_their_data_when_a_workbook_builder_is_given() {
-    let options = DeckOptions { workbook: STUB, ..DeckOptions::default() };
+    let options = DeckOptions {
+        workbook: STUB,
+        ..DeckOptions::default()
+    };
     let built = pptx_from_slides(&options, &deck()).unwrap();
     let files = read_zip(&built.bytes).unwrap();
     assert_well_formed(&files);
     assert!(files.contains_key("ppt/embeddings/Microsoft_Excel_Sheet1.xlsx"));
     let rels = text_of(&files, "ppt/charts/_rels/chart1.xml.rels");
-    assert!(rels.contains("relationships/package") && rels.contains("../embeddings/Microsoft_Excel_Sheet1.xlsx"));
+    assert!(
+        rels.contains("relationships/package")
+            && rels.contains("../embeddings/Microsoft_Excel_Sheet1.xlsx")
+    );
     let chart = text_of(&files, "ppt/charts/chart1.xml");
-    assert!(chart.contains("Sheet1!$B$1") && chart.contains("Sheet1!$C$2:$C$3") && chart.contains("<c:externalData"));
+    assert!(
+        chart.contains("Sheet1!$B$1")
+            && chart.contains("Sheet1!$C$2:$C$3")
+            && chart.contains("<c:externalData")
+    );
     assert!(text_of(&files, "[Content_Types].xml").contains("Extension=\"xlsx\""));
-    assert!(String::from_utf8_lossy(&files["ppt/embeddings/Microsoft_Excel_Sheet1.xlsx"]).contains("rows=3"));
+    assert!(
+        String::from_utf8_lossy(&files["ppt/embeddings/Microsoft_Excel_Sheet1.xlsx"])
+            .contains("rows=3")
+    );
 
     let plain = pptx_from_slides(&DeckOptions::default(), &deck()).unwrap();
     let plain = read_zip(&plain.bytes).unwrap();

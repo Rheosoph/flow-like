@@ -407,7 +407,7 @@ describe("BotsView", () => {
 		expect(details).toContain("End-to-end encryption");
 		expect(details).not.toContain("runtime is live");
 		expect(details).not.toContain("Move to your account");
-		expect(panelButton("Edit")).toBeDefined();
+		expect(panelButton("Edit bot")).toBeDefined();
 		await click(panelButton("Back to the chat"));
 	});
 
@@ -424,7 +424,7 @@ describe("BotsView", () => {
 		expect(panelText()).toContain("Builds and fixes your apps and workflows");
 		expect(panelText()).toContain("FlowPilot");
 		expect(panelText()).not.toContain("No abilities yet");
-		await click(panelButton("Edit"));
+		await click(panelButton("Edit bot"));
 		const editor = renderEditor.mock.calls.at(-1)?.[0];
 		expect(editor?.open).toBe(true);
 		expect(editor?.botId).toBe("bot_flux");

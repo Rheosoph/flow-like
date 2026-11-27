@@ -23,7 +23,7 @@ use std::{
 
 use async_trait::async_trait;
 use flow_like_types::bot::{BotLocation, BotSystemKind};
-use flow_like_types::bot_team::{TeamBrief, team_brief_text};
+use flow_like_types::bot_team::{ORG_LOOKUP_TOOL, OrgLookup, TeamBrief, team_brief_text};
 use flow_like_types::data_classification::{DataClassification, DataSensitivity};
 use flow_like_types::tokio;
 use serde::{Deserialize, Serialize};
@@ -177,6 +177,16 @@ pub trait BotTalkHost: Send + Sync {
 
     /// What `caller` knows about its team and org; `None` for a bot outside every team.
     async fn team_brief(&self, _caller: &CrewMember) -> flow_like_types::Result<Option<TeamBrief>> {
+        Ok(None)
+    }
+
+    /// The teams, bots and people of `caller`'s org matching `query`; `None` where its brief is
+    /// `None`.
+    async fn org_lookup(
+        &self,
+        _caller: &CrewMember,
+        _query: &str,
+    ) -> flow_like_types::Result<Option<OrgLookup>> {
         Ok(None)
     }
 
@@ -345,13 +355,41 @@ fn ask_bot_schema() -> Value {
     })
 }
 
+const ORG_LOOKUP_DESCRIPTION: &str = "Search your organization (the one under THE ORGANIZATION): its teams with what each does, its lead, its bots, its people and the teams inside it; its bots with their owner, team and job; its people with the teams they are in and their role there. `query` is a name, a #Team tag, or words from a team's purpose or a bot's job; leave it empty to list every team. It never shows anyone's classification.";
+const ORG_LOOKUP_TIMEOUT_SECS: u64 = 30;
+const MAX_LOOKUP_QUERY_CHARS: usize = 200;
+
+/// The `org_lookup` tool of a bot in a team. Core answers it ([`BotTalkBridge`]).
+pub fn org_lookup_tool_spec() -> PlatformToolSpec {
+    PlatformToolSpec {
+        name: ORG_LOOKUP_TOOL,
+        description: ORG_LOOKUP_DESCRIPTION,
+        schema: org_lookup_schema,
+        approval: ToolApprovalSpec::None,
+        timeout_secs: ORG_LOOKUP_TIMEOUT_SECS,
+    }
+}
+
+fn org_lookup_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "query": { "type": "string", "description": "A team, bot or person name, a #Team tag, or words from a team's purpose or a bot's job. Empty lists every team." }
+        },
+        "required": ["query"]
+    })
+}
+
 /// What bot talk adds to one turn.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TalkTurn {
-    /// System prompt sections: who is asking (nested turns) and the crew.
+    /// System prompt sections: who is asking (nested turns), the team brief and the crew.
     pub prompt: Option<String>,
     /// Whether the turn offers `ask_bot`: within the hop limit, with a crew to ask.
     pub asks: bool,
+    /// Whether the turn offers `org_lookup`: the bot read a team brief.
+    pub looks_up: bool,
 }
 
 /// A callee's turn inside another bot's ask.
@@ -610,6 +648,7 @@ impl BotTalk {
             None
         };
         let team = self.team_section().await;
+        let looks_up = team.is_some();
         let sections: Vec<String> = self
             .turn_section()
             .into_iter()
@@ -623,6 +662,36 @@ impl BotTalk {
         TalkTurn {
             prompt: (!sections.is_empty()).then(|| sections.join("\n\n")),
             asks: crew.is_some_and(|crew| !crew.is_empty()),
+            looks_up,
+        }
+    }
+
+    /// Runs one `org_lookup` call. Returns the tool result.
+    pub async fn look_up(&self, arguments: &Value) -> String {
+        let query: String = arguments
+            .get("query")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .chars()
+            .take(MAX_LOOKUP_QUERY_CHARS)
+            .collect();
+        let failure = |message: String| {
+            json!({ "status": "error", "tool": ORG_LOOKUP_TOOL, "message": message }).to_string()
+        };
+        match self.host.org_lookup(&self.caller, &query).await {
+            Ok(Some(found)) => {
+                let mut result = serde_json::to_value(found).unwrap_or_else(|_| json!({}));
+                if let Some(object) = result.as_object_mut() {
+                    object.insert("status".into(), json!("ok"));
+                    object.insert("tool".into(), json!(ORG_LOOKUP_TOOL));
+                }
+                result.to_string()
+            }
+            Ok(None) => failure(
+                "Your organization can't be looked up here: you are in no team, or someone in this conversation is outside your organization.".to_string(),
+            ),
+            Err(error) => failure(format!("Looking up your organization failed: {error:#}")),
         }
     }
 
@@ -1273,8 +1342,8 @@ impl AskResult {
     }
 }
 
-/// Answers `ask_bot` in core and hands every other call to `inner`, which also carries the owner's
-/// permission question. Wrap it around a run's other bridges, outermost.
+/// Answers `ask_bot` and `org_lookup` in core and hands every other call to `inner`, which also
+/// carries the owner's permission question. Wrap it around a run's other bridges, outermost.
 pub struct BotTalkBridge {
     talk: Arc<BotTalk>,
     inner: Arc<dyn PlatformToolBridge>,
@@ -1289,14 +1358,15 @@ impl BotTalkBridge {
 #[async_trait]
 impl PlatformToolBridge for BotTalkBridge {
     async fn call(&self, tool_name: &str, arguments: Value) -> String {
-        if tool_name == ASK_BOT_TOOL {
-            return self.talk.ask(&arguments, self.inner.as_ref()).await;
+        match tool_name {
+            ASK_BOT_TOOL => self.talk.ask(&arguments, self.inner.as_ref()).await,
+            ORG_LOOKUP_TOOL => self.talk.look_up(&arguments).await,
+            _ => self.inner.call(tool_name, arguments).await,
         }
-        self.inner.call(tool_name, arguments).await
     }
 
     async fn clearance(&self, tool_name: &str, arguments: &Value) -> Clearance {
-        if tool_name == ASK_BOT_TOOL {
+        if tool_name == ASK_BOT_TOOL || tool_name == ORG_LOOKUP_TOOL {
             return Clearance::Clear;
         }
         self.inner.clearance(tool_name, arguments).await

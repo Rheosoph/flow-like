@@ -1,13 +1,16 @@
 import type {
+	IBotChat,
 	IBotRoomLimits,
 	IBotTeamState,
 	ICreateTeamRequest,
 	IOrgView,
 	ITeam,
 	ITeamBriefing,
+	ITeamThread,
 	IUpdateTeamRequest,
 	TeamRole,
 } from "@flow-like/flow-like-ui";
+import type { DataClassification } from "@flow-like/flow-like-ui/lib/data-classification";
 import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { del, get, patch, post, put } from "../../lib/api";
 import {
@@ -31,11 +34,37 @@ function botPath(teamId: string, botId: string): string {
 	return `${teamPath(teamId)}/bots/${encodeURIComponent(botId)}`;
 }
 
+function chatPath(botId: string, userId: string): string {
+	return `${TEAMS}/chats/${encodeURIComponent(botId)}/${encodeURIComponent(userId)}`;
+}
+
 function expectTeam(response: unknown, operation: string): ITeam {
 	if (!isRecord(response) || typeof response.id !== "string") {
 		throw new Error(`Unexpected response while trying to ${operation}`);
 	}
 	return response as unknown as ITeam;
+}
+
+function expectChat(response: unknown, operation: string): IBotChat {
+	if (
+		!isRecord(response) ||
+		typeof response.bot_id !== "string" ||
+		typeof response.user_id !== "string"
+	) {
+		throw new Error(`Unexpected response while trying to ${operation}`);
+	}
+	return response as unknown as IBotChat;
+}
+
+function expectThread(response: unknown, operation: string): ITeamThread {
+	if (!isRecord(response) || typeof response.conversation_id !== "string") {
+		throw new Error(`Unexpected response while trying to ${operation}`);
+	}
+	return response as unknown as ITeamThread;
+}
+
+function list<T>(value: T[] | undefined): T[] {
+	return Array.isArray(value) ? value : [];
 }
 
 export class BotTeamState implements IBotTeamState {
@@ -49,19 +78,30 @@ export class BotTeamState implements IBotTeamState {
 
 	async getOrg(): Promise<IOrgView> {
 		const session = accountSession(this.backend);
-		if (!session) return { teams: [], bots: [], invitations: [], threads: [] };
+		if (!session) {
+			return {
+				teams: [],
+				bots: [],
+				invitations: [],
+				threads: [],
+				reach: [],
+				chats: [],
+				classifications: [],
+			};
+		}
 		const response = await get<Partial<IOrgView>>(
 			session.profile,
 			TEAMS,
 			session.auth,
 		);
 		return {
-			teams: Array.isArray(response?.teams) ? response.teams : [],
-			bots: Array.isArray(response?.bots) ? response.bots : [],
-			invitations: Array.isArray(response?.invitations)
-				? response.invitations
-				: [],
-			threads: Array.isArray(response?.threads) ? response.threads : [],
+			teams: list(response?.teams),
+			bots: list(response?.bots),
+			invitations: list(response?.invitations),
+			threads: list(response?.threads),
+			reach: list(response?.reach),
+			chats: list(response?.chats),
+			classifications: list(response?.classifications),
 		};
 	}
 
@@ -215,5 +255,108 @@ export class BotTeamState implements IBotTeamState {
 			);
 		}
 		return response;
+	}
+
+	async acceptLead(teamId: string, botId: string): Promise<ITeam> {
+		const { profile, auth } = this.session();
+		return expectTeam(
+			await post<ITeam>(
+				profile,
+				`${botPath(teamId, botId)}/lead/accept`,
+				undefined,
+				auth,
+			),
+			`let bot ${botId} lead team ${teamId}`,
+		);
+	}
+
+	async declineLead(teamId: string, botId: string): Promise<void> {
+		const { profile, auth } = this.session();
+		await post(
+			profile,
+			`${botPath(teamId, botId)}/lead/decline`,
+			undefined,
+			auth,
+		);
+	}
+
+	async resignLead(teamId: string, botId: string): Promise<ITeam> {
+		const { profile, auth } = this.session();
+		return expectTeam(
+			await post<ITeam>(
+				profile,
+				`${botPath(teamId, botId)}/lead/resign`,
+				undefined,
+				auth,
+			),
+			`step bot ${botId} down as lead of team ${teamId}`,
+		);
+	}
+
+	async openThread(teamId: string): Promise<ITeamThread> {
+		const { profile, auth } = this.session();
+		return expectThread(
+			await post<ITeamThread>(
+				profile,
+				`${teamPath(teamId)}/thread`,
+				undefined,
+				auth,
+			),
+			`open your thread with team ${teamId}`,
+		);
+	}
+
+	async requestChat(botId: string, note?: string | null): Promise<IBotChat> {
+		const { profile, auth } = this.session();
+		return expectChat(
+			await post<IBotChat>(
+				profile,
+				`${TEAMS}/chats`,
+				{ bot_id: botId, note: note ?? undefined },
+				auth,
+			),
+			`ask for a chat with bot ${botId}`,
+		);
+	}
+
+	async acceptChat(
+		botId: string,
+		userId: string,
+		limits?: IBotRoomLimits | null,
+	): Promise<IBotChat> {
+		const { profile, auth } = this.session();
+		return expectChat(
+			await post<IBotChat>(
+				profile,
+				`${chatPath(botId, userId)}/accept`,
+				{ limits: limits ?? undefined },
+				auth,
+			),
+			`approve a chat with bot ${botId}`,
+		);
+	}
+
+	async declineChat(botId: string, userId: string): Promise<void> {
+		const { profile, auth } = this.session();
+		await post(profile, `${chatPath(botId, userId)}/decline`, undefined, auth);
+	}
+
+	async endChat(botId: string, userId: string): Promise<void> {
+		const { profile, auth } = this.session();
+		await del(profile, chatPath(botId, userId), undefined, auth);
+	}
+
+	async setClassification(
+		orgId: string,
+		userId: string,
+		classification: DataClassification | null,
+	): Promise<void> {
+		const { profile, auth } = this.session();
+		await put(
+			profile,
+			`${teamPath(orgId)}/classifications/${encodeURIComponent(userId)}`,
+			{ classification },
+			auth,
+		);
 	}
 }

@@ -4,6 +4,7 @@ use super::{
     access::{
         active, admin_team, limit, load_team, member_team, not_found, org_of, pending, visible_team,
     },
+    chats::sync_chats_of,
     effects::{Effects, settle},
     lock_scope,
     model::{AcceptBotRequest, AddBotRequest, BriefingResponse, DirectAgreementRequest},
@@ -97,6 +98,7 @@ pub(crate) async fn prune_outsiders<C: ConnectionTrait>(
         .filter(bot_team_bot::Column::TeamId.is_in(ids))
         .all(db)
         .await?;
+    let touched_bots: Vec<String> = rows.iter().map(|row| row.bot_id.clone()).collect();
     let owners: std::collections::HashMap<String, String> = bot::Entity::find()
         .filter(bot::Column::Id.is_in(rows.iter().map(|row| row.bot_id.clone())))
         .filter(bot::Column::DeletedAt.is_null())
@@ -114,7 +116,8 @@ pub(crate) async fn prune_outsiders<C: ConnectionTrait>(
         }
     }
     let org = org_of(db, &root).await?;
-    sync_org_threads(db, &org.teams, by, now, effects).await
+    sync_org_threads(db, &org.teams, by, now, effects).await?;
+    sync_chats_of(db, &touched_bots, &[], by, now, effects).await
 }
 
 /// Takes the bot out of the team: its row, a lead role it held and its place in the team room.
@@ -127,6 +130,20 @@ pub(crate) async fn detach_bot_in<C: ConnectionTrait>(
     effects: &mut Effects,
 ) -> Result<(), ApiError> {
     bot_team_bot::Entity::delete_by_id((team.id.clone(), bot_id.to_string()))
+        .exec(db)
+        .await?;
+    bot_team::Entity::update_many()
+        .col_expr(
+            bot_team::Column::LeadOfferBotId,
+            Expr::value(None::<String>),
+        )
+        .col_expr(bot_team::Column::LeadOfferBy, Expr::value(None::<String>))
+        .col_expr(
+            bot_team::Column::LeadOfferAt,
+            Expr::value(None::<DateTime<FixedOffset>>),
+        )
+        .filter(bot_team::Column::Id.eq(&team.id))
+        .filter(bot_team::Column::LeadOfferBotId.eq(bot_id))
         .exec(db)
         .await?;
     if team.lead_bot_id.as_deref() == Some(bot_id) {
@@ -191,7 +208,8 @@ async fn activate_in<C: ConnectionTrait>(
             .await?;
         }
     }
-    sync_room(db, team, by, now, effects).await
+    sync_room(db, team, by, now, effects).await?;
+    sync_chats_of(db, &[bot_id.to_string()], &[], by, now, effects).await
 }
 
 async fn ensure_bot_capacity<C: ConnectionTrait>(
@@ -332,7 +350,7 @@ pub async fn add_bot(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &team_id).await?))
+    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
 }
 
 pub(crate) async fn remove_bot_in<C: ConnectionTrait>(
@@ -352,6 +370,7 @@ pub(crate) async fn remove_bot_in<C: ConnectionTrait>(
     }
     let mut effects = Effects::default();
     detach_bot_in(db, &team, bot_id, sub, now, &mut effects).await?;
+    sync_chats_of(db, &[bot_id.to_string()], &[], sub, now, &mut effects).await?;
     Ok(effects)
 }
 
@@ -471,7 +490,7 @@ pub async fn accept_bot(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &team_id).await?))
+    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
 }
 
 pub(crate) async fn decline_bot_in<C: ConnectionTrait>(
@@ -571,7 +590,7 @@ pub async fn set_direct(
 ) -> Result<Json<Team>, ApiError> {
     let sub = user.sub()?;
     set_direct_in(&state.db, &sub, &team_id, &bot_id, body.agreed).await?;
-    Ok(Json(team_view(&state.db, &team_id).await?))
+    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
 }
 
 /// Whether `user_id` may read what `bot_id` knows of its team: its owner or an active person of

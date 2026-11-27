@@ -65,6 +65,8 @@ model User {
   botTurns                    BotTurn[]
   botTeams                    BotTeamPerson[]
   botTeamThreads              BotTeamThread[]
+  botTeamChats                BotTeamChat[]
+  botOrgClassifications       BotOrgClassification[]
 
   status String @default("ACTIVE")
   tier   String @default("FREE")

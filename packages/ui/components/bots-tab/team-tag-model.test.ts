@@ -141,3 +141,36 @@ describe("addressesTeam", () => {
 		expect(addressesTeam("#Security", [])).toBe(false);
 	});
 });
+
+describe("locked leads", () => {
+	const org = {
+		teams: [
+			{ id: "t1", name: "Vault", lead_bot_id: "b1", bots: [], people: [] },
+			{ id: "t2", name: "Desk", lead_bot_id: "b2", bots: [], people: [] },
+			{ id: "t3", name: "Idle", lead_bot_id: null, bots: [], people: [] },
+		],
+		bots: [{ id: "b1", classification: "restricted" }, { id: "b2" }],
+		invitations: [],
+		reach: [
+			{ bot_id: "b1", reach: "classified" },
+			{ bot_id: "b2", reach: "lead" },
+		],
+	} as unknown as IOrgView;
+	const options = teamTagOptions(org, () => undefined);
+
+	test("a classified lead stays listed with its level, a team without a lead stays out", () => {
+		expect(options.map((option) => [option.tag, option.lockedLevel])).toEqual([
+			["Vault", "restricted"],
+			["Desk", undefined],
+		]);
+	});
+
+	test("locked options sort after the open ones and address no team", () => {
+		expect(matchTeamTags(options, "").map((option) => option.tag)).toEqual([
+			"Desk",
+			"Vault",
+		]);
+		expect(addressesTeam("#Vault hi", options)).toBe(false);
+		expect(addressesTeam("#Desk hi", options)).toBe(true);
+	});
+});

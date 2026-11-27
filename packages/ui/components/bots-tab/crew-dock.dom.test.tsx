@@ -330,7 +330,7 @@ describe("the Assistant on this computer beside the account's", () => {
 		expect(panel()?.textContent).toContain("This computer");
 		expect(panel()?.textContent).toContain("Not connected to your account");
 		expect(panelButton("Move to your account")).toBeDefined();
-		await click(panelButton("Edit"));
+		await click(panelButton("Edit bot"));
 		expect(editor).toEqual({ open: true, botId: LOCAL_ASSISTANT });
 
 		await click(card(false));
@@ -341,7 +341,7 @@ describe("the Assistant on this computer beside the account's", () => {
 		await openPanel();
 		expect(panel()?.textContent).not.toContain("Not connected to your account");
 		expect(hasPanelButton("Move to your account")).toBe(false);
-		await click(panelButton("Edit"));
+		await click(panelButton("Edit bot"));
 		expect(editor).toEqual({ open: true, botId: ACCOUNT_ASSISTANT });
 	});
 

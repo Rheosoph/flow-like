@@ -6,6 +6,7 @@ use super::{
         person_row,
     },
     bots::prune_outsiders,
+    classification::prune_classifications,
     effects::{Effects, settle},
     lock_org_scope, lock_scope,
     model::{AddPeopleRequest, SetRoleRequest},
@@ -138,7 +139,7 @@ pub async fn add_people(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &team_id).await?))
+    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
 }
 
 pub(crate) async fn join_in<C: ConnectionTrait>(
@@ -195,7 +196,7 @@ pub async fn join_team(
         })
         .await?;
     settle(&state, effects).await;
-    Ok(Json(team_view(&state.db, &team_id).await?))
+    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
 }
 
 pub(crate) async fn decline_in<C: ConnectionTrait>(
@@ -327,7 +328,7 @@ pub async fn set_role(
             })
         })
         .await?;
-    Ok(Json(team_view(&state.db, &team_id).await?))
+    Ok(Json(team_view(&state.db, &sub, &team_id).await?))
 }
 
 /// Removes a person from the team: an admin removes anyone, everyone may leave. Their bots in the
@@ -373,6 +374,7 @@ pub(crate) async fn remove_person_in<C: ConnectionTrait>(
     } else {
         let org = org_of(db, &team).await?;
         prune_outsiders(db, &org.root.id, sub, now, &mut effects).await?;
+        prune_classifications(db, &org.root.id).await?;
     }
     Ok(effects)
 }

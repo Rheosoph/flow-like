@@ -34,6 +34,7 @@ import {
 	crewPrincipalIds,
 	hasBotsHostedElsewhere,
 	splitConversations,
+	unreadOf,
 } from "../../bots-tab/crew-model";
 import { CrewSection } from "../../bots-tab/crew-section";
 import {
@@ -455,7 +456,7 @@ function conversationsFor(
 	if (filter === "rooms") return rooms;
 	if (filter === "direct") return direct;
 	if (filter === "unread")
-		return conversations.filter((item) => item.unread_count > 0);
+		return conversations.filter((item) => unreadOf(item) > 0);
 	return [...conversations];
 }
 

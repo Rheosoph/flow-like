@@ -135,3 +135,9 @@ export async function settle(ms = 30) {
 		await new Promise((resolve) => setTimeout(resolve, ms));
 	});
 }
+
+/** Settles until `ready` holds or `timeoutMs` passes, for lookups that land late on a busy machine. */
+export async function settleUntil(ready: () => boolean, timeoutMs = 2000) {
+	const deadline = Date.now() + timeoutMs;
+	while (!ready() && Date.now() < deadline) await settle(20);
+}

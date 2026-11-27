@@ -33,6 +33,8 @@ model Conversation {
   botNotes       BotNote[]
   botTeam        BotTeam?
   botTeamThread  BotTeamThread?
+  botTeamChat    BotTeamChat?
+  channelLinks   BotChannelLink[]
 
   @@unique([createdBy, importKey])
 }

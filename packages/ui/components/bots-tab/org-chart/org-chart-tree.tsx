@@ -1,11 +1,12 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { OrgTeamNode } from "../../../lib/bot-teams/org-model";
 import { cn } from "../../../lib/utils";
 import type { ITeam } from "../../../state/backend-state/bot-team-state";
 import { useOrgChart } from "./org-chart-context";
+import { teamHasPorts } from "./org-chart-io";
 import {
 	benchBots,
 	dropAction,
@@ -13,7 +14,9 @@ import {
 	toOrgBot,
 } from "./org-chart-model";
 import { OrgBotAvatar, TeamTile } from "./org-chart-parts";
-import { TeamRows } from "./org-chart-rows";
+import { InputRail, OutputRail, RailHeads } from "./org-chart-ports";
+import { AddBotRow, BotRow, TeamRows, teamEntries } from "./org-chart-rows";
+import { TeamReachLine } from "./reach-parts";
 
 export function TeamHeader({ team }: Readonly<{ team: ITeam }>) {
 	const { t } = useTranslation("bots");
@@ -79,26 +82,105 @@ export function useTeamDrop(team: ITeam) {
 	};
 }
 
+function boxTone(highlighted: boolean, over: boolean) {
+	return cn(
+		"rounded-xl border bg-card shadow-xs transition-colors",
+		highlighted && "border-primary",
+		over && "border-dashed border-primary bg-primary/5",
+	);
+}
+
+/**
+ * The team box between its rails: ways in (mail, webhooks) on the left, sent mail on the right,
+ * each wired to its bot's row. Both rails share one width so the reporting lines stay centered.
+ */
+function RailedTeamBox({ team }: Readonly<{ team: ITeam }>) {
+	const { highlight, botOf, selectedBotId } = useOrgChart();
+	const { over, handlers } = useTeamDrop(team);
+	const { lead, others } = teamEntries(team, botOf);
+	const entries = lead ? [lead, ...others] : others;
+	const lastRow = entries.length + 2;
+	return (
+		<section
+			aria-label={team.name}
+			{...handlers}
+			className="grid shrink-0 grid-cols-[13rem_16rem_13rem] gap-y-0.5"
+		>
+			<div
+				aria-hidden
+				className={cn(
+					"col-start-2",
+					boxTone(highlight.teamIds.has(team.id), over),
+				)}
+				style={{ gridRow: `1 / ${lastRow + 1}` }}
+			/>
+			<RailHeads team={team} />
+			<div className="col-start-2 row-start-1 min-w-0 px-2 pt-2 pb-0.5">
+				<TeamHeader team={team} />
+				<TeamReachLine team={team} />
+			</div>
+			{entries.map((entry, index) => {
+				const bot = botOf(entry.bot_id);
+				const active =
+					entry.status === "active" &&
+					(selectedBotId === entry.bot_id ||
+						highlight.botIds.has(entry.bot_id));
+				const row = { gridRow: index + 2 };
+				const live = entry.status === "active" ? bot : undefined;
+				return (
+					<Fragment key={entry.bot_id}>
+						<InputRail bot={live} active={active} style={row} />
+						<div
+							className="col-start-2 grid min-w-0 grid-cols-[minmax(0,1fr)] px-2"
+							style={row}
+						>
+							<BotRow
+								team={team}
+								entry={entry}
+								isLead={entry === lead}
+								branch={entry !== lead}
+							/>
+						</div>
+						<OutputRail bot={live} active={active} style={row} />
+					</Fragment>
+				);
+			})}
+			<div className="col-start-2 px-2 pb-2" style={{ gridRow: lastRow }}>
+				<AddBotRow team={team} branch />
+			</div>
+		</section>
+	);
+}
+
 export function TeamBox({
 	team,
 	className = "w-64 shrink-0",
-}: Readonly<{ team: ITeam; className?: string }>) {
-	const { highlight } = useOrgChart();
+	layout = "rails",
+}: Readonly<{
+	team: ITeam;
+	className?: string;
+	/** `rails` puts ways in and out beside the box; `inline` lists them under each bot. */
+	layout?: "rails" | "inline";
+}>) {
+	const { highlight, showIo, botOf } = useOrgChart();
 	const { over, handlers } = useTeamDrop(team);
+	if (showIo && layout === "rails" && teamHasPorts(team, botOf)) {
+		return <RailedTeamBox team={team} />;
+	}
 	return (
 		<section
 			aria-label={team.name}
 			{...handlers}
 			className={cn(
-				"rounded-xl border bg-card p-2 shadow-xs transition-colors",
+				"p-2",
+				boxTone(highlight.teamIds.has(team.id), over),
 				className,
-				highlight.teamIds.has(team.id) && "border-primary",
-				over && "border-dashed border-primary bg-primary/5",
 			)}
 		>
 			<TeamHeader team={team} />
+			<TeamReachLine team={team} />
 			<div className="mt-1">
-				<TeamRows team={team} />
+				<TeamRows team={team} inlinePorts={showIo && layout === "inline"} />
 			</div>
 		</section>
 	);

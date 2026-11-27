@@ -382,6 +382,12 @@ export interface IConversation {
 	unread_count: number;
 	/** You muted it: messages arrive and count as unread, but send no push. */
 	muted?: boolean;
+	/**
+	 * You sit in it as the owner of a bot that works for someone else (their thread with your
+	 * bot's team, or their chat with your bot): it sends no push unless someone names you, and
+	 * lists apart from your own chats without counting toward your unread badge.
+	 */
+	watching?: boolean;
 	/** When you pinned it to the top of your list; null when it isn't pinned. */
 	pinned_at?: string | null;
 	/** Newest `message` entry in the reader's inbox. */
