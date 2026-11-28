@@ -1158,6 +1158,8 @@
 			"instructionsPlaceholder": "How should it work, what should it focus on, and what should it never do?",
 			"local": "Local",
 			"localOnServer": "This model runs on your own hardware, so a bot in the cloud can't use it. Add a fallback that runs in the cloud.",
+			"notOnDevice": "A bot on a device can't use this model: it only runs through your desktop app. Pick a hosted model or one connected with your own provider.",
+			"ownKeyOnDevice": "The device calls this model itself, so it also reaches models only its own network can. Your hub sends the device the model's key while the bot answers.",
 			"memoryHint": "The embedding model it saves and finds its memories with.",
 			"memoryHost": "Let the host choose",
 			"memoryHostHint": "The app or server it runs on picks one",

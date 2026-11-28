@@ -1185,6 +1185,8 @@
 			"instructionsPlaceholder": "",
 			"local": "",
 			"localOnServer": "",
+			"notOnDevice": "",
+			"ownKeyOnDevice": "",
 			"memoryHint": "",
 			"memoryHost": "",
 			"memoryHostHint": "",

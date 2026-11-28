@@ -14,8 +14,8 @@ use axum::{
 };
 use sea_orm::{ColumnTrait, DatabaseTransaction, DbErr, EntityTrait, QueryFilter};
 
-pub mod apps;
 pub(crate) mod access;
+pub mod apps;
 pub mod bots;
 pub mod chats;
 pub mod classification;

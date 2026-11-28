@@ -95,7 +95,7 @@ Because the server can't read encrypted conversations:
 - Calls in an encrypted chat need a speech-to-text model installed on your device. Hosted speech models run behind the server, so an app without its own model shows no call there, and bots speak only with a voice installed on the device. What is said is sealed like a message. The server only learns that a call started and ended, so it can ring the others.
 - Secrets sealed for a bot's host can't be used by turns that run in the cloud.
 
-A bot that answers with a hosted model sends each turn through the server to that model, so the model's provider reads what the bot sends it. Bots on a device always use hosted models. Encryption keeps their chats unreadable in the server's storage and inbox, not from the model.
+A bot that answers with a hosted model sends each turn through the server to that model, so the model's provider reads what the bot sends it. A device bot on a model you connected with your own provider calls that provider straight from the device, and your hub sends the device the model's key for the turn. Encryption keeps their chats unreadable in the server's storage and inbox, not from the model.
 
 ## Limits that keep costs in check
 

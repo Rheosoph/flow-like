@@ -1158,6 +1158,8 @@
 			"instructionsPlaceholder": "Wie soll er arbeiten, worauf soll er sich konzentrieren und was soll er nie tun?",
 			"local": "Lokal",
 			"localOnServer": "Dieses Modell läuft auf deiner eigenen Hardware. Ein Bot in der Cloud kann es deshalb nicht nutzen. Füge ein Ersatzmodell hinzu, das in der Cloud läuft.",
+			"notOnDevice": "Ein Bot auf einem Gerät kann dieses Modell nicht nutzen: Es läuft nur über deine Desktop-App. Wähle ein gehostetes Modell oder eins, das du mit deinem eigenen Anbieter verbunden hast.",
+			"ownKeyOnDevice": "Das Gerät ruft dieses Modell selbst auf und erreicht so auch Modelle, die nur sein eigenes Netzwerk erreicht. Dein Hub schickt dem Gerät den Schlüssel des Modells, während der Bot antwortet.",
 			"memoryHint": "Das Embedding-Modell, mit dem er seine Erinnerungen speichert und wiederfindet.",
 			"memoryHost": "Host entscheiden lassen",
 			"memoryHostHint": "Die App oder der Server, auf dem er läuft, wählt eines aus",

@@ -38,7 +38,7 @@ Bots you create while signed out always run here, until you [move them to your a
 A device bot runs on one of your [managed devices](/devices/), such as a server in your office, a mini PC or a home lab machine, through the Flow-Like device agent.
 
 - **Answers while the device agent runs.** The agent fetches turns from your hub over HTTPS, and only that one device can pick up the bot's turns.
-- **Hosted models** through Flow-Like's model service. For images, also an image model you connected with your own key: the device gets the key from your hub for each image and doesn't store it. Local image models run only in the desktop app. A vision model reads images there only if it's a hosted one.
+- **Hosted models** through Flow-Like's model service, or a model you connected with your own provider, such as an OpenAI-compatible server or Ollama. The device calls that model itself, so it also reaches a model only its network can, such as one on your office LAN. Your hub sends the device the model's endpoint and key with each turn. Models in the desktop app's own runtime, personal agent accounts like Claude Code or Codex, and models hosted on another device run only in the desktop app. The same goes for a vision model. For images, an image model you connected with your own key also works: the device gets the key from your hub for each image and doesn't store it. Local image models run only in the desktop app.
 - **Every ability.** On Linux, browser and computer use run on a virtual display. Tools of package skills run on the device, in the same sandbox as package nodes in flows.
 - **Encrypted screen.** Watching or taking over a device bot's screen is end-to-end encrypted and works only in the desktop app.
 
