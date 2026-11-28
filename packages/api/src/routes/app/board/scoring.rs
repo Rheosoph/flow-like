@@ -241,17 +241,17 @@ pub fn compute_board_score(board: &Board) -> BoardScoreComputation {
 /// failure is logged, never surfaced: the board write is the source of truth and the next
 /// summaries request backfills a missing row.
 ///
-/// Returns the store's [`PutResult`] once the object write succeeded; the caller decides
-/// whether the board is still needed afterwards, so seeding is the caller's line.
+/// Returns the store's answer and the stored bytes once the object write succeeded; the caller
+/// decides whether the board is still needed afterwards, so seeding is the caller's line.
 pub async fn save_board_and_refresh_summary(
     state: &crate::state::AppState,
     app_id: &str,
     board: &Board,
-) -> flow_like_types::Result<flow_like::flow_like_storage::object_store::PutResult> {
+) -> flow_like_types::Result<flow_like::flow::board::SavedBoard> {
     // Reject an unsupported edit before either the board or its summary changes.
     board.ensure_supported_format()?;
-    let (put, summary) = flow_like_types::tokio::join!(
-        board.save(None),
+    let (saved, summary) = flow_like_types::tokio::join!(
+        board.save_with_source(None),
         persist_board_score(&state.db, app_id, board)
     );
     if let Err(err) = summary {
@@ -260,7 +260,7 @@ pub async fn save_board_and_refresh_summary(
             board.id
         );
     }
-    put
+    saved
 }
 
 /// Upsert the persisted [`app_board_score`] row for a single board.

@@ -486,7 +486,7 @@ mod tests {
             include_str!("../page/upsert_page.rs"),
             "pub async fn upsert_page",
             "page_id_guard.ensure_held()?;",
-            "board.save(None)",
+            "board.save_with_source(None)",
         ),
     ];
 

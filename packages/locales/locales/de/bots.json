@@ -1231,6 +1231,7 @@
 			"unsaved": "Speichere oder verwirf deine Änderungen, um den gespeicherten Bot zu duplizieren."
 		},
 		"duplicated": "Als {{name}} dupliziert",
+		"emailClaimFailed": "Der Bot ist bereit, aber {{alias}} konnte nicht als seine Adresse gesichert werden. Wähle unter „Details“ eine andere.",
 		"errors": {
 			"appLimit": "Dieser Bot nutzt bereits die maximale Anzahl von 200 ausgewählten Apps.",
 			"appRefusesBots": "Eine ausgewählte App erlaubt keine Bots. Frage den Besitzer der App.",
@@ -1289,6 +1290,8 @@
 			"handles": "Was er verarbeiten darf",
 			"othersCanInvite": "Personen, mit denen du zusammenarbeitest, dürfen ihn einladen",
 			"othersCanInviteHint": "Aus: Nur du siehst ihn und holst ihn in Räume. An: Alle, die eine App mit dir teilen, sehen Namen und Beschreibung, wenn sie jemanden in einen Raum holen, und du nimmst jede Einladung an.",
+			"othersDailyTurns": "Anfragen von anderen pro Tag",
+			"othersDailyTurnsHint": "Wie viele Durchläufe alle außer dir an einem Tag bei ihm starten dürfen, in Räumen, Team-Threads und Chats zusammen; du zahlst dafür. Jede Person bekommt höchstens {{perPerson}}.",
 			"privacy": "Privatsphäre",
 			"subtitle": "Kennzeichne die sensibelsten Daten, mit denen er arbeiten darf, und entscheide, wer seine Nachrichten lesen kann.",
 			"title": "Schütze seine Daten"
@@ -3157,7 +3160,11 @@
 			"you": "(du)",
 			"yourBots": "Deine Bots",
 			"zoomIn": "Vergrößern",
-			"zoomOut": "Verkleinern"
+			"zoomOut": "Verkleinern",
+			"preview": {
+				"person": "Wenn diese Person beitritt, antwortet {{bots}} im Teamraum nicht mehr.",
+				"bot": "Antwortet nicht im Teamraum: Dort ist jemand nicht für {{level}} klassifiziert."
+			}
 		},
 		"requests": {
 			"answer": {
@@ -3190,7 +3197,7 @@
 			"joining": "Tritt bei",
 			"joiningTip": "{{bot}} ist noch nicht dabei: Sein Besitzer muss erst zustimmen",
 			"leadClassified": "Leitung klassifiziert als {{level}}",
-			"leadOffer": "{{team}} bittet {{bot}}, die Leitung zu übernehmen. Dann können alle in {{org}} mit ihm sprechen, und seine Durchläufe gehen auf dich (bis zu {{limit}} pro Person und Tag).",
+			"leadOffer": "{{team}} bittet {{bot}}, die Leitung zu übernehmen. Dann können alle in {{org}} mit ihm sprechen, und seine Durchläufe gehen auf dich: bis zu {{perPerson}} pro Person und {{total}} insgesamt pro Tag, was du in seinen Sicherheitseinstellungen ändern kannst.",
 			"leadPickerHint": "Der Bot einer anderen Person übernimmt die Leitung erst, wenn sein Besitzer zustimmt.",
 			"level": {
 				"confidential": "Vertraulich",
@@ -3234,7 +3241,7 @@
 			"approveConfirm": "Erlauben und freigeben",
 			"chatNoNote": "Keine Notiz",
 			"chatTitle": "{{name}} möchte mit {{bot}} sprechen",
-			"leadMeta": "Dann können alle in {{org}} mit ihm sprechen, und seine Durchläufe gehen auf dich (bis zu {{limit}} pro Person und Tag).",
+			"leadMeta": "Dann können alle in {{org}} mit ihm sprechen, und seine Durchläufe gehen auf dich: bis zu {{perPerson}} pro Person und {{total}} insgesamt pro Tag, was du in seinen Sicherheitseinstellungen ändern kannst.",
 			"leadTitle": "{{team}} bittet {{bot}}, die Leitung zu übernehmen"
 		}
 	}

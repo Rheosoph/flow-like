@@ -9,6 +9,7 @@ import type {
 	IBotEncryptionHost,
 	IBotMailAddress,
 	IBotMailAvailability,
+	IBotMailDomain,
 	IBotMailThread,
 	IBotMailThreadView,
 	IBotNote,
@@ -55,6 +56,7 @@ import {
 import { createScreenSealing } from "@flow-like/flow-like-ui/lib/bot-screens/screen-sealing";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
+import { IAppVisibility } from "@flow-like/flow-like-ui/lib/schema/app/app";
 import type {
 	TeamsBotAccess,
 	TeamsBotConnection,
@@ -62,7 +64,6 @@ import type {
 	TeamsBotSetup,
 } from "@flow-like/flow-like-ui/lib/teams-bot";
 import type { IBotChannelLink } from "@flow-like/flow-like-ui/state/backend-state/bot-channels-state";
-import { IAppVisibility } from "@flow-like/flow-like-ui/lib/schema/app/app";
 import {
 	type IBotApprovalItemDecision,
 	type ISealedApprovalAnswer,
@@ -1068,6 +1069,31 @@ export class BotState implements IBotState {
 			`${botPath(account.id)}/email-address`,
 			undefined,
 			account.auth,
+		);
+	}
+
+	/** Signed out, a new bot lives on this computer and gets no address. */
+	async getNewBotMailDomain(): Promise<IBotMailDomain> {
+		const session = accountSession(this.backend);
+		if (!session) return { configured: false };
+		return get<IBotMailDomain>(
+			session.profile,
+			"bots/email-domain",
+			session.auth,
+		);
+	}
+
+	async checkNewBotMailAddress(alias: string): Promise<IBotMailAvailability> {
+		const session = accountSession(this.backend);
+		if (!session) {
+			throw new Error(
+				"Email needs a bot on an account; sign in to give a new bot an address",
+			);
+		}
+		return get<IBotMailAvailability>(
+			session.profile,
+			`bots/email-address/check/${encodeURIComponent(alias)}`,
+			session.auth,
 		);
 	}
 

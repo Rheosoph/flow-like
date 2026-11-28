@@ -7,6 +7,7 @@ import type {
 	IBotConnector,
 	IBotMailAddress,
 	IBotMailAvailability,
+	IBotMailDomain,
 	IBotMailThread,
 	IBotMailThreadView,
 	IBotNote,
@@ -364,6 +365,17 @@ export class WebBotState implements IBotState {
 
 	async releaseMailAddress(botId: string): Promise<void> {
 		await apiDelete(`${botPath(botId)}/email-address`, this.backend.auth);
+	}
+
+	async getNewBotMailDomain(): Promise<IBotMailDomain> {
+		return apiGet<IBotMailDomain>("bots/email-domain", this.backend.auth);
+	}
+
+	async checkNewBotMailAddress(alias: string): Promise<IBotMailAvailability> {
+		return apiGet<IBotMailAvailability>(
+			`bots/email-address/check/${encodeURIComponent(alias)}`,
+			this.backend.auth,
+		);
 	}
 
 	async listMailThreads(botId: string): Promise<IBotMailThread[]> {

@@ -1157,6 +1157,7 @@ mod tests {
             calendar_wake: None,
             calendar_synced_at: None,
             others_can_invite: None,
+            others_daily_turns: None,
         }
     }
 

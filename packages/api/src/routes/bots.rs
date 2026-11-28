@@ -108,6 +108,14 @@ pub fn routes() -> Router<AppState> {
         .route("/places", get(places::list_places))
         .route("/mobile-status", get(live_activities::mobile_status))
         .route(
+            "/email-domain",
+            get(crate::mail_ingress::bot_address::get_bot_mail_domain),
+        )
+        .route(
+            "/email-address/check/{alias}",
+            get(crate::mail_ingress::bot_address::check_new_bot_address),
+        )
+        .route(
             "/hosts/{host_id}",
             put(presence::report_host).delete(presence::forget_host),
         )

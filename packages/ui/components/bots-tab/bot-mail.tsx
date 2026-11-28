@@ -11,7 +11,7 @@ import {
 	XIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
 	useBotMailAddress,
@@ -19,6 +19,7 @@ import {
 	useBotMailThreads,
 	useCheckBotMailAddress,
 	useClaimBotMailAddress,
+	useNewBotMailDomain,
 	useReleaseBotMailAddress,
 } from "../../hooks/use-bots";
 import { formatRelativeTime } from "../../lib/date";
@@ -44,7 +45,12 @@ export function offersEmail(bot: IBot): boolean {
 
 type Availability = "idle" | "checking" | "free" | "taken";
 
-function useAliasAvailability(botId: string, alias: string, current?: string) {
+/** `botId` is `null` for a bot about to be created. */
+function useAliasAvailability(
+	botId: string | null,
+	alias: string,
+	current?: string,
+) {
 	const check = useCheckBotMailAddress();
 	const [state, setState] = useState<{
 		status: Availability;
@@ -143,20 +149,7 @@ export function BotEmailAddress({ botId }: Readonly<{ botId: string }>) {
 					)}
 				</p>
 			)}
-			<div className="flex items-center gap-1.5">
-				<Input
-					value={alias}
-					onChange={(event) => setAlias(event.target.value)}
-					placeholder={t("panel.mail.aliasPlaceholder", "name")}
-					aria-label={t("panel.mail.aliasLabel", "Address name")}
-					className="h-8 font-mono text-xs"
-					maxLength={64}
-				/>
-				{domain && (
-					<span className="shrink-0 text-xs text-muted-foreground">
-						@{domain}
-					</span>
-				)}
+			<AliasInput alias={alias} domain={domain} onChange={setAlias}>
 				<Button
 					type="button"
 					size="sm"
@@ -172,15 +165,95 @@ export function BotEmailAddress({ botId }: Readonly<{ botId: string }>) {
 						t("panel.mail.claim", "Claim")
 					)}
 				</Button>
-			</div>
+			</AliasInput>
 			<AvailabilityHint availability={availability} alias={value} />
+			<BotEmailLocalNote />
+		</section>
+	);
+}
+
+/**
+ * Picks the address of a bot that doesn't exist yet; the editor claims it right after creating
+ * the bot. Renders nothing where a new bot can't get one.
+ */
+export function BotPendingEmailAddress({
+	alias,
+	onChange,
+}: Readonly<{ alias: string; onChange: (alias: string) => void }>) {
+	const { t } = useTranslation("bots");
+	const mailDomain = useNewBotMailDomain();
+	const availability = useAliasAvailability(null, alias);
+	if (!mailDomain.data?.configured) return null;
+	return (
+		<section
+			data-slot="bot-pending-email-address"
+			className="flex flex-col gap-2.5"
+			aria-label={t("panel.mail.addressTitle", "Email address")}
+		>
+			<h3 className="text-sm font-medium">
+				{t("panel.mail.addressTitle", "Email address")}
+			</h3>
 			<p className="text-xs text-muted-foreground">
 				{t(
-					"panel.mail.localNote",
-					"Bots that only live on this computer have no address; move the bot to your account to give it one.",
+					"panel.mail.noAddress",
+					"Pick a name and the bot gets its own address. Mail to it wakes the bot; the bot answers with its email tools.",
 				)}
 			</p>
+			<AliasInput
+				alias={alias}
+				domain={mailDomain.data.domain}
+				onChange={onChange}
+			/>
+			<AvailabilityHint
+				availability={availability}
+				alias={alias.trim().toLowerCase()}
+			/>
 		</section>
+	);
+}
+
+export function BotEmailLocalNote() {
+	const { t } = useTranslation("bots");
+	return (
+		<p className="text-xs text-muted-foreground">
+			{t(
+				"panel.mail.localNote",
+				"Bots that only live on this computer have no address; move the bot to your account to give it one.",
+			)}
+		</p>
+	);
+}
+
+function AliasInput({
+	alias,
+	domain,
+	onChange,
+	children,
+}: Readonly<{
+	alias: string;
+	domain?: string | null;
+	onChange: (alias: string) => void;
+	/** After the domain, such as the Claim button. */
+	children?: ReactNode;
+}>) {
+	const { t } = useTranslation("bots");
+	return (
+		<div className="flex items-center gap-1.5">
+			<Input
+				value={alias}
+				onChange={(event) => onChange(event.target.value)}
+				placeholder={t("panel.mail.aliasPlaceholder", "name")}
+				aria-label={t("panel.mail.aliasLabel", "Address name")}
+				className="h-8 font-mono text-xs"
+				maxLength={64}
+			/>
+			{domain && (
+				<span className="shrink-0 text-xs text-muted-foreground">
+					@{domain}
+				</span>
+			)}
+			{children}
+		</div>
 	);
 }
 

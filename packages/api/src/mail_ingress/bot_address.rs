@@ -57,6 +57,13 @@ pub struct BotAddressAvailability {
     reason: Option<String>,
 }
 
+#[derive(Serialize, ToSchema)]
+pub struct BotMailDomain {
+    /// Whether this server receives email at all.
+    configured: bool,
+    domain: Option<String>,
+}
+
 #[derive(FromQueryResult)]
 struct Held {
     address: String,
@@ -147,9 +154,10 @@ fn view(state: &AppState, bot: &bot::Model, address: Option<String>) -> BotAddre
     }
 }
 
+/// `bot_id` is the bot that would hold the address, or `None` for a bot that doesn't exist yet.
 async fn taken_by_other(
     state: &AppState,
-    bot_id: &str,
+    bot_id: Option<&str>,
     address: &str,
 ) -> Result<Option<String>, ApiError> {
     #[derive(FromQueryResult)]
@@ -167,9 +175,9 @@ async fn taken_by_other(
     .one(&state.db)
     .await?;
     Ok(row.and_then(|row| {
-        let ours = row.kind == "quarantined" && row.app_id == BOT_APP && row.event_id == bot_id;
-        let mine = row.kind == BOT_KIND && row.app_id == BOT_APP && row.event_id == bot_id;
-        if ours || mine {
+        let held_by_bot = row.app_id == BOT_APP && bot_id == Some(row.event_id.as_str());
+        let ours = held_by_bot && (row.kind == "quarantined" || row.kind == BOT_KIND);
+        if ours {
             None
         } else if row.kind == "quarantined" {
             Some("This address was used recently and is reserved for a while".to_owned())
@@ -232,14 +240,66 @@ pub async fn check_bot_address(
 ) -> Result<Json<BotAddressAvailability>, ApiError> {
     let sub = user.sub()?;
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
-    let verdict = match normalize_alias(&alias).and_then(|alias| full_address(&state, &alias)) {
+    Ok(Json(availability(&state, Some(&bot.id), &alias).await?))
+}
+
+#[utoipa::path(
+    get,
+    path = "/bots/email-address/check/{alias}",
+    tag = "Bots",
+    description = "Check whether a local part is free for the address of a bot you are about to create.",
+    params(("alias" = String, Path, description = "Local part to check")),
+    responses(
+        (status = 200, description = "Whether the name can be claimed", body = BotAddressAvailability),
+        (status = 401, description = "Not signed in")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn check_new_bot_address(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(alias): Path<String>,
+) -> Result<Json<BotAddressAvailability>, ApiError> {
+    user.sub()?;
+    Ok(Json(availability(&state, None, &alias).await?))
+}
+
+#[utoipa::path(
+    get,
+    path = "/bots/email-domain",
+    tag = "Bots",
+    description = "Show whether bots can get their own email address on this server, and on which domain.",
+    responses(
+        (status = 200, description = "The domain of bot addresses", body = BotMailDomain),
+        (status = 401, description = "Not signed in")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn get_bot_mail_domain(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+) -> Result<Json<BotMailDomain>, ApiError> {
+    user.sub()?;
+    let domain = domain(&state);
+    Ok(Json(BotMailDomain {
+        configured: domain.is_some(),
+        domain,
+    }))
+}
+
+async fn availability(
+    state: &AppState,
+    bot_id: Option<&str>,
+    alias: &str,
+) -> Result<BotAddressAvailability, ApiError> {
+    let verdict = match normalize_alias(alias).and_then(|alias| full_address(state, &alias)) {
         Err(error) => Some(error.to_string()),
-        Ok(address) => taken_by_other(&state, &bot.id, &address).await?,
+        Ok(address) => taken_by_other(state, bot_id, &address).await?,
     };
-    Ok(Json(BotAddressAvailability {
+    Ok(BotAddressAvailability {
         available: verdict.is_none(),
         reason: verdict,
-    }))
+    })
 }
 
 struct Change {

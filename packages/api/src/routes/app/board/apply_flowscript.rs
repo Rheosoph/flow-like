@@ -231,9 +231,9 @@ pub async fn apply_flowscript(
     if !result.commands.is_empty() {
         try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
         mutation_guard.ensure_held()?;
-        let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
+        let saved = save_board_and_refresh_summary(&state, &app_id, &board).await?;
         rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
-        seed_board_revision(&state, &app_id, &board_id, board, &put).await;
+        seed_board_revision(&state, &app_id, &board_id, board, &saved).await;
         audit_branch!(
             state,
             user,

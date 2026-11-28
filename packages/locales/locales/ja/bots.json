@@ -1231,6 +1231,7 @@
 			"unsaved": ""
 		},
 		"duplicated": "",
+		"emailClaimFailed": "",
 		"errors": {
 			"appLimit": "",
 			"appRefusesBots": "",
@@ -1289,6 +1290,8 @@
 			"handles": "",
 			"othersCanInvite": "",
 			"othersCanInviteHint": "",
+			"othersDailyTurns": "",
+			"othersDailyTurnsHint": "",
 			"privacy": "",
 			"subtitle": "",
 			"title": ""
@@ -3157,7 +3160,11 @@
 			"you": "",
 			"yourBots": "",
 			"zoomIn": "",
-			"zoomOut": ""
+			"zoomOut": "",
+			"preview": {
+				"person": "",
+				"bot": ""
+			}
 		},
 		"requests": {
 			"answer": {

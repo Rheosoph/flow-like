@@ -41,20 +41,19 @@ async fn plain_table(db: &DatabaseConnection, source: sea_orm::sea_query::TableC
 async fn apps_world() -> (DatabaseConnection, String) {
     let db = world().await;
     let schema = Schema::new(db.get_database_backend());
+    db.execute_unprepared(r#"DROP TABLE public."App""#)
+        .await
+        .unwrap();
     plain_table(&db, schema.create_table_from_entity(app::Entity)).await;
     plain_table(&db, schema.create_table_from_entity(role::Entity)).await;
     plain_table(&db, schema.create_table_from_entity(meta::Entity)).await;
     plain_table(&db, schema.create_table_from_entity(event::Entity)).await;
     plain_table(&db, schema.create_table_from_entity(page::Entity)).await;
-    plain_table(&db, schema.create_table_from_entity(bot_app::Entity)).await;
     plain_table(
         &db,
         schema.create_table_from_entity(execution_usage_tracking::Entity),
     )
     .await;
-    db.execute(&schema.create_table_from_entity(bot_team_app::Entity))
-        .await
-        .unwrap();
     db.execute_unprepared(
         r#"CREATE TABLE public."ExecutionUsageDaily" (
             day TEXT NOT NULL, id TEXT NOT NULL, "userId" TEXT,
@@ -624,7 +623,8 @@ async fn a_bots_apps_count_only_while_it_is_active_and_never_its_workspace() {
 #[tokio::test]
 async fn the_pin_dialog_lists_my_apps_admin_first_with_pins_here_and_elsewhere() {
     let (db, security) = apps_world().await;
-    let other = create(&db, "mara", "Other", None).await.unwrap();
+    let root = super::tests::team(&db, &security).await.parent_id;
+    let other = create(&db, "mara", "Other", root.as_deref()).await.unwrap();
     join(&db, "mara", &other, "jonas").await;
     app_of(&db, "zeta", "jonas").await;
     app_of(&db, "alpha", "mara").await;

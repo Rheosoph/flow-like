@@ -48,6 +48,8 @@ model Bot {
   calendarSyncedAt DateTime? @db.Timestamptz(3)
   /// People who share an app with the owner may find and invite the bot (the owner accepts each invitation); null or false keeps it hidden.
   othersCanInvite Boolean?
+  /// Turns all people other than the owner may start on the bot in a day; null is the default of 100.
+  othersDailyTurns Int?
   permissionsFrom BotPermission[]       @relation("BotPermissionFrom")
   permissionsTo   BotPermission[]       @relation("BotPermissionTo")
   hostHeartbeats  BotHostHeartbeat[]

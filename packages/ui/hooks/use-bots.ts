@@ -80,6 +80,7 @@ export const botKeys = {
 	connectedAccounts: () => [...botKeys.all, "connected-accounts"] as const,
 	mailAddress: (botId: string) =>
 		[...botKeys.all, "mail-address", botId] as const,
+	newBotMailDomain: () => [...botKeys.all, "new-bot-mail-domain"] as const,
 	mailThreads: (botId: string) =>
 		[...botKeys.all, "mail-threads", botId] as const,
 	mailThread: (botId: string, threadId: string) =>
@@ -1112,12 +1113,28 @@ export function useBotMailAddress(botId?: string | null) {
 	});
 }
 
+/** Where a bot created next would get its address, before it exists. */
+export function useNewBotMailDomain() {
+	const state = useBackend().botState;
+	return useQuery({
+		queryKey: botKeys.newBotMailDomain(),
+		queryFn: () => requireBotState(state).getNewBotMailDomain?.(),
+		enabled: Boolean(state?.getNewBotMailDomain),
+	});
+}
+
+/** Checks a name for the bot's address; `null` checks it for a bot about to be created. */
 export function useCheckBotMailAddress() {
 	const state = useBackend().botState;
 	return useCallback(
-		(botId: string, alias: string) =>
-			requireBotState(state).checkMailAddress?.(botId, alias) ??
-			Promise.resolve({ available: false }),
+		(botId: string | null, alias: string) => {
+			const bots = requireBotState(state);
+			const check =
+				botId === null
+					? bots.checkNewBotMailAddress?.(alias)
+					: bots.checkMailAddress?.(botId, alias);
+			return check ?? Promise.resolve({ available: false });
+		},
 		[state],
 	);
 }

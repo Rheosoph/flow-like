@@ -15,10 +15,11 @@ use crate::{
     middleware::jwt::AppUser,
     routes::inbox::{
         active_members,
+        approvals::post_notice_in,
         members::Principal,
         now_millis,
         person_push::mark_watching,
-        team_request::{ensure_thread, lock_request},
+        team_request::{ensure_thread, lock_request, person_label},
         team_room::{RoomJoin, join_room, leave_room},
     },
     state::AppState,
@@ -47,6 +48,28 @@ pub(crate) fn classified(bot_name: &str, bot_level: Option<DataClassification>) 
             "'{bot_name}' is classified {level}, above your classification in this organization"
         ),
     )
+}
+
+/// Tells the people of a thread or chat, once per owner, that the bot's owner reads along.
+pub(crate) async fn announce_watcher<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    bot_id: &str,
+    owner_id: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<(), ApiError> {
+    let digest = blake3::hash(format!("{conversation_id}\0{owner_id}").as_bytes()).to_hex();
+    let owner = person_label(db, owner_id).await;
+    post_notice_in(
+        db,
+        conversation_id,
+        bot_id,
+        &format!("ow-{}", &digest[..32]),
+        &format!("My owner, {owner}, can read along here."),
+        now,
+    )
+    .await?;
+    Ok(())
 }
 
 /// The lead bot of a team as a thread seats it.
@@ -132,6 +155,7 @@ pub(crate) async fn sync_thread<C: ConnectionTrait>(
         limits: None,
     }];
     let mut watchers = Vec::new();
+    let mut announced = None;
     let org = org_of(db, team).await?;
     if is_active_in(db, &org.ids(), &thread.user_id).await?
         && let Some(lead) = lead_seat(db, team).await?
@@ -142,6 +166,7 @@ pub(crate) async fn sync_thread<C: ConnectionTrait>(
                 limits: None,
             });
             watchers.push(lead.bot.owner_id.clone());
+            announced = Some((lead.bot.id.clone(), lead.bot.owner_id.clone()));
         }
         seats.push(RoomJoin {
             principal: bot(&lead.bot.id),
@@ -157,7 +182,11 @@ pub(crate) async fn sync_thread<C: ConnectionTrait>(
         now,
         effects,
     )
-    .await
+    .await?;
+    if let Some((lead_id, owner_id)) = announced {
+        announce_watcher(db, &thread.conversation_id, &lead_id, &owner_id, now).await?;
+    }
+    Ok(())
 }
 
 /// [`sync_thread`] for every thread with the team.

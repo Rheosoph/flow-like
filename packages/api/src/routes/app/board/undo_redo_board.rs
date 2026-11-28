@@ -91,12 +91,12 @@ pub async fn undo_board(
         try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
     }
     mutation_guard.ensure_held()?;
-    let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
+    let saved = save_board_and_refresh_summary(&state, &app_id, &board).await?;
     if command_count > 0 {
         rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
     }
     drop(mutation_guard);
-    seed_board_revision(&state, &app_id, &board_id, board, &put).await;
+    seed_board_revision(&state, &app_id, &board_id, board, &saved).await;
 
     if command_count > 0 {
         audit_branch!(
@@ -172,12 +172,12 @@ pub async fn redo_board(
         try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
     }
     mutation_guard.ensure_held()?;
-    let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
+    let saved = save_board_and_refresh_summary(&state, &app_id, &board).await?;
     if command_count > 0 {
         rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
     }
     drop(mutation_guard);
-    seed_board_revision(&state, &app_id, &board_id, board, &put).await;
+    seed_board_revision(&state, &app_id, &board_id, board, &saved).await;
 
     if command_count > 0 {
         audit_branch!(

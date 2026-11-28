@@ -1231,6 +1231,7 @@
 			"unsaved": "Save or discard your changes to duplicate the saved bot."
 		},
 		"duplicated": "Duplicated as {{name}}",
+		"emailClaimFailed": "The bot is ready, but {{alias}} couldn't be claimed as its address. Pick another one in its Details.",
 		"errors": {
 			"appLimit": "This bot already uses the maximum of 200 selected apps.",
 			"appRefusesBots": "An app you picked doesn't allow bots; ask its owner.",
@@ -1289,6 +1290,8 @@
 			"handles": "What it may handle",
 			"othersCanInvite": "People you work with can invite it",
 			"othersCanInviteHint": "Off: only you see it and bring it into rooms. On: people who share an app with you see its name and description when they bring someone into a room, and you accept each invitation.",
+			"othersDailyTurns": "Requests from other people per day",
+			"othersDailyTurnsHint": "How many turns everyone but you may start on it in a day, in rooms, team threads and chats together; you pay for them. Each person gets at most {{perPerson}}.",
 			"privacy": "Privacy",
 			"subtitle": "Label the most sensitive data it may work with, and decide who can read its messages.",
 			"title": "Keep its data safe"
@@ -3157,7 +3160,11 @@
 			"you": "(you)",
 			"yourBots": "Your bots",
 			"zoomIn": "Zoom in",
-			"zoomOut": "Zoom out"
+			"zoomOut": "Zoom out",
+			"preview": {
+				"person": "If they join, {{bots}} will stop answering in the team room.",
+				"bot": "Won't answer in the team room: someone there isn't classified for {{level}}."
+			}
 		},
 		"requests": {
 			"answer": {
@@ -3190,7 +3197,7 @@
 			"joining": "Joining",
 			"joiningTip": "{{bot}} has not joined yet: its owner has to accept first",
 			"leadClassified": "Lead classified {{level}}",
-			"leadOffer": "{{team}} asks {{bot}} to lead it. Everyone in {{org}} can then talk to it, and its turns are on you (up to {{limit}} per person a day).",
+			"leadOffer": "{{team}} asks {{bot}} to lead it. Everyone in {{org}} can then talk to it, and its turns are on you: up to {{perPerson}} per person and {{total}} in total a day, which you can change in its safety settings.",
 			"leadPickerHint": "Another person's bot leads only after its owner accepts.",
 			"level": {
 				"confidential": "Confidential",
@@ -3234,7 +3241,7 @@
 			"approveConfirm": "Approve and allow",
 			"chatNoNote": "No note added",
 			"chatTitle": "{{name}} wants to talk with {{bot}}",
-			"leadMeta": "Everyone in {{org}} can then talk to it, and its turns are on you (up to {{limit}} per person a day).",
+			"leadMeta": "Everyone in {{org}} can then talk to it, and its turns are on you: up to {{perPerson}} per person and {{total}} in total a day, which you can change in its safety settings.",
 			"leadTitle": "{{team}} asks {{bot}} to lead it"
 		}
 	}

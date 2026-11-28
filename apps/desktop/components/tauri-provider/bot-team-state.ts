@@ -7,6 +7,8 @@ import type {
 	IPinnableApp,
 	ITeam,
 	ITeamBriefing,
+	ITeamPreview,
+	ITeamPreviewRequest,
 	ITeamThread,
 	IUpdateTeamRequest,
 	TeamRole,
@@ -351,6 +353,20 @@ export class BotTeamState implements IBotTeamState {
 	async endChat(botId: string, userId: string): Promise<void> {
 		const { profile, auth } = this.session();
 		await del(profile, chatPath(botId, userId), undefined, auth);
+	}
+
+	async previewTeam(
+		teamId: string,
+		request: ITeamPreviewRequest,
+	): Promise<ITeamPreview> {
+		const { profile, auth } = this.session();
+		const response = await post<Partial<ITeamPreview>>(
+			profile,
+			`${teamPath(teamId)}/preview`,
+			request,
+			auth,
+		);
+		return { people: list(response?.people), bots: list(response?.bots) };
 	}
 
 	async setClassification(

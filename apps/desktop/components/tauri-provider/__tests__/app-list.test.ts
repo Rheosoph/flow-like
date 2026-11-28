@@ -46,6 +46,21 @@ function entry(id: string, visibility = IAppVisibility.Private): AppEntry {
 	return [{ id, visibility, bits: [] }, { name: id }] as unknown as AppEntry;
 }
 
+function signedIcon(credential: string, signedAt: number): string {
+	const stamp = new Date(signedAt)
+		.toISOString()
+		.replace(/[-:]/g, "")
+		.replace(/\.\d{3}/, "");
+	return `https://media.example/apps/cloud/media/icon.webp?X-Amz-Credential=${credential}&X-Amz-Date=${stamp}&X-Amz-Expires=3600&X-Amz-Signature=sig`;
+}
+
+function withIcon(id: string, icon: string): AppEntry {
+	return [
+		{ id, visibility: IAppVisibility.Private, bits: [] },
+		{ name: id, icon },
+	] as unknown as AppEntry;
+}
+
 function deferred() {
 	let resolve!: () => void;
 	const promise = new Promise<void>((done) => {
@@ -150,6 +165,38 @@ describe("desktop app listing", () => {
 		expect(warning).toHaveBeenCalled();
 		client.clear();
 	});
+
+	test.each([
+		["keeps the live artwork it shows", Date.now(), "shown"],
+		[
+			"does not adopt shown artwork that has expired",
+			Date.UTC(2021, 0, 1),
+			"local",
+		],
+	] as const)(
+		"%s while the remote sync runs",
+		async (_, shownSignedAt, expected) => {
+			const local = withIcon("cloud", signedIcon("old", Date.UTC(2020, 0, 1)));
+			const shown = withIcon("cloud", signedIcon("new", shownSignedAt));
+			const sync = deferred();
+			mocks.fetcher.mockImplementation(() => sync.promise.then(() => [shown]));
+			mocks.invoke.mockImplementation((command) =>
+				Promise.resolve(command === "get_apps" ? [local] : undefined),
+			);
+			const { state, client, background } = fixture();
+			client.setQueryData(["getApps"], [shown]);
+			try {
+				const [[, meta]] = await state.getApps();
+				expect(meta?.icon).toBe(
+					expected === "shown" ? shown[1]?.icon : local[1]?.icon,
+				);
+			} finally {
+				sync.resolve();
+				await Promise.all(background);
+				client.clear();
+			}
+		},
+	);
 
 	test("rewrites a local copy only when its server record changed", async () => {
 		const local = [entry("a"), entry("b")];

@@ -255,3 +255,28 @@ export function triggerKinds(triggers: readonly string[]): TriggerKind[] {
 		(kind) => kinds.has(kind),
 	);
 }
+
+/** The two halves of the bus wire above one cell of the deck, left and right of its center. */
+export interface BusHalves {
+	left: boolean;
+	right: boolean;
+}
+
+/**
+ * Which halves of the deck's bus lie on the way from a lit cell to the source the bus hangs from.
+ * Cells are one unit wide; `source` is where the line from the team meets the bus, in units from
+ * the left edge.
+ */
+export function litBus(lit: readonly boolean[], source: number): BusHalves[] {
+	const spans = lit.flatMap((on, index) => {
+		if (!on) return [];
+		const center = index + 0.5;
+		return [[Math.min(center, source), Math.max(center, source)] as const];
+	});
+	const covered = (from: number, to: number) =>
+		spans.some(([start, end]) => start <= from && end >= to);
+	return lit.map((_, index) => ({
+		left: covered(index, index + 0.5),
+		right: covered(index + 0.5, index + 1),
+	}));
+}

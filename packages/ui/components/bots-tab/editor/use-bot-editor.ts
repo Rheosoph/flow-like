@@ -65,6 +65,8 @@ export interface BotEditor {
 	matches: BotPresetMatch[];
 	choice: string | null;
 	pendingAppIds: string[];
+	/** The address name a new bot claims right after it is created; empty for none. */
+	pendingEmailAlias: string;
 	appAccess: BotAppDraft;
 	/** Switched off by the last move, because the new host can't do them. */
 	removedCapabilities: BotCapability[];
@@ -83,6 +85,7 @@ export interface BotEditor {
 	toggleCapability: (capability: BotCapability, enabled: boolean) => void;
 	setProfileId: (profileId: string) => void;
 	setPendingAppIds: (ids: string[]) => void;
+	setPendingEmailAlias: (alias: string) => void;
 	setInstructions: (instructions: string) => void;
 	setModel: (model: IBotModelPolicy) => void;
 	setEmbeddingModel: (embeddingModel: string | null) => void;
@@ -92,6 +95,7 @@ export interface BotEditor {
 	setExecutionMode: (executionMode: BotExecutionMode) => void;
 	setClassification: (classification: IDataSensitivity) => void;
 	setOthersCanInvite: (othersCanInvite: boolean) => void;
+	setOthersDailyTurns: (othersDailyTurns: number) => void;
 }
 
 /** The free-text description, the presets it matches and what was applied from them. */
@@ -245,6 +249,7 @@ export function useBotEditor(
 		[place],
 	);
 	const [pendingAppIds, setPendingAppIds] = useState<string[]>([]);
+	const [pendingEmailAlias, setPendingEmailAlias] = useState("");
 	const appAccess = useBotAppDraft(options.savedApps);
 	const [locationChange, setLocationChange] = useState<BotLocationChange>(() =>
 		original
@@ -283,7 +288,10 @@ export function useBotEditor(
 		[original, draft],
 	);
 	const untouched =
-		!text.trim() && choice === null && pendingAppIds.length === 0;
+		!text.trim() &&
+		choice === null &&
+		pendingAppIds.length === 0 &&
+		!pendingEmailAlias.trim();
 	const candidate = useMemo(() => {
 		const top = matches[0]?.preset;
 		return choice === null && top ? place(draftFor(top)) : draft;
@@ -317,6 +325,7 @@ export function useBotEditor(
 		matches,
 		choice,
 		pendingAppIds,
+		pendingEmailAlias,
 		appAccess,
 		removedCapabilities: locationChange.removed,
 		restoredCapabilities: locationChange.restored,
@@ -359,6 +368,7 @@ export function useBotEditor(
 		},
 		setProfileId: (profileId) => update({ profileId }),
 		setPendingAppIds,
+		setPendingEmailAlias,
 		setInstructions: (instructions) => update({ instructions }),
 		setModel: (model) => update({ model }),
 		setEmbeddingModel: (embeddingModel) => update({ embeddingModel }),
@@ -378,5 +388,6 @@ export function useBotEditor(
 		setExecutionMode: (executionMode) => update({ executionMode }),
 		setClassification: (classification) => update({ classification }),
 		setOthersCanInvite: (othersCanInvite) => update({ othersCanInvite }),
+		setOthersDailyTurns: (othersDailyTurns) => update({ othersDailyTurns }),
 	};
 }

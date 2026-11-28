@@ -75,6 +75,8 @@ pub struct Model {
     pub calendar_synced_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "othersCanInvite", nullable)]
     pub others_can_invite: Option<bool>,
+    #[sea_orm(column_name = "othersDailyTurns", nullable)]
+    pub others_daily_turns: Option<i32>,
     #[sea_orm(has_many)]
     pub bot_host_heartbeats: HasMany<super::bot_host_heartbeat::Entity>,
     #[sea_orm(has_many)]

@@ -69,6 +69,18 @@ pub struct DeviceDockerSupport {
 /// `POST /devices/{id}/bots/poll`: reports presence for the device's bots and lists its work.
 pub type DevicePollRequest = DeviceHostRequest;
 
+/// Drops capability ids this agent doesn't know. Agents lag the hub; failing the whole poll on
+/// a newer capability would stall every bot on the device, while a dropped one only withholds tools.
+fn known_capabilities<'de, D>(deserializer: D) -> Result<Vec<BotCapability>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Vec::<String>::deserialize(deserializer)?
+        .iter()
+        .filter_map(|id| BotCapability::parse(id))
+        .collect())
+}
+
 /// A bot bound to the polling device.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceBotInfo {
@@ -77,7 +89,7 @@ pub struct DeviceBotInfo {
     pub execution_mode: BotExecutionMode,
     #[serde(default)]
     pub name: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "known_capabilities")]
     pub capabilities: Vec<BotCapability>,
     /// RFC 3339; changes whenever the bot's settings change.
     pub updated_at: String,
@@ -136,7 +148,7 @@ pub struct DeviceBotSpec {
     pub description: Option<String>,
     #[serde(default)]
     pub instructions: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "known_capabilities")]
     pub capabilities: Vec<BotCapability>,
     #[serde(default)]
     pub classification: DataSensitivity,
@@ -402,6 +414,30 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn capabilities_newer_than_the_agent_are_dropped_not_fatal() {
+        let poll: DevicePollResponse = serde_json::from_value(serde_json::json!({
+            "next_poll_ms": 30000,
+            "bots": [{
+                "id": "bot_1",
+                "capabilities": ["memory", "capability_from_the_future", "email"],
+                "updated_at": "2026-11-28T06:52:42Z"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(
+            poll.bots[0].capabilities,
+            vec![BotCapability::Memory, BotCapability::Email]
+        );
+        let spec: DeviceBotSpec = serde_json::from_value(serde_json::json!({
+            "bot_id": "bot_1",
+            "name": "Communi",
+            "capabilities": ["capability_from_the_future", "scheduling"]
+        }))
+        .unwrap();
+        assert_eq!(spec.capabilities, vec![BotCapability::Scheduling]);
     }
 
     #[test]

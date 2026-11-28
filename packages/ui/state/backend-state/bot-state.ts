@@ -115,6 +115,13 @@ export interface IBotModelPolicy {
 	decision?: string | null;
 }
 
+/** Turns one person other than the owner may start on a bot in a day. */
+export const REQUESTER_DAILY_TURNS = 20;
+/** Turns all people other than the owner may start on a bot in a day, unless the owner changed it. */
+export const DEFAULT_OTHERS_DAILY_TURNS = 100;
+/** The most an owner may allow other people in a day. */
+export const MAX_OTHERS_DAILY_TURNS = 5000;
+
 export interface IBot {
 	/** Also the bot's sub: records of what the bot did store this id. */
 	id: string;
@@ -147,6 +154,8 @@ export interface IBot {
 	device_id: string | null;
 	/** People who share an app with the owner find the bot and can invite it; older hubs and local bots leave it out. */
 	others_can_invite?: boolean;
+	/** Turns all people other than the owner may start on it in a day; older hubs and local bots leave it out. */
+	others_daily_turns?: number;
 	created_at: string;
 	updated_at: string;
 	/** Lives only on this device until it moves to an account. */
@@ -176,6 +185,7 @@ export interface ICreateBotRequest {
 	execution_mode?: BotExecutionMode;
 	device_id?: string | null;
 	others_can_invite?: boolean;
+	others_daily_turns?: number;
 }
 
 /** Omitted fields stay as they are; `null` clears a nullable field. */
@@ -199,6 +209,7 @@ export interface IUpdateBotRequest {
 	execution_mode?: BotExecutionMode;
 	device_id?: string | null;
 	others_can_invite?: boolean;
+	others_daily_turns?: number;
 }
 
 export type BotPermission =
@@ -846,6 +857,13 @@ export interface IBotMailAvailability {
 	reason?: string | null;
 }
 
+/** Where a bot about to be created would get its address. */
+export interface IBotMailDomain {
+	/** Whether this server receives email at all. */
+	configured: boolean;
+	domain?: string | null;
+}
+
 /** One mail thread of a bot; its mails live in the owner's chat with the bot. */
 export interface IBotMailThread {
 	id: string;
@@ -1274,6 +1292,9 @@ export interface IBotState {
 	): Promise<IBotMailAvailability>;
 	claimMailAddress?(botId: string, alias: string): Promise<IBotMailAddress>;
 	releaseMailAddress?(botId: string): Promise<void>;
+	/** The address domain of a bot created next; not configured where it would live on this device. */
+	getNewBotMailDomain?(): Promise<IBotMailDomain>;
+	checkNewBotMailAddress?(alias: string): Promise<IBotMailAvailability>;
 	listMailThreads?(botId: string): Promise<IBotMailThread[]>;
 	getMailThread?(botId: string, threadId: string): Promise<IBotMailThreadView>;
 	/** Webhooks of an account bot; absent where bots have no public URL. */

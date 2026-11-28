@@ -116,7 +116,7 @@ function NewSubteamHandle({ team }: Readonly<{ team: ITeam }>) {
 			title={label}
 			onClick={() => setDialog({ kind: "newTeam", parentId: team.id })}
 			className={cn(
-				"absolute bottom-0 left-1/2 flex size-6 -translate-x-1/2 translate-y-1/2 items-center justify-center rounded-full border border-dashed bg-card text-muted-foreground opacity-0 shadow-xs transition-opacity outline-none group-hover/team:opacity-100 hover:border-solid hover:border-primary hover:text-primary focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:opacity-100",
+				"absolute bottom-0 left-1/2 z-10 flex size-6 -translate-x-1/2 translate-y-1/2 items-center justify-center rounded-full border border-dashed bg-card text-muted-foreground opacity-0 shadow-xs transition-opacity outline-none group-hover/team:opacity-100 hover:border-solid hover:border-primary hover:text-primary focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:opacity-100",
 				selected && "opacity-100",
 			)}
 		>
@@ -258,22 +258,22 @@ function Connector({
 
 export function OrgTree({ node }: Readonly<{ node: OrgTeamNode }>) {
 	const { highlight } = useOrgChart();
+	const childLit = node.children.some((child) =>
+		highlight.teamIds.has(child.team.id),
+	);
 	return (
 		<div className="flex flex-col items-center">
 			<TeamBox team={node.team} />
-			<AppDeck team={node.team} trunk={node.children.length > 0} />
+			<AppDeck
+				team={node.team}
+				trunk={node.children.length > 0}
+				trunkLit={childLit}
+			/>
 			{node.children.length > 0 && (
 				<>
 					<span
 						aria-hidden
-						className={cn(
-							"h-6 w-px",
-							node.children.some((child) =>
-								highlight.teamIds.has(child.team.id),
-							)
-								? "bg-primary"
-								: "bg-border",
-						)}
+						className={cn("h-6 w-px", childLit ? "bg-primary" : "bg-border")}
 					/>
 					<div className="flex items-start">
 						{node.children.map((child, index) => (

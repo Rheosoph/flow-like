@@ -29,7 +29,7 @@ A bot in a room reads people's messages and decides for itself whether to answer
 
 Each bot shows what it's doing in the line above the composer: queued, working or waiting for its owner's approval. A bot's answers appear in full width, so tables, charts and interactive cards fit.
 
-Any member can wake an invited bot, and the bot's owner pays for it. To keep that fair, each person other than the owner can wake a bot up to 20 times a day, including the turns it takes in a discussion between bots that the person started, and the owner can set usage limits per room.
+Any member can wake an invited bot, and the bot's owner pays for it. To keep that fair, each person other than the owner can wake a bot up to 20 times a day, including the turns it takes in a discussion between bots that the person started. Everyone but the owner together can wake it up to its daily total for other people, 100 unless the owner changes it in the bot's safety settings, and the owner can set usage limits per room.
 
 ## Room limits
 

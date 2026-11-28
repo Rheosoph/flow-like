@@ -6,6 +6,7 @@ use super::{
     model::ClassificationRequest,
 };
 use crate::{
+    audit,
     entity::{bot_org_classification, bot_team, bot_team_person},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -170,5 +171,16 @@ pub async fn set_classification(
             })
         })
         .await?;
+    audit!(
+        state,
+        user,
+        "bot.team.classification.set",
+        "BotTeam",
+        team_id,
+        serde_json::json!({
+            "user_id": user_id,
+            "classification": body.classification.map(|level| level.as_str()),
+        })
+    );
     Ok(StatusCode::NO_CONTENT)
 }

@@ -9,9 +9,10 @@ use super::{
     levels::person_level,
     model::{AcceptChatRequest, ChatRequestBody},
     room::{bot as bot_principal, person, room_limits},
-    threads::{TEAM_CLASSIFIED, classified, seat_members},
+    threads::{announce_watcher, classified, seat_members},
 };
 use crate::{
+    audit,
     bot_host::teams::active_team_of,
     bot_notify::display_name,
     entity::{bot, bot_team, bot_team_chat},
@@ -320,7 +321,8 @@ async fn seat_chat<C: ConnectionTrait>(
         now,
         effects,
     )
-    .await
+    .await?;
+    announce_watcher(db, conversation_id, &row.bot_id, owner_id, now).await
 }
 
 /// Ends the chat: the bot and the owner leave, the person keeps the conversation.
@@ -559,6 +561,15 @@ pub async fn request_chat(
         })
         .await?;
     settle(&state, effects).await;
+    audit_chat(
+        &state,
+        &user,
+        "bot.team.chat.request",
+        &chat.bot_id,
+        &sub,
+        None,
+    )
+    .await;
     Ok(Json(chat))
 }
 
@@ -603,6 +614,16 @@ pub async fn accept_chat(
         })
         .await?;
     settle(&state, effects).await;
+    let limited = serde_json::json!({ "limited": body.limits.is_some() });
+    audit_chat(
+        &state,
+        &user,
+        "bot.team.chat.accept",
+        &bot_id,
+        &user_id,
+        Some(limited),
+    )
+    .await;
     Ok(Json(chat))
 }
 
@@ -640,6 +661,15 @@ pub async fn decline_chat(
             })
         })
         .await?;
+    audit_chat(
+        &state,
+        &user,
+        "bot.team.chat.decline",
+        &bot_id,
+        &user_id,
+        None,
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -675,5 +705,39 @@ pub async fn end_chat(
         })
         .await?;
     settle(&state, effects).await;
+    let by = serde_json::json!({ "by_person": sub == user_id });
+    audit_chat(
+        &state,
+        &user,
+        "bot.team.chat.end",
+        &bot_id,
+        &user_id,
+        Some(by),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Audits a step of the chat between `user_id` and `bot_id`, with the ids and `extra` codes.
+async fn audit_chat(
+    state: &AppState,
+    user: &AppUser,
+    action: &str,
+    bot_id: &str,
+    user_id: &str,
+    extra: Option<serde_json::Value>,
+) {
+    let mut details = serde_json::json!({ "bot_id": bot_id, "user_id": user_id });
+    if let (Some(serde_json::Value::Object(extra)), Some(fields)) = (extra, details.as_object_mut())
+    {
+        fields.extend(extra);
+    }
+    audit!(
+        state,
+        user,
+        action,
+        "BotTeamChat",
+        format!("{bot_id}:{user_id}"),
+        details
+    );
 }

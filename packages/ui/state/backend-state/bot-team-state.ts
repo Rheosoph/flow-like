@@ -256,6 +256,33 @@ export interface IBotChat {
 	decided_at?: string | null;
 }
 
+/** A bot that would stop answering in a team's room after a change to the team. */
+export interface ISilencedBot {
+	bot_id: string;
+	/** The bot's level, which someone in the room would be classified below. */
+	classification: DataClassification;
+}
+
+/** What adding one person or bot would change in a team's room. */
+export interface ICandidateEffect {
+	/** The person or bot that would join. */
+	id: string;
+	/** Bots that answer now and wouldn't once it joins; for a bot, the bot itself. */
+	silenced: ISilencedBot[];
+}
+
+/** For each candidate on its own; candidates that change nothing are left out. */
+export interface ITeamPreview {
+	people: ICandidateEffect[];
+	bots: ICandidateEffect[];
+}
+
+export interface ITeamPreviewRequest {
+	/** Only the team's admins preview people. */
+	user_ids?: string[];
+	bot_ids?: string[];
+}
+
 /** A person's classification in an org, set by an admin of its top-level team. */
 export interface IPersonClassification {
 	/** The org's top-level team. */
@@ -389,6 +416,11 @@ export interface IBotTeamState {
 	declineChat(botId: string, userId: string): Promise<void>;
 	/** The person withdraws or ends the chat, or the owner ends it; the person keeps the history. */
 	endChat(botId: string, userId: string): Promise<void>;
+	/** Which bots would stop answering in the team room if each candidate joined. */
+	previewTeam(
+		teamId: string,
+		request: ITeamPreviewRequest,
+	): Promise<ITeamPreview>;
 	/** An admin of the org's top-level team sets a person's classification; null makes it internal. */
 	setClassification(
 		orgId: string,

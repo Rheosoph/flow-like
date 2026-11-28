@@ -1,11 +1,12 @@
 //! Creating, changing and deleting teams.
 
 use super::{
-    access::{Org, TEAM_CYCLE, active, admin_team, limit, org_of},
+    access::{Org, TEAM_CYCLE, active, admin_team, limit, load_team, org_of},
     bots::prune_outsiders,
     chats::sync_chats_of,
     classification::{drop_classifications, prune_classifications},
     effects::{Effects, settle},
+    lead::{audit_lead, lead_events},
     lock_org_scope, lock_scope,
     model::{CreateTeamRequest, PatchTeamRequest},
     org_apps::sign_org_apps,
@@ -391,18 +392,24 @@ pub async fn patch_team(
     Json(body): Json<PatchTeamRequest>,
 ) -> Result<Json<Team>, ApiError> {
     let sub = user.sub()?;
-    let effects = state
+    let (effects, lead_changes) = state
         .transaction(|txn| {
             let (sub, team_id, body) = (sub.clone(), team_id.clone(), body.clone());
             Box::pin(async move {
                 let mut scope = vec![team_id.as_str()];
                 scope.extend(body.parent_id.iter().flatten().map(String::as_str));
                 lock_org_scope(txn, &scope).await?;
-                patch_team_in(txn, &sub, &team_id, &body, now_millis()).await
+                let before = load_team(txn, &team_id).await?;
+                let effects = patch_team_in(txn, &sub, &team_id, &body, now_millis()).await?;
+                let after = load_team(txn, &team_id).await?;
+                Ok::<_, ApiError>((effects, lead_events(&before, &after)))
             })
         })
         .await?;
     settle(&state, effects).await;
+    for (action, bot_id) in &lead_changes {
+        audit_lead(&state, &user, action, &team_id, bot_id).await;
+    }
     Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 

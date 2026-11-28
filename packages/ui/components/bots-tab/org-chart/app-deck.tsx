@@ -13,8 +13,10 @@ import {
 } from "./app-card";
 import { InspectorSection } from "./inspector-parts";
 import {
+	type BusHalves,
 	type DeckEntry,
 	canPinTo,
+	litBus,
 	matchesFilter,
 	teamDeck,
 } from "./org-chart-apps";
@@ -44,9 +46,9 @@ function DeckCaption({
 	const { t } = useTranslation("bots");
 	const { setDialog } = useOrgChart();
 	return (
-		<span className="inline-flex items-center gap-1.5">
+		<span className="inline-flex w-max items-center gap-1.5 whitespace-nowrap">
 			{count > 0 && (
-				<span className="inline-flex h-4 items-center gap-1.5 rounded-full bg-muted px-1.5 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+				<span className="inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full bg-muted px-2 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
 					{t("teams.org.apps.caption", "Apps")}
 					<span className="tabular-nums">{count}</span>
 				</span>
@@ -55,13 +57,43 @@ function DeckCaption({
 				<button
 					type="button"
 					onClick={() => setDialog({ kind: "pinApp", teamId: team.id })}
-					className="inline-flex h-4 items-center gap-0.5 rounded-full border border-dashed border-muted-foreground/40 bg-card px-1.5 text-[10px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+					className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-dashed border-muted-foreground/40 bg-card pr-2 pl-1.5 text-[11px] font-medium text-muted-foreground transition-colors outline-none hover:border-solid hover:border-primary hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
 				>
-					<PlusIcon className="size-2.5" aria-hidden />
+					<PlusIcon className="size-3" aria-hidden />
 					{t("teams.org.apps.pin", "Pin app")}
 				</button>
 			)}
 		</span>
+	);
+}
+
+/** The bus wire above one cell, drawn as two halves so each lights on its own. */
+function BusWire({
+	halves,
+	first,
+	last,
+}: Readonly<{ halves: BusHalves; first: boolean; last: boolean }>) {
+	return (
+		<>
+			{!first && (
+				<span
+					aria-hidden
+					className={cn(
+						"absolute top-0 left-0 right-1/2 border-t",
+						halves.left ? LIT_WIRE : WIRE,
+					)}
+				/>
+			)}
+			{!last && (
+				<span
+					aria-hidden
+					className={cn(
+						"absolute top-0 left-1/2 right-0 border-t",
+						halves.right ? LIT_WIRE : WIRE,
+					)}
+				/>
+			)}
+		</>
 	);
 }
 
@@ -70,12 +102,14 @@ function Hanger({
 	entry,
 	first,
 	last,
+	bus,
 	lit,
 	dim,
 }: Readonly<{
 	entry: DeckEntry;
 	first: boolean;
 	last: boolean;
+	bus: BusHalves;
 	lit: boolean;
 	dim: boolean;
 }>) {
@@ -88,62 +122,81 @@ function Hanger({
 					lit ? LIT_WIRE : WIRE,
 				)}
 			/>
-			{!(first && last) && (
-				<span
-					aria-hidden
-					className={cn("absolute top-0 border-t", WIRE)}
-					style={{ left: first ? "50%" : 0, right: last ? "50%" : 0 }}
-				/>
-			)}
+			<BusWire halves={bus} first={first} last={last} />
 			<AppCard entry={entry} lit={lit} dim={dim} />
 		</div>
 	);
 }
 
 /** The bus gap the reporting line runs through when the team has teams below it. */
-function TrunkGap({ busRight }: Readonly<{ busRight: boolean }>) {
+function TrunkGap({
+	bus,
+	busRight,
+}: Readonly<{ bus: BusHalves; busRight: boolean }>) {
 	return (
 		<div aria-hidden className="relative w-4 self-stretch">
-			<span
-				className={cn("absolute top-0 left-0 border-t", WIRE)}
-				style={{ right: busRight ? 0 : "50%" }}
-			/>
+			<BusWire halves={bus} first={false} last={!busRight} />
 		</div>
+	);
+}
+
+function TrunkLine({
+	lit,
+	className,
+}: Readonly<{ lit: boolean; className: string }>) {
+	return (
+		<span
+			aria-hidden
+			className={cn(
+				"absolute left-1/2 w-px -translate-x-1/2",
+				lit ? "bg-primary" : "bg-border",
+				className,
+			)}
+		/>
 	);
 }
 
 /**
  * A team's apps hanging under its box on a dotted wire, one card per app. With `trunk`, the
- * team's reporting line runs straight through the middle of the deck to the teams below.
+ * team's reporting line runs straight through the middle of the deck to the teams below, lit
+ * with `trunkLit`. The wire from the team to a lit card lights along its whole way.
  */
 export function AppDeck({
 	team,
 	trunk,
-}: Readonly<{ team: ITeam; trunk: boolean }>) {
+	trunkLit,
+}: Readonly<{ team: ITeam; trunk: boolean; trunkLit: boolean }>) {
 	const deck = useDeck(team);
 	if (!deck.visible || (deck.total === 0 && !deck.canPin)) return null;
 	const { entries } = deck;
 	const split = trunk ? Math.ceil(entries.length / 2) : entries.length;
 	const left = entries.slice(0, split);
 	const right = entries.slice(split);
-	const anyLit = entries.some(deck.isLit);
-	const hanger = (entry: DeckEntry, first: boolean, last: boolean) => (
+	const lit = entries.map(deck.isLit);
+	const anyLit = lit.some(Boolean);
+	const bus = trunk
+		? litBus([...lit.slice(0, split), false, ...lit.slice(split)], split + 0.5)
+		: litBus(lit, entries.length / 2);
+	const busAt = (index: number) =>
+		bus[trunk && index >= split ? index + 1 : index];
+	const hanger = (index: number, first: boolean, last: boolean) => (
 		<Hanger
-			key={entry.app.id}
-			entry={entry}
+			key={entries[index].app.id}
+			entry={entries[index]}
 			first={first}
 			last={last}
-			lit={deck.isLit(entry)}
+			bus={busAt(index)}
+			lit={lit[index]}
 			dim={deck.dimming}
 		/>
 	);
 	return (
 		<div className="relative flex min-w-full flex-col items-center">
 			{trunk && (
-				<span
-					aria-hidden
-					className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border"
-				/>
+				<>
+					<TrunkLine lit={anyLit || trunkLit} className="top-0 h-5.5" />
+					<TrunkLine lit={trunkLit} className="top-5.5 bottom-0" />
+				</>
 			)}
 			<div className="relative h-5.5 w-full">
 				{!trunk && entries.length > 0 && (
@@ -155,18 +208,18 @@ export function AppDeck({
 						)}
 					/>
 				)}
-				<span className="absolute top-0.75 left-[calc(50%+10px)]">
+				<span className="absolute top-px left-[calc(50%+20px)]">
 					<DeckCaption team={team} count={deck.total} canPin={deck.canPin} />
 				</span>
 			</div>
 			{entries.length > 0 && (
 				<div className="flex items-start">
-					{left.map((entry, index) =>
-						hanger(entry, index === 0, !trunk && index === left.length - 1),
+					{left.map((_, index) =>
+						hanger(index, index === 0, !trunk && index === left.length - 1),
 					)}
-					{trunk && <TrunkGap busRight={right.length > 0} />}
-					{right.map((entry, index) =>
-						hanger(entry, false, index === right.length - 1),
+					{trunk && <TrunkGap bus={bus[split]} busRight={right.length > 0} />}
+					{right.map((_, index) =>
+						hanger(split + index, false, index === right.length - 1),
 					)}
 					{trunk && left.length > right.length && (
 						<div aria-hidden style={{ width: APP_CARD_WIDTH + 8 }} />

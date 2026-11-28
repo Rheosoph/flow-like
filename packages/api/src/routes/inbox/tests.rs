@@ -174,6 +174,7 @@ async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str, deleted: 
         calendar_wake: Set(None),
         calendar_synced_at: Set(None),
         others_can_invite: Set(None),
+        others_daily_turns: Set(None),
     }
     .insert(db)
     .await

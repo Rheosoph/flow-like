@@ -678,6 +678,60 @@ async fn copy_exact_board_source(
     Ok(written)
 }
 
+/// [`ensure_draft_board_snapshot`] for the writer of `cached`, which holds the exact bytes it
+/// stored under `cached.e_tag`.
+async fn persist_written_board_snapshot(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    cached: &crate::state::CachedBoard,
+    source: &flow_like_types::Bytes,
+) -> Result<(), ApiError> {
+    if cached.draft_snapshot.holds() {
+        return Ok(());
+    }
+    let written = write_board_snapshot(
+        state.meta_bucket.as_generic().as_ref(),
+        app_id,
+        board_id,
+        &cached.e_tag,
+        source,
+    )
+    .await?;
+    cached
+        .draft_snapshot
+        .extend(draft_object_trusted_until(written));
+    Ok(())
+}
+
+/// Store `source`, the exact object a writer saved under `e_tag`, as that ETag's snapshot.
+/// Returns when it was written.
+async fn write_board_snapshot(
+    meta_store: &dyn ObjectStore,
+    app_id: &str,
+    board_id: &str,
+    e_tag: &str,
+    source: &flow_like_types::Bytes,
+) -> Result<SystemTime, ApiError> {
+    let e_tag = e_tag.trim();
+    if e_tag.is_empty() {
+        return Err(ApiError::internal_error(flow_like_types::anyhow!(
+            "Latest board '{board_id}' has no storage ETag"
+        )));
+    }
+    let path = draft_source_path(app_id, board_id, e_tag);
+    let written = SystemTime::now();
+    meta_store
+        .put(&path, PutPayload::from(source.clone()))
+        .await
+        .map_err(|error| {
+            ApiError::internal_error(flow_like_types::anyhow!(
+                "Failed to persist exact Board snapshot at {path}: {error}"
+            ))
+        })?;
+    Ok(written)
+}
+
 /// Load the prerun authority selected by a signed immutable version or draft
 /// ETag. An ETag miss never falls back to the current draft.
 pub async fn load_exact_prerun_manifest(
@@ -1044,18 +1098,23 @@ pub(crate) async fn remember_page_contract_facts(
 /// facts. Without them the first bootstrap and prerun after every save each hydrate the whole
 /// board on whichever cold instance they reach. Best effort: a failure only costs the next request
 /// that hydration, so the write never fails for it.
+///
+/// `source` is the exact object the writer stored under `cached.e_tag`, so the snapshot is one
+/// PUT of those bytes rather than a read of the floating board, which a later save may already
+/// have replaced.
 pub(crate) async fn prewarm_draft_revision(
     state: &AppState,
     app_id: &str,
     board_id: &str,
     cached: &crate::state::CachedBoard,
+    source: &flow_like_types::Bytes,
 ) {
     if cached.board.page_ids.is_empty() {
         return;
     }
     let prewarm = async {
         let (snapshot, authority) = flow_like_types::tokio::join!(
-            ensure_draft_board_snapshot(state, app_id, board_id, cached),
+            persist_written_board_snapshot(state, app_id, board_id, cached, source),
             ensure_draft_prerun_manifest(state, app_id, board_id, cached),
         );
         if let Err(error) = snapshot {
@@ -1740,6 +1799,50 @@ mod draft_manifest_cache_tests {
         assert_eq!(
             broken.status(),
             axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    /// The writer's own bytes are the snapshot of its ETag, even once a later save replaced the
+    /// floating board, which a read-back copy can no longer reach.
+    #[tokio::test]
+    async fn a_writer_snapshots_the_bytes_it_saved_after_the_board_moved_on() {
+        use flow_like_storage::object_store::PutPayload;
+
+        let store = InMemory::new();
+        let source_path = Board::proto_path(&Path::from("apps").join("app-1"), "board-1", None);
+        let saved = store
+            .put(&source_path, PutPayload::from_static(b"first save"))
+            .await
+            .unwrap();
+        let e_tag = saved.e_tag.unwrap();
+        store
+            .put(&source_path, PutPayload::from_static(b"second save"))
+            .await
+            .unwrap();
+        let snapshot_path = draft_source_path("app-1", "board-1", &e_tag);
+
+        assert!(
+            super::copy_exact_board_source(&store, "app-1", "board-1", &e_tag, &snapshot_path)
+                .await
+                .is_err()
+        );
+        super::write_board_snapshot(
+            &store,
+            "app-1",
+            "board-1",
+            &e_tag,
+            &flow_like_types::Bytes::from_static(b"first save"),
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.get(&snapshot_path).await.unwrap().bytes().await;
+        assert_eq!(snapshot.unwrap().as_ref(), b"first save");
+        assert!(
+            super::write_board_snapshot(&store, "app-1", "board-1", " ", &Default::default())
+                .await
+                .is_err(),
+            "a write without an ETag has no snapshot path"
         );
     }
 

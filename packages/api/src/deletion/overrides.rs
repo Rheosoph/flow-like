@@ -215,8 +215,8 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 sweep("InboxKey", "principalId"),
                 sweep("PinnedConversation", "principalId"),
                 sweep("StarredMessage", "principalId"),
-                sweep("QuotaWarningState", "payerId"),
                 sweep("BotTeamApp", "pinnedBy"),
+                sweep("QuotaWarningState", "payerId"),
             ],
             restrict_as_cascade: vec![
                 ("WasmPackageInvitation", "invitedById"),

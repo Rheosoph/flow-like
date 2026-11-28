@@ -26,6 +26,7 @@ pub(crate) mod levels;
 pub mod model;
 pub(crate) mod org_apps;
 pub mod people;
+pub mod preview;
 pub(crate) mod reach;
 pub(crate) mod room;
 pub mod teams;
@@ -154,6 +155,7 @@ pub fn routes() -> Router<AppState> {
             axum::routing::patch(teams::patch_team).delete(teams::delete_team),
         )
         .route("/{team_id}/people", post(people::add_people))
+        .route("/{team_id}/preview", post(preview::preview))
         .route("/{team_id}/thread", post(threads::open_thread))
         .route("/{team_id}/join", post(people::join_team))
         .route("/{team_id}/decline", post(people::decline_team))

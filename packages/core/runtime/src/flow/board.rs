@@ -14,8 +14,8 @@ use crate::{
     state::{FlowLikeState, FlowNodeRegistry},
     utils::compression::{
         ConditionalRead, compress_to_file, compress_to_file_create, compress_to_file_update,
-        from_compressed, from_compressed_if_changed, from_compressed_json,
-        from_compressed_with_meta,
+        compress_to_file_with_bytes, from_compressed, from_compressed_if_changed,
+        from_compressed_json, from_compressed_with_meta,
     },
 };
 use commands::GenericCommand;
@@ -255,6 +255,13 @@ fn unix_millis(time: impl Into<SystemTime>) -> Option<u64> {
 #[derive(Debug, Clone)]
 pub enum BoardParent {
     App(Weak<Mutex<App>>),
+}
+
+/// A draft write: the store's identity for the object and the exact bytes it now holds.
+#[derive(Debug, Clone)]
+pub struct SavedBoard {
+    pub put: PutResult,
+    pub source: flow_like_types::Bytes,
 }
 
 /// An immutable board snapshot that has been fully written but has not yet
@@ -2794,6 +2801,15 @@ impl Board {
         &self,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<PutResult> {
+        Ok(self.save_with_source(store).await?.put)
+    }
+
+    /// [`Self::save`] that also returns the exact compressed source now stored under
+    /// `put.e_tag`, so the writer can snapshot this revision without reading it back.
+    pub async fn save_with_source(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<SavedBoard> {
         self.ensure_supported_format()?;
         self.validate_geometry_contracts()?;
         let to = self.board_dir.clone().join(format!("{}.board", self.id));
@@ -2810,7 +2826,8 @@ impl Board {
         };
 
         let board = self.to_proto();
-        compress_to_file(store, to, &board).await
+        let (put, source) = compress_to_file_with_bytes(store, to, &board).await?;
+        Ok(SavedBoard { put, source })
     }
 
     /// Restore a saved graph in an open board without rerunning node updates. Keep the current

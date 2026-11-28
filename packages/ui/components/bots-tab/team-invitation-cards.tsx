@@ -5,9 +5,13 @@ import { UsersIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useTeamActions } from "../../hooks/use-bot-teams";
-import { useBotLabels } from "../../hooks/use-bots";
+import { useBot, useBotLabels } from "../../hooks/use-bots";
 import { apiErrorMessage } from "../../lib/api-error";
 import { orgBot } from "../../lib/bot-teams/org-model";
+import {
+	DEFAULT_OTHERS_DAILY_TURNS,
+	REQUESTER_DAILY_TURNS,
+} from "../../state/backend-state/bot-state";
 import type {
 	IOrgView,
 	ITeamInvitation,
@@ -21,7 +25,6 @@ import { RoomLimitsDialog } from "./room-limits-dialog";
 import type { CrewDirectory } from "./use-crew-directory";
 
 const DISMISSED_KEY = "flow-like:bots:dismissed-direct-asks";
-const LEAD_TURNS_PER_PERSON_PER_DAY = 20;
 
 export function teamInvitationKey(invitation: ITeamInvitation): string {
 	const key = `${invitation.kind}:${invitation.team_id}:${invitation.bot_id ?? ""}:${invitation.user_id ?? ""}`;
@@ -111,6 +114,7 @@ function TeamInvitationCard({
 		org.apps?.find((app) => app.id === appId)?.name ??
 		t("teams.needs.anApp", "an app");
 	const [limitsOpen, setLimitsOpen] = useState(false);
+	const leadBot = useBot(kind === "lead" ? botId : null).data;
 	const requesterId = invitation.user_id ?? "";
 	const requester = requesterId
 		? directory(requesterId).name
@@ -188,8 +192,12 @@ function TeamInvitationCard({
 		});
 		meta = t(
 			"teams.needs.leadMeta",
-			"Everyone in {{org}} can then talk to it, and its turns are on you (up to {{limit}} per person a day).",
-			{ org: orgName, limit: LEAD_TURNS_PER_PERSON_PER_DAY },
+			"Everyone in {{org}} can then talk to it, and its turns are on you: up to {{perPerson}} per person and {{total}} in total a day, which you can change in its safety settings.",
+			{
+				org: orgName,
+				perPerson: REQUESTER_DAILY_TURNS,
+				total: leadBot?.others_daily_turns ?? DEFAULT_OTHERS_DAILY_TURNS,
+			},
 		);
 	} else if (kind === "app_pin") {
 		title = t(

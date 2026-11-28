@@ -8,7 +8,7 @@ pub(crate) mod approvals;
 pub(crate) mod authorization;
 pub(crate) mod calendar_sync;
 pub(crate) mod calendar_tasks;
-mod cap;
+pub(crate) mod cap;
 mod decision;
 pub(crate) mod decision_wait;
 mod event_decision;

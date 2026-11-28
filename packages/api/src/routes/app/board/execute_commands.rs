@@ -313,18 +313,20 @@ pub async fn execute_commands(
             ));
         }
         let mut cached = None;
+        let mut source = None;
         if released_receipt || pruned_receipts {
             mutation_guard.ensure_held()?;
-            let put = board.save(None).await?;
+            let saved = board.save_with_source(None).await?;
             // Re-pin the cache to what this request just wrote. Without it the next mutation's
             // `If-None-Match` misses and pays a full board load and normalisation sweep for an
             // object this instance is already holding.
-            cached = state.seed_board_cache(&app_id, &board_id, board, &put);
+            cached = state.seed_board_cache(&app_id, &board_id, board, &saved.put);
+            source = Some(saved.source);
         }
         drop(mutation_guard);
-        if let Some(cached) = &cached {
+        if let (Some(cached), Some(source)) = (&cached, &source) {
             crate::routes::app::prerun_shared::prewarm_draft_revision(
-                &state, &app_id, &board_id, cached,
+                &state, &app_id, &board_id, cached, source,
             )
             .await;
         }
@@ -461,7 +463,7 @@ pub async fn execute_commands(
         try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
     }
     mutation_guard.ensure_held()?;
-    let put = save_board_and_refresh_summary(&state, &app_id, &board)
+    let saved = save_board_and_refresh_summary(&state, &app_id, &board)
         .instrument(tracing::debug_span!("execute_commands.save"))
         .await?;
     if batch > 0 {
@@ -487,7 +489,7 @@ pub async fn execute_commands(
     // window in which an unrequested snapshot could be built off the critical path anyway.
     let sync = match &sync_request {
         Some(request) => {
-            let cached = seed_board_revision(&state, &app_id, &board_id, board, &put)
+            let cached = seed_board_revision(&state, &app_id, &board_id, board, &saved)
                 .instrument(tracing::debug_span!("execute_commands.snapshot"))
                 .await;
             Some(
@@ -497,9 +499,13 @@ pub async fn execute_commands(
             )
         }
         None => {
-            if let Some(cached) = state.seed_board_cache(&app_id, &board_id, board, &put) {
+            if let Some(cached) = state.seed_board_cache(&app_id, &board_id, board, &saved.put) {
                 crate::routes::app::prerun_shared::prewarm_draft_revision(
-                    &state, &app_id, &board_id, &cached,
+                    &state,
+                    &app_id,
+                    &board_id,
+                    &cached,
+                    &saved.source,
                 )
                 .await;
             }

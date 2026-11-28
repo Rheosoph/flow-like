@@ -1191,13 +1191,15 @@ impl FrontendToolBridge {
                     Ok(result) => {
                         // Clients refresh their views after durable native mutations. Delivery is
                         // best effort and never part of the operation's success boundary.
-                        crate::utils::emit_to_ui(
-                            &self.app_handle,
-                            "flowpilot://native-tool-completed",
-                            json!({
-                                "toolName": tool_name, "runId": self.context.as_ref().and_then(|context| context.run_id.as_deref()),
-                            }),
-                        );
+                        if super::native_tool_bridge::may_change_views(&tool_name) {
+                            crate::utils::emit_to_ui(
+                                &self.app_handle,
+                                "flowpilot://native-tool-completed",
+                                json!({
+                                    "toolName": tool_name, "runId": self.context.as_ref().and_then(|context| context.run_id.as_deref()),
+                                }),
+                            );
+                        }
                         result
                     }
                     Err(error)

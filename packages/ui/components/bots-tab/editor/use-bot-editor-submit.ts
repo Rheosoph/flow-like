@@ -7,6 +7,7 @@ import {
 	isDeletableBot,
 	useBotLabels,
 	useBots,
+	useClaimBotMailAddress,
 	useCloneBot,
 	useCreateBot,
 	useDeleteBot,
@@ -117,6 +118,7 @@ export function useBotEditorSubmit(
 	const { mutateAsync: deleteBot } = useDeleteBot();
 	const { mutateAsync: setBotApp } = useSetBotApp();
 	const { mutateAsync: setAppRestrictions } = useSetBotAppRestrictions();
+	const { mutateAsync: claimMailAddress } = useClaimBotMailAddress();
 	const { data: bots = [] } = useBots();
 	const labels = useBotLabels();
 	const [error, setError] = useState<string | null>(null);
@@ -138,9 +140,21 @@ export function useBotEditorSubmit(
 			});
 	};
 
+	const claimPendingAddress = async (bot: IBot) => {
+		const alias = editor.pendingEmailAlias.trim().toLowerCase();
+		if (!alias || bot.local || !bot.capabilities.includes("email")) return;
+		try {
+			await claimMailAddress({ botId: bot.id, alias });
+		} catch (cause) {
+			toast.warning(t("editor.emailClaimFailed", { alias }), {
+				description: errorMessage(cause, "") || undefined,
+			});
+		}
+	};
+
 	const create = async () => {
 		const bot = await createBot(buildCreateBotRequest(editor.draft));
-		await attachPendingApps(bot);
+		await Promise.all([attachPendingApps(bot), claimPendingAddress(bot)]);
 		return bot;
 	};
 
