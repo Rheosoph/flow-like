@@ -7,6 +7,7 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { adaptiveRefetchInterval } from "../lib/adaptive-polling";
 import type { DataClassification } from "../lib/data-classification";
 import { useBackend } from "../state/backend-state";
 import type {
@@ -29,7 +30,7 @@ export const botTeamKeys = {
 };
 
 const ORG_STALE_TIME = 30_000;
-const ORG_REFRESH = 60_000;
+const ORG_REFRESH = adaptiveRefetchInterval({ baseMs: 60_000 });
 
 const EMPTY_ORG: IOrgView = {
 	teams: [],

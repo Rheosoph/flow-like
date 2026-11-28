@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CloudOff, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
+import { adaptiveRefetchInterval } from "../../lib/adaptive-polling";
 import { getApiOrigin } from "../../lib/api-url";
 import type { IProfile } from "../../lib/schema/profile/profile";
 import { useBackend, useBackendReady } from "../../state/backend-state";
@@ -69,6 +70,8 @@ function keepNewerProfile(current: IProfile | undefined, incoming: IProfile) {
 		: incoming;
 }
 
+const HOME_POLL = adaptiveRefetchInterval({ baseMs: 60_000 });
+
 export function HomePage() {
 	const backend = useBackend();
 	const auth = useAuth();
@@ -97,7 +100,7 @@ export function HomePage() {
 		},
 		enabled: ready,
 		staleTime: 30_000,
-		refetchInterval: editing ? false : 60_000,
+		refetchInterval: editing ? false : HOME_POLL,
 		refetchOnWindowFocus: !editing,
 		refetchOnReconnect: !editing,
 	});
@@ -122,7 +125,7 @@ export function HomePage() {
 		initialData: () => readCachedHomeDefaults(cacheKey),
 		initialDataUpdatedAt: 0,
 		staleTime: 30_000,
-		refetchInterval: editing ? false : 60_000,
+		refetchInterval: editing ? false : HOME_POLL,
 		refetchOnWindowFocus: !editing,
 		refetchOnReconnect: !editing,
 		retry: 1,

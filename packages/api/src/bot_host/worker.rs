@@ -45,7 +45,7 @@ use flow_like::{
     flow::copilot::{
         BotToolHost, BotToolset, HeadlessMemory, NotesHandle, PlatformContextInput, ReplyFiles,
         ToolTrail,
-        bot_discussion::DiscussionProposals,
+        bot_discussion::DiscussionReply,
         bot_platform_context,
         bot_talk::{AnsweredRound, BotPresence, BotTalk},
         decision_event::{self, EventDecision},
@@ -580,6 +580,12 @@ pub(crate) fn reply_request(
         "reply_to": turn.trigger_message_id,
         "hops": u32::try_from(turn.hops).unwrap_or(0).saturating_add(1),
     });
+    if let Some(budget) = turn
+        .discussion_hops
+        .and_then(|hops| u32::try_from(hops).ok())
+    {
+        body["discussion_hops"] = json!(budget);
+    }
     if let Some(code) = error_code {
         body["error"] = json!({ "code": code });
     }
@@ -619,6 +625,11 @@ pub(crate) fn answer_request(turn: &bot_turn::Model, answer: &Answer) -> Option<
             && let Some(envelope) = request.envelope.as_mut()
         {
             envelope["body"]["discussion_proposal"] = json!(proposal);
+        }
+        if let Some(outcome) = &answer.discussion_outcome
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            envelope["body"]["discussion_outcome"] = json!(outcome);
         }
         if let Some(envelope) = request.envelope.as_mut() {
             flow_like_types::bot_reply_files::attach_reply_files(
@@ -669,6 +680,8 @@ pub(crate) struct Answer {
     pub(crate) files: Vec<flow_like_types::bot_reply_files::ReplyFile>,
     /// The longer discussion the bot proposed with `discussion_propose`.
     pub(crate) discussion_proposal: Option<flow_like_types::bot_message::DiscussionProposal>,
+    /// The outcome the bot ended its discussion with (`discussion_end`).
+    pub(crate) discussion_outcome: Option<flow_like_types::bot_message::DiscussionOutcome>,
     /// The taint the turn ended with; the reply records it for the turns that read it.
     pub(crate) taint: flow_like_types::data_classification::DataSensitivity,
 }
@@ -709,6 +722,7 @@ fn silent_answer(completed: bool) -> Answer {
         tool_calls: Vec::new(),
         files: Vec::new(),
         discussion_proposal: None,
+        discussion_outcome: None,
         usage_stats: Vec::new(),
         taint: Default::default(),
     }
@@ -998,6 +1012,7 @@ async fn attempt_with(
             tool_calls: Vec::new(),
             files: Vec::new(),
             discussion_proposal: None,
+            discussion_outcome: None,
             usage_stats: Vec::new(),
             taint: Default::default(),
         });
@@ -1052,6 +1067,7 @@ async fn attempt_with(
             tool_calls: Vec::new(),
             files: Vec::new(),
             discussion_proposal: None,
+            discussion_outcome: None,
             usage_stats: Vec::new(),
             taint: Default::default(),
         });
@@ -1198,6 +1214,7 @@ async fn attempt_with(
                 tool_calls: Vec::new(),
                 files: Vec::new(),
                 discussion_proposal: None,
+                discussion_outcome: None,
                 usage_stats: usage.snapshot(),
                 taint: Default::default(),
             });
@@ -1281,6 +1298,7 @@ async fn attempt_with(
                     tool_calls: Vec::new(),
                     files: Vec::new(),
                     discussion_proposal: None,
+                    discussion_outcome: None,
                     usage_stats: Vec::new(),
                     taint: Default::default(),
                 });
@@ -1561,7 +1579,7 @@ async fn attempt_with(
             std::mem::take(&mut bot.context.host_tools).with_reply_files(files.clone());
     }
     let discussion = (kind == ConversationKind::Group && in_discussion && !ephemeral_user_context)
-        .then(DiscussionProposals::new);
+        .then(DiscussionReply::new);
     if let Some(proposals) = &discussion {
         bot.context.host_tools =
             std::mem::take(&mut bot.context.host_tools).with_discussion(proposals.clone());
@@ -1847,6 +1865,7 @@ async fn attempt_with(
                 tool_calls: Vec::new(),
                 files: Vec::new(),
                 discussion_proposal: None,
+                discussion_outcome: None,
                 usage_stats: Vec::new(),
                 taint: Default::default(),
             })
@@ -1934,7 +1953,8 @@ async fn attempt_with(
                     .as_ref()
                     .map(ReplyFiles::files)
                     .unwrap_or_default(),
-                discussion_proposal: discussion.as_ref().and_then(DiscussionProposals::proposal),
+                discussion_proposal: discussion.as_ref().and_then(DiscussionReply::proposal),
+                discussion_outcome: discussion.as_ref().and_then(DiscussionReply::outcome),
                 taint: run_taint.taint(),
             })
         }

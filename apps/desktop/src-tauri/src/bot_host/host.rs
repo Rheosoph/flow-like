@@ -16,7 +16,7 @@ use super::{
 use chrono::{Duration as Age, Utc};
 use flow_like::flow::copilot::{
     ReplyFiles, ToolTrail,
-    bot_discussion::DiscussionProposals,
+    bot_discussion::DiscussionReply,
     bot_notes::NotesHandle,
     decision::{self, Decision, DecisionParticipant},
     decision_event::{self, EventDecision},
@@ -83,7 +83,7 @@ struct Live {
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
     reply_files: Option<ReplyFiles>,
-    discussion: Option<DiscussionProposals>,
+    discussion: Option<DiscussionReply>,
 }
 
 #[derive(Default)]
@@ -965,8 +965,7 @@ impl Inner {
             ToolTrail::new(transcript::tool_trail(bot_id, &oldest_first[..upto]))
         });
         let reply_files = (!ephemeral_user_context).then(ReplyFiles::new);
-        let discussion =
-            (in_room && !asks && !ephemeral_user_context).then(DiscussionProposals::new);
+        let discussion = (in_room && !asks && !ephemeral_user_context).then(DiscussionReply::new);
         let usage = flow_like::flow::copilot::bot_usage::BotUsage::default();
         if let Some(live) = lock(&self.state).live.get_mut(key) {
             live.notes = notes.clone();
@@ -1625,8 +1624,8 @@ impl Inner {
             if let Some(trail) = &trail {
                 trail.attach(&mut envelope["body"]);
             }
-            if let Some(proposals) = &discussion {
-                proposals.attach(&mut envelope["body"]);
+            if let Some(reply) = &discussion {
+                reply.attach(&mut envelope["body"]);
             }
         }
         if let Some(envelope) = request.envelope.as_mut() {

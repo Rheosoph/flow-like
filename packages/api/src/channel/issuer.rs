@@ -193,10 +193,30 @@ impl ChannelIssuer {
     }
 
     /// Mint reception rights only. The authenticated account supplies the scope.
-    #[allow(unused_variables)]
     pub async fn realtime_connect(
         &self,
         sub: &str,
+        prefer_http: bool,
+    ) -> Result<flow_like_types::realtime::RealtimeConnectResponse> {
+        self.realtime_connect_scope(realtime_scope(sub), prefer_http)
+            .await
+    }
+
+    /// Reception rights for one device's doorbell, on whichever transport this deployment runs.
+    /// Its wakeups carry no data: the device answers them with its own authenticated requests.
+    pub async fn realtime_connect_device(
+        &self,
+        device_id: &str,
+        prefer_http: bool,
+    ) -> Result<flow_like_types::realtime::RealtimeConnectResponse> {
+        self.realtime_connect_scope(realtime_device_scope(device_id), prefer_http)
+            .await
+    }
+
+    #[allow(unused_variables)]
+    async fn realtime_connect_scope(
+        &self,
+        scope: String,
         prefer_http: bool,
     ) -> Result<flow_like_types::realtime::RealtimeConnectResponse> {
         use flow_like_types::realtime::{
@@ -204,7 +224,6 @@ impl ChannelIssuer {
         };
         let ttl = 15 * 60;
         let expires_at = now_unix() + ttl;
-        let scope = realtime_scope(sub);
         let transport = if prefer_http {
             RealtimeTransport::Http {}
         } else {
@@ -263,6 +282,11 @@ impl ChannelIssuer {
         self.publish_realtime_for_user(sub, true).await;
     }
 
+    /// Whether wakeups reach anyone: an HTTP-only deployment has no push channel.
+    pub fn pushes(&self) -> bool {
+        !matches!(self.backend, ChannelBackend::Http)
+    }
+
     /// Whether the transport can reach an account's devices with a reply. Firebase overwrites
     /// one node per message, so replies get a node of their own and never hide a wakeup.
     pub fn carries_realtime_replies(&self) -> bool {
@@ -288,12 +312,28 @@ impl ChannelIssuer {
         .await;
     }
 
-    async fn publish_realtime_for_user(&self, sub: &str, throttle: bool) {
-        use flow_like_types::realtime::{REALTIME_PROTOCOL_VERSION, RealtimeWakeup};
-        if matches!(self.backend, ChannelBackend::Http) || sub.is_empty() {
+    /// Rings one device's doorbell so it polls its routes now. Bursts share the throttle window.
+    pub async fn publish_device_wakeup(&self, device_id: &str) {
+        if device_id.is_empty() {
             return;
         }
-        let scope = realtime_scope(sub);
+        self.publish_realtime_wakeup(realtime_device_scope(device_id), true)
+            .await;
+    }
+
+    async fn publish_realtime_for_user(&self, sub: &str, throttle: bool) {
+        if sub.is_empty() {
+            return;
+        }
+        self.publish_realtime_wakeup(realtime_scope(sub), throttle)
+            .await;
+    }
+
+    async fn publish_realtime_wakeup(&self, scope: String, throttle: bool) {
+        use flow_like_types::realtime::{REALTIME_PROTOCOL_VERSION, RealtimeWakeup};
+        if matches!(self.backend, ChannelBackend::Http) {
+            return;
+        }
         let account = self
             .realtime_accounts
             .get_with(scope.clone(), Default::default);
@@ -691,6 +731,13 @@ fn realtime_scope(sub: &str) -> String {
     hash.finalize().to_hex().to_string()
 }
 
+/// A device's wakeup scope. Its own derivation key keeps it apart from every account scope.
+fn realtime_device_scope(device_id: &str) -> String {
+    let mut hash = blake3::Hasher::new_derive_key("flow-like realtime device scope v1");
+    hash.update(device_id.as_bytes());
+    hash.finalize().to_hex().to_string()
+}
+
 /// What a realtime publication carries; Firebase writes each to its own node.
 #[derive(Clone, Copy)]
 enum RealtimeMessage {
@@ -799,6 +846,36 @@ mod tests {
             assert_eq!(scope.len(), 64);
             assert!(scope.bytes().all(|byte| byte.is_ascii_hexdigit()));
         }
+    }
+
+    #[test]
+    fn device_doorbells_never_share_a_topic_with_an_account() {
+        for id in ["device-a", "user-a", "other.*.>", "../other/#"] {
+            let device = realtime_device_scope(id);
+            assert_eq!(device, realtime_device_scope(id));
+            assert_ne!(device, realtime_scope(id));
+            assert_eq!(device.len(), 64);
+            assert!(device.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        }
+        assert_ne!(
+            realtime_device_scope("device-a"),
+            realtime_device_scope("device-b")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_http_deployment_hands_devices_no_doorbell() {
+        let issuer = ChannelIssuer::http_only("https://api.example.test");
+        let grant = issuer
+            .realtime_connect_device("device-a", false)
+            .await
+            .unwrap();
+        assert!(matches!(
+            grant.transport,
+            flow_like_types::realtime::RealtimeTransport::Http {}
+        ));
+        issuer.publish_device_wakeup("device-a").await;
+        assert_eq!(issuer.realtime_accounts.entry_count(), 0);
     }
 
     #[tokio::test]

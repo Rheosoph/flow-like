@@ -13,7 +13,7 @@ use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like_types::bot::BotCapability;
 use serde_json::{Value, json};
 
-use super::bot_discussion::DiscussionProposals;
+use super::bot_discussion::DiscussionReply;
 use super::bot_notes::NotesHandle;
 use super::bot_reply_files::ReplyFiles;
 use super::bot_trail::ToolTrail;
@@ -411,7 +411,7 @@ pub struct HostTools {
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
     reply_files: Option<ReplyFiles>,
-    discussion: Option<DiscussionProposals>,
+    discussion: Option<DiscussionReply>,
     conversation_key: Option<String>,
     compaction_requested: bool,
 }
@@ -504,14 +504,15 @@ impl HostTools {
         self.reply_files.as_ref()
     }
 
-    /// Collects the longer discussion a room turn proposes with `discussion_propose`; offered
-    /// only when a host passes it, and that host puts the proposal on the stored reply.
-    pub fn with_discussion(mut self, proposals: DiscussionProposals) -> Self {
-        self.discussion = Some(proposals);
+    /// Collects the longer discussion a room turn proposes with `discussion_propose` and the
+    /// outcome it ends one with (`discussion_end`); offered only when a host passes it, and that
+    /// host puts both on the stored reply ([`DiscussionReply::attach`]).
+    pub fn with_discussion(mut self, reply: DiscussionReply) -> Self {
+        self.discussion = Some(reply);
         self
     }
 
-    pub fn discussion(&self) -> Option<&DiscussionProposals> {
+    pub fn discussion(&self) -> Option<&DiscussionReply> {
         self.discussion.as_ref()
     }
 

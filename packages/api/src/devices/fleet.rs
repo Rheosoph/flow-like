@@ -251,9 +251,10 @@ async fn reader_put(
     Path((id, k)): Path<(String, String)>,
     Json(v): Json<ReaderPut>,
 ) -> Result<Json<FleetReaderState>, ApiError> {
-    reader_action(s, u, id, k, ReaderAction::Put(v.reader_jws))
-        .await
-        .map(Json)
+    let reader =
+        reader_action(s.clone(), u, id.clone(), k, ReaderAction::Put(v.reader_jws)).await?;
+    s.channels.publish_device_wakeup(&id).await;
+    Ok(Json(reader))
 }
 async fn reader_delete(
     State(s): State<AppState>,
@@ -261,9 +262,34 @@ async fn reader_delete(
     Path((id, k)): Path<(String, String)>,
     Json(v): Json<ReaderDelete>,
 ) -> Result<Json<FleetReaderState>, ApiError> {
-    reader_action(s, u, id, k, ReaderAction::Delete(v.revision))
-        .await
-        .map(Json)
+    let reader = reader_action(
+        s.clone(),
+        u,
+        id.clone(),
+        k,
+        ReaderAction::Delete(v.revision),
+    )
+    .await?;
+    s.channels.publish_device_wakeup(&id).await;
+    Ok(Json(reader))
+}
+
+/// A device publishes its metrics often only for a while after it was rung, so a read of its
+/// fleet view rings it, at most once a minute per API instance. The ring carries no data.
+static RUNG_FOR_VIEW: std::sync::LazyLock<moka::sync::Cache<String, ()>> =
+    std::sync::LazyLock::new(|| {
+        moka::sync::Cache::builder()
+            .max_capacity(10_000)
+            .time_to_live(std::time::Duration::from_secs(60))
+            .build()
+    });
+
+async fn ring_for_view(state: &AppState, device_id: &str) {
+    if RUNG_FOR_VIEW.contains_key(device_id) {
+        return;
+    }
+    RUNG_FOR_VIEW.insert(device_id.to_owned(), ());
+    state.channels.publish_device_wakeup(device_id).await;
 }
 async fn reader_action(
     state: AppState,
@@ -536,9 +562,9 @@ async fn download(
         .enrollment(&device.receipt.enrollment_id)
         .await?
         .manifest;
-    retained_view(&state.db, state.db_dialect, device, manifest, user, key_id)
-        .await
-        .map(Json)
+    let view = retained_view(&state.db, state.db_dialect, device, manifest, user, key_id).await?;
+    ring_for_view(&state, &id).await;
+    Ok(Json(view))
 }
 async fn retained_view(
     db: &sea_orm::DatabaseConnection,

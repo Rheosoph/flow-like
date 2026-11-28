@@ -2,6 +2,7 @@ use crate::{
     diagnostics::RulesDiffer,
     enrollment::{DeviceSession, api_status, device_proof_rejected, unix_time},
     state::StateStore,
+    wake::WakeSubscription,
 };
 use anyhow::{Context, Result, ensure};
 use flow_like_device_crypto::fleet::seal_fleet;
@@ -214,7 +215,58 @@ fn content_digest(value: &serde_json::Value) -> Result<String> {
     }
     Ok(fleet_digest(&serde_json::to_vec(&value)?))
 }
-fn due(store: &StateStore, stream: &str, kind: FleetKind, digest: &str, now: i64) -> Result<bool> {
+const POLLING_SECS: i64 = 30;
+const REFRESH_SECS: i64 = 60;
+const IDLE_SECS: i64 = 900;
+
+/// How often the publisher refreshes recipients, samples metrics and republishes unchanged
+/// streams. A live doorbell replaces polling: recipients are refreshed on wakeups, and streams
+/// are fresh only while watched. A changed status still goes out at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Cadence {
+    metrics_secs: i64,
+    recipients_secs: i64,
+    refresh_secs: i64,
+}
+
+impl Cadence {
+    const POLLING: Self = Self {
+        metrics_secs: POLLING_SECS,
+        recipients_secs: POLLING_SECS,
+        refresh_secs: REFRESH_SECS,
+    };
+
+    fn of(live: bool, watched: bool) -> Self {
+        match (live, watched) {
+            (false, _) => Self::POLLING,
+            (true, true) => Self {
+                metrics_secs: POLLING_SECS,
+                recipients_secs: IDLE_SECS,
+                refresh_secs: REFRESH_SECS,
+            },
+            (true, false) => Self {
+                metrics_secs: IDLE_SECS,
+                recipients_secs: IDLE_SECS,
+                refresh_secs: IDLE_SECS,
+            },
+        }
+    }
+
+    fn current(wake: Option<&WakeSubscription>) -> Self {
+        wake.map_or(Self::POLLING, |wake| {
+            Self::of(wake.is_live(), wake.watched())
+        })
+    }
+}
+
+fn due(
+    store: &StateStore,
+    stream: &str,
+    kind: FleetKind,
+    digest: &str,
+    now: i64,
+    cadence: Cadence,
+) -> Result<bool> {
     let old: Option<(String, i64)> = store
         .connection
         .query_row(
@@ -225,7 +277,12 @@ fn due(store: &StateStore, stream: &str, kind: FleetKind, digest: &str, now: i64
         .optional()?;
     Ok(old.is_none_or(|(old, at)| {
         at > now
-            || now - at >= if kind == FleetKind::Metrics { 30 } else { 60 }
+            || now - at
+                >= if kind == FleetKind::Metrics {
+                    cadence.metrics_secs
+                } else {
+                    cadence.refresh_secs
+                }
             || kind == FleetKind::Status && old != digest && now - at >= 5
     }))
 }
@@ -238,6 +295,18 @@ pub async fn publish(
     boot_id: String,
     cancel: CancellationToken,
 ) -> Result<()> {
+    publish_woken(root, device, boot_id, None, cancel).await
+}
+
+/// `publish`, running a round at once on each wakeup and publishing at the push cadence while
+/// the doorbell is live.
+pub async fn publish_woken(
+    root: PathBuf,
+    device: Arc<DeviceSession>,
+    boot_id: String,
+    mut wake: Option<WakeSubscription>,
+    cancel: CancellationToken,
+) -> Result<()> {
     let mut recipients = None::<(FleetRecipients, i64)>;
     let mut failures = 0u32;
     loop {
@@ -247,8 +316,17 @@ pub async fn publish(
             (5u64.saturating_mul(1u64 << failures.min(6))).min(300)
         };
         let jitter = u64::from(rand_core::OsRng.next_u32()) % 3;
-        tokio::select! {_=cancel.cancelled()=>return Ok(()),_=tokio::time::sleep(Duration::from_secs(delay+jitter))=>()}
-        let result = publish_round(&root, &device, &boot_id, &mut recipients, &cancel).await;
+        let woken = tokio::select! {
+            _=cancel.cancelled()=>return Ok(()),
+            _=tokio::time::sleep(Duration::from_secs(delay+jitter))=>false,
+            _=async { match wake.as_mut() { Some(wake) => wake.changed().await, None => std::future::pending().await } }, if failures == 0 =>true,
+        };
+        if woken {
+            recipients = None;
+        }
+        let cadence = Cadence::current(wake.as_ref());
+        let result =
+            publish_round(&root, &device, &boot_id, &mut recipients, cadence, &cancel).await;
         crate::diagnostics::global().report_error(crate::diagnostics::FLEET_PUBLISHER, &result);
         match result {
             Ok(()) => failures = 0,
@@ -279,12 +357,17 @@ async fn publish_round(
     device: &DeviceSession,
     boot_id: &str,
     recipients: &mut Option<(FleetRecipients, i64)>,
+    cadence: Cadence,
     cancel: &CancellationToken,
 ) -> Result<()> {
     let now = unix_time()?;
     let store = StateStore::open(&root.join("management.sqlite"))
         .context("Fleet snapshot publication cannot open the management database")?;
-    if recipients.as_ref().is_none_or(|(_, at)| now - *at >= 30) || pending(&store)?.is_some() {
+    if recipients
+        .as_ref()
+        .is_none_or(|(_, at)| now - *at >= cadence.recipients_secs)
+        || pending(&store)?.is_some()
+    {
         let current = tokio::select! {_=cancel.cancelled()=>return Ok(()),result=device.fleet_recipients()=>result}
             .context("Fleet snapshot publication is waiting for the hub")?;
         *recipients = Some((current, now));
@@ -295,11 +378,15 @@ async fn publish_round(
         .0;
     let audiences = current_audiences(&store, device.manifest(), current, now)
         .context("Fleet snapshot publication awaits current signed readers and policy")?;
-    publish_pass(
-        root, store, device, boot_id, current, &audiences, now, cancel,
+    let refused = publish_pass(
+        root, store, device, boot_id, current, &audiences, now, cadence, cancel,
     )
     .await
-    .context("Fleet snapshot publication paused; durable pending snapshot retained")
+    .context("Fleet snapshot publication paused; durable pending snapshot retained")?;
+    if refused {
+        *recipients = None;
+    }
+    Ok(())
 }
 #[allow(clippy::too_many_arguments)]
 async fn publish_pass(
@@ -310,8 +397,10 @@ async fn publish_pass(
     current: &mut FleetRecipients,
     audiences: &[(FleetReader, String, FleetAudience)],
     now: i64,
+    cadence: Cadence,
     cancel: &CancellationToken,
-) -> Result<()> {
+) -> Result<bool> {
+    let mut refused = false;
     let key = device.telemetry_signer().public_key();
     if let Some(pending) = pending(&store)? {
         let manifest = verify_fleet_snapshot(&pending.bundle, &key)?;
@@ -331,14 +420,15 @@ async fn publish_pass(
                     && r.controller_key == manifest.controller_key
                     && a == &manifest.audience
             }) {
-                match tokio::select! {_=cancel.cancelled()=>return Ok(()),result=device.upload_fleet(&pending.bundle)=>result}
+                match tokio::select! {_=cancel.cancelled()=>return Ok(refused),result=device.upload_fleet(&pending.bundle)=>result}
                 {
                     Ok(ack) => {
                         acknowledge(&store, &pending, &ack, &key)?;
                         current.head = ack;
                     }
                     Err(error) if stream_refused(&error) => {
-                        refuse_stream(&store, &pending, &error, now)?
+                        refuse_stream(&store, &pending, &error, now)?;
+                        refused = true;
                     }
                     Err(error) => return Err(error),
                 }
@@ -397,7 +487,7 @@ async fn publish_pass(
         // Metrics have a fixed interval, so no database projection is needed
         // until this recipient's next sample is due.
         if audience.kind == FleetKind::Metrics
-            && !due(&store, &stream_id, FleetKind::Metrics, "", now)?
+            && !due(&store, &stream_id, FleetKind::Metrics, "", now, cadence)?
         {
             continue;
         }
@@ -429,22 +519,26 @@ async fn publish_pass(
             audience.kind,
             &content_digest(&value)?,
             now,
+            cadence,
         )? {
             continue;
         }
         let pending = queue(&store, device, boot, reader, audience.clone(), value, now)?;
         attempts += 1;
-        match tokio::select! {_=cancel.cancelled()=>return Ok(()),result=device.upload_fleet(&pending.bundle)=>result}
+        match tokio::select! {_=cancel.cancelled()=>return Ok(refused),result=device.upload_fleet(&pending.bundle)=>result}
         {
             Ok(ack) => {
                 acknowledge(&store, &pending, &ack, &key)?;
                 current.head = ack;
             }
-            Err(error) if stream_refused(&error) => refuse_stream(&store, &pending, &error, now)?,
+            Err(error) if stream_refused(&error) => {
+                refuse_stream(&store, &pending, &error, now)?;
+                refused = true;
+            }
             Err(error) => return Err(error),
         }
     }
-    Ok(())
+    Ok(refused)
 }
 
 /// The grants whose device metrics carry the model summary: the owner's and every grant
@@ -592,6 +686,7 @@ mod tests {
             &mut recipients,
             &[],
             now,
+            Cadence::POLLING,
             &CancellationToken::new(),
         )
         .await?;
@@ -628,6 +723,7 @@ mod tests {
             &mut recipients,
             &[],
             now,
+            Cadence::POLLING,
             &CancellationToken::new(),
         )
         .await?;
@@ -649,10 +745,38 @@ mod tests {
             "INSERT INTO fleet_published_streams VALUES('stream',?1,100)",
             [&digest],
         )?;
-        assert!(!due(&store, "stream", FleetKind::Status, &digest, 159)?);
-        assert!(due(&store, "stream", FleetKind::Status, &digest, 160)?);
-        assert!(!due(&store, "stream", FleetKind::Metrics, "changed", 129)?);
-        assert!(due(&store, "stream", FleetKind::Metrics, "changed", 130)?);
+        assert!(!due(
+            &store,
+            "stream",
+            FleetKind::Status,
+            &digest,
+            159,
+            Cadence::POLLING
+        )?);
+        assert!(due(
+            &store,
+            "stream",
+            FleetKind::Status,
+            &digest,
+            160,
+            Cadence::POLLING
+        )?);
+        assert!(!due(
+            &store,
+            "stream",
+            FleetKind::Metrics,
+            "changed",
+            129,
+            Cadence::POLLING
+        )?);
+        assert!(due(
+            &store,
+            "stream",
+            FleetKind::Metrics,
+            "changed",
+            130,
+            Cadence::POLLING
+        )?);
 
         use crate::diagnostics::{Detail, Diagnostics, Rows, test_support};
         let diagnostics = Diagnostics::default();
@@ -669,6 +793,45 @@ mod tests {
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(digests[0], digests[1]);
+        Ok(())
+    }
+    #[test]
+    fn a_live_doorbell_relaxes_metrics_and_recipients_unless_watched() -> Result<()> {
+        assert_eq!(Cadence::of(false, false), Cadence::POLLING);
+        assert_eq!(Cadence::of(false, true), Cadence::POLLING);
+        assert_eq!(Cadence::of(true, true).metrics_secs, 30);
+        assert_eq!(Cadence::of(true, true).recipients_secs, 900);
+        assert_eq!(Cadence::of(true, false).metrics_secs, 900);
+        assert_eq!(Cadence::of(true, false).recipients_secs, 900);
+        assert_eq!(Cadence::of(true, true).refresh_secs, 60);
+        assert_eq!(Cadence::of(true, false).refresh_secs, 900);
+        let (root, _, _, _) = fixture()?;
+        let store = StateStore::open(&root.path().join("management.sqlite"))?;
+        store.connection.execute(
+            "INSERT INTO fleet_published_streams VALUES('stream','',100)",
+            [],
+        )?;
+        let idle = Cadence::of(true, false);
+        for kind in [FleetKind::Metrics, FleetKind::Status] {
+            assert!(!due(&store, "stream", kind, "", 100 + 899, idle)?);
+            assert!(due(&store, "stream", kind, "", 100 + 900, idle)?);
+        }
+        assert!(due(
+            &store,
+            "stream",
+            FleetKind::Status,
+            "changed",
+            105,
+            idle
+        )?);
+        assert!(due(
+            &store,
+            "stream",
+            FleetKind::Metrics,
+            "",
+            130,
+            Cadence::POLLING
+        )?);
         Ok(())
     }
     #[tokio::test]
@@ -774,6 +937,7 @@ mod tests {
                 &mut recipients,
                 &audiences,
                 now + pass * 5,
+                Cadence::POLLING,
                 &CancellationToken::new(),
             )
             .await?;
@@ -883,6 +1047,7 @@ mod tests {
             &mut recipients,
             &audiences,
             now,
+            Cadence::POLLING,
             &CancellationToken::new(),
         )
         .await?;
@@ -898,14 +1063,16 @@ mod tests {
             &refused,
             FleetKind::Status,
             "changed",
-            now + 4
+            now + 4,
+            Cadence::POLLING
         )?);
         assert!(due(
             &store,
             &refused,
             FleetKind::Status,
             "changed",
-            now + 5
+            now + 5,
+            Cadence::POLLING
         )?);
         Ok(())
     }

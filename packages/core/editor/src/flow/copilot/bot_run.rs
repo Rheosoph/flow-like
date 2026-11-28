@@ -35,7 +35,8 @@ use super::assistant::{
     global_assistant_system_prompt_for,
 };
 use super::bot_discussion::{
-    DISCUSSION_PROPOSE_TOOL, DiscussionBridge, DiscussionProposals, discussion_propose_spec,
+    DISCUSSION_END_TOOL, DISCUSSION_PROPOSE_TOOL, DiscussionBridge, DiscussionReply,
+    discussion_end_spec, discussion_propose_spec,
 };
 use super::bot_notes::{self, NotesBridge, NotesHandle, notes_tool_specs};
 use super::bot_reply_files::{GroupChat, ReplyFiles, ReplyFilesBridge, file_attach_spec};
@@ -391,9 +392,11 @@ impl TurnRequester {
         let mention = mention_of(self.requester_label());
         let limit = self.discussion_limit;
         let mut section = format!(
-            "## EXCHANGE WITH ANOTHER BOT\nYou answer a message of {partner}, another bot in this room. You two may go back and forth: yours is message {} of at most {} until a person writes again. Answer {partner}'s points directly, check facts with your tools and data where that helps, keep each message focused and don't repeat earlier points. To hand the word back, write {mention}. When you agree, or have nothing left to ask, leave the mention out and write the outcome for the room in a few sentences: that ends the exchange. When {partner}'s message already ends it, or asks a person to allow a longer discussion, and you have nothing to add, reply with exactly {SILENT_REPLY}.",
+            "## EXCHANGE WITH ANOTHER BOT\nYou answer a message of {partner}, another bot in this room. You two may go back and forth: yours is message {} of at most {} (round {} of {}) until a person writes again. Answer {partner}'s points directly, check facts with your tools and data where that helps, keep each message focused and don't repeat earlier points. Your reply hands the word back to {partner}, so it may answer; write {mention} when you ask it something. Stop as soon as you agree or neither of you has anything left to add, well before the limit if the topic allows, and also when the person who started the discussion asked for fewer rounds than this: then write the outcome for the room in a few sentences, without addressing {partner}. When {partner}'s message already sums up an outcome, or asks a person to allow a longer discussion, and you have nothing to add, reply with exactly {SILENT_REPLY}.",
             hops.saturating_add(1),
             limit.saturating_add(1),
+            discussion_rounds(hops.saturating_add(1)),
+            discussion_rounds(limit),
         );
         if hops >= limit {
             section.push_str(&format!(
@@ -2636,24 +2639,39 @@ fn offer_reply_files(
 /// `discussion_hops` bot turns.
 fn longer_discussions_section(discussion_hops: u32) -> String {
     format!(
-        "## LONGER DISCUSSIONS\nA discussion between bots here has {} rounds, one message from each bot per round. When people ask you and other bots to work out something that clearly needs more, such as weighing several options against data you have to look up, propose the rounds the whole discussion needs with `{DISCUSSION_PROPOSE_TOOL}` (at most {MAX_LONG_DISCUSSION_ROUNDS}): before you hand the word over, or when the rounds run short. Then say in one or two sentences why, and don't @mention another bot; the discussion waits until a person allows it. Never propose for a quick question.",
+        "## LONGER DISCUSSIONS\nA discussion between bots here has {} rounds, one message from each bot per round. When a person asks you and other bots to discuss something for more rounds than that and you open the discussion, propose exactly the rounds they asked for with `{DISCUSSION_PROPOSE_TOOL}` (at most {MAX_LONG_DISCUSSION_ROUNDS}) in your first message, next to your opening view, so they confirm with one click. When people ask you and other bots to work out something that clearly needs more, such as weighing several options against data you have to look up, propose the rounds the whole discussion needs: before you hand the word over, or when the rounds run short. Then say in one or two sentences why, and don't @mention another bot; the discussion waits until a person allows it. Never propose for a quick question.",
         discussion_rounds(discussion_hops),
     )
 }
 
-/// Offers `discussion_propose`, answered in core, collecting into the host's `proposals`.
-fn offer_discussion_proposals(
+/// What a turn in a discussion learns about ending it.
+fn ending_discussions_section() -> String {
+    format!(
+        "## ENDING A DISCUSSION\nWhen you end the exchange with the other bot, because you agree, neither of you has anything left to add, or it is the last message the discussion allows, call `{DISCUSSION_END_TOOL}` with whether you agreed and the outcome in one sentence, then write the outcome for the room. The room shows it as the discussion's result and the other bot doesn't answer it. Don't call it while you still need the other bot's answer."
+    )
+}
+
+/// Offers `discussion_propose`, and to a turn another bot's message woke (`can_end`)
+/// `discussion_end`, both answered in core, collecting into the host's `reply`.
+fn offer_discussion_tools(
     turn: &mut BotTurn,
-    proposals: &DiscussionProposals,
+    reply: &DiscussionReply,
     discussion_hops: u32,
+    can_end: bool,
 ) {
     turn.system_prompt.push_str("\n\n");
     turn.system_prompt
         .push_str(&longer_discussions_section(discussion_hops));
     turn.tool_specs.push(discussion_propose_spec());
+    if can_end {
+        turn.system_prompt.push_str("\n\n");
+        turn.system_prompt.push_str(&ending_discussions_section());
+        turn.tool_specs.push(discussion_end_spec());
+    }
     turn.bridge = Arc::new(DiscussionBridge::new(
-        proposals.clone(),
+        reply.clone(),
         discussion_hops,
+        can_end,
         turn.bridge.clone(),
     ));
 }
@@ -2957,13 +2975,18 @@ where
     {
         offer_reply_files(&mut turn, files, &turn_bot, label.clone(), on_token.clone());
     }
-    if let Some(proposals) = turn_bot.host_tools.discussion()
+    if let Some(reply) = turn_bot.host_tools.discussion()
         && let Some(requester) = turn_bot
             .requester
             .as_ref()
             .filter(|requester| requester.audience == TurnAudience::Room)
     {
-        offer_discussion_proposals(&mut turn, proposals, requester.discussion_limit);
+        offer_discussion_tools(
+            &mut turn,
+            reply,
+            requester.discussion_limit,
+            requester.discussion_hops.is_some(),
+        );
     }
     if let Some(section) = turn_bot.host_tools.trail().and_then(ToolTrail::section) {
         label.raise(section.seen);
@@ -3599,11 +3622,14 @@ mod tests {
         assert!(early.contains("## EXCHANGE WITH ANOTHER BOT"));
         assert!(early.contains("You answer a message of \"Story\", another bot in this room"));
         assert!(early.contains(&format!(
-            "yours is message 3 of at most {}",
-            MAX_DISCUSSION_HOPS + 1
+            "yours is message 3 of at most {} (round 2 of {})",
+            MAX_DISCUSSION_HOPS + 1,
+            discussion_rounds(MAX_DISCUSSION_HOPS)
         )));
-        assert!(early.contains("To hand the word back, write @Story."));
-        assert!(early.contains("leave the mention out and write the outcome for the room"));
+        assert!(early.contains("Your reply hands the word back to \"Story\""));
+        assert!(early.contains("write @Story when you ask it something"));
+        assert!(!early.contains("leave the mention out"));
+        assert!(early.contains("asked for fewer rounds than this"));
         assert!(early.contains("exactly NO_REPLY"));
         assert!(!early.contains("## OTHER BOTS HERE"));
         assert!(!early.contains("you won't get another"));
@@ -3668,7 +3694,7 @@ mod tests {
             bot_system_prompt(&context)
         };
         let early = with_limit(Some(MAX_DISCUSSION_HOPS));
-        assert!(early.contains("yours is message 10 of at most 24"));
+        assert!(early.contains("yours is message 10 of at most 24 (round 5 of 12)"));
         assert!(!early.contains("the last message the exchange allows"));
         assert!(early.contains("asks a person to allow a longer discussion"));
         assert!(with_limit(Some(granted)).contains("This is the last message the exchange allows"));
@@ -3686,18 +3712,25 @@ mod tests {
         let bot = Arc::new(BotRunContext::general());
         let mut turn = prepare_bot_turn(bot, "", false, host, None).await;
         assert!(!turn.system_prompt.contains("## LONGER DISCUSSIONS"));
-        let proposals = DiscussionProposals::new();
-        offer_discussion_proposals(&mut turn, &proposals, MAX_DISCUSSION_HOPS);
+        let reply = DiscussionReply::new();
+        offer_discussion_tools(&mut turn, &reply, MAX_DISCUSSION_HOPS, false);
         assert!(
             turn.system_prompt
                 .ends_with(&longer_discussions_section(MAX_DISCUSSION_HOPS))
         );
         assert!(turn.system_prompt.contains("has 5 rounds"));
-        assert!(!turn.stable_prompt.contains("## LONGER DISCUSSIONS"));
         assert!(
-            turn.tool_specs
-                .iter()
-                .any(|spec| spec.name == DISCUSSION_PROPOSE_TOOL)
+            turn.system_prompt
+                .contains("propose exactly the rounds they asked for")
+        );
+        assert!(!turn.stable_prompt.contains("## LONGER DISCUSSIONS"));
+        assert!(!turn.system_prompt.contains("## ENDING A DISCUSSION"));
+        let offered =
+            |turn: &BotTurn, name: &str| turn.tool_specs.iter().any(|spec| spec.name == name);
+        assert!(offered(&turn, DISCUSSION_PROPOSE_TOOL));
+        assert!(
+            !offered(&turn, DISCUSSION_END_TOOL),
+            "an opener has nothing to end"
         );
         assert!(turn.bridge.supports_tool(DISCUSSION_PROPOSE_TOOL));
         turn.bridge
@@ -3706,10 +3739,29 @@ mod tests {
                 json!({"rounds": 9, "reason": "Three suppliers to compare"}),
             )
             .await;
-        assert_eq!(
-            proposals.proposal().map(|proposal| proposal.rounds),
-            Some(9)
+        assert_eq!(reply.proposal().map(|proposal| proposal.rounds), Some(9));
+    }
+
+    #[tokio::test]
+    async fn a_turn_in_a_discussion_may_end_it() {
+        let host = Arc::new(RecordingBridge::default());
+        let bot = Arc::new(BotRunContext::general());
+        let mut turn = prepare_bot_turn(bot, "", false, host, None).await;
+        let reply = DiscussionReply::new();
+        offer_discussion_tools(&mut turn, &reply, MAX_DISCUSSION_HOPS, true);
+        assert!(turn.system_prompt.ends_with(&ending_discussions_section()));
+        assert!(
+            turn.tool_specs
+                .iter()
+                .any(|spec| spec.name == DISCUSSION_END_TOOL)
         );
+        turn.bridge
+            .call(
+                DISCUSSION_END_TOOL,
+                json!({"agreed": false, "summary": "Price is settled, the date stays open."}),
+            )
+            .await;
+        assert_eq!(reply.outcome().map(|outcome| outcome.agreed), Some(false));
     }
 
     #[test]

@@ -151,6 +151,19 @@ export interface IInboxMessageBody {
 	discussion?: IInboxDiscussionGrant;
 	/** On a bot's message: a longer discussion it asks a person in the room to allow. */
 	discussion_proposal?: IInboxDiscussionProposal;
+	/** On a bot's message: bot turns that led to it; a person's message has none. */
+	hops?: number;
+	/** On a bot's message in a room: the bot turns its discussion may reach. */
+	discussion_hops?: number;
+	/** On a bot's message: it ended its discussion with another bot. */
+	discussion_outcome?: IInboxDiscussionOutcome;
+}
+
+/** How a discussion between bots ended, in the words of the bot that ended it. */
+export interface IInboxDiscussionOutcome {
+	agreed: boolean;
+	/** One sentence: what they agreed on, or what stays open. */
+	summary: string;
 }
 
 /** Rounds of a discussion between bots, one message from each per round: 1 to 20. */

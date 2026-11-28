@@ -620,9 +620,18 @@ async fn bots_answering_each_other_stop_at_the_hop_cap() {
     assert!(queued.is_empty(), "{queued:?}");
 }
 
-/// Two bots handing each other the word with @mentions after a person's message that allows
-/// `granted` hops; the turns that ran, with their hops.
-async fn discussion_between_two_bots(granted: Option<u32>) -> Vec<(&'static str, i32)> {
+/// A reply that hands the partner the word with an @mention.
+fn naming(partner: &str, _hops: i32) -> serde_json::Value {
+    json!({ "text": format!("@{partner} what do you make of this?") })
+}
+
+/// Two bots answering each other in a room after a person's message that allows `granted` hops,
+/// each reply's body fields from `reply` (the partner's id, the turn's hops); the turns that ran,
+/// with their hops.
+async fn discussion_between_two_bots(
+    granted: Option<u32>,
+    reply: impl Fn(&str, i32) -> serde_json::Value,
+) -> Vec<(&'static str, i32)> {
     let db = database().await;
     insert_bot(&db, "bot_1", "user-a", "SERVER").await;
     insert_bot(&db, "bot_2", "user-b", "SERVER").await;
@@ -674,8 +683,12 @@ async fn discussion_between_two_bots(granted: Option<u32>) -> Vec<(&'static str,
         );
         let partner = if bot == "bot_1" { "bot_2" } else { "bot_1" };
         let reply_id = reply_message_id(bot, &trigger);
-        let text = format!("@{partner} what do you make of this?");
-        let outgoing = validate_send(reply_request(&turn, reply_id.clone(), &text, None)).unwrap();
+        let mut request = reply_request(&turn, reply_id.clone(), "", None);
+        let body = &mut request.envelope.as_mut().unwrap()["body"];
+        for (field, value) in reply(partner, turn.hops).as_object().unwrap() {
+            body[field] = value.clone();
+        }
+        let outgoing = validate_send(request).unwrap();
         let claim = TurnClaim {
             id: turn.id.clone(),
             host_id: "h1".into(),
@@ -704,9 +717,43 @@ fn alternating(last_hops: u32) -> Vec<(&'static str, i32)> {
 #[tokio::test]
 async fn bots_handing_each_other_the_word_in_a_room_get_the_discussion_budget() {
     assert_eq!(
-        discussion_between_two_bots(None).await,
+        discussion_between_two_bots(None, naming).await,
         alternating(MAX_DISCUSSION_HOPS),
         "each bot gets five turns; the last reply hands over to no one"
+    );
+}
+
+#[tokio::test]
+async fn a_reply_without_a_mention_still_hands_the_partner_the_word() {
+    let untagged_after_opening = |partner: &str, hops: i32| {
+        if hops == 0 {
+            naming(partner, hops)
+        } else {
+            json!({ "text": "I see it differently." })
+        }
+    };
+    assert_eq!(
+        discussion_between_two_bots(None, untagged_after_opening).await,
+        alternating(MAX_DISCUSSION_HOPS),
+        "a forgotten @mention no longer ends the discussion after the third turn"
+    );
+}
+
+#[tokio::test]
+async fn a_bot_ending_the_discussion_wakes_no_one() {
+    let ending_at_third_round = |partner: &str, hops: i32| {
+        if hops == 4 {
+            json!({
+                "text": "We agree on supplier B.",
+                "discussion_outcome": { "agreed": true, "summary": "Supplier B, from March." }
+            })
+        } else {
+            naming(partner, hops)
+        }
+    };
+    assert_eq!(
+        discussion_between_two_bots(None, ending_at_third_round).await,
+        alternating(4),
     );
 }
 
@@ -714,16 +761,17 @@ async fn bots_handing_each_other_the_word_in_a_room_get_the_discussion_budget() 
 async fn a_person_allowing_a_longer_discussion_carries_its_budget_through_the_chain() {
     let granted = flow_like_types::bot_turn::discussion_hops(7);
     assert_eq!(
-        discussion_between_two_bots(Some(granted)).await,
+        discussion_between_two_bots(Some(granted), naming).await,
         alternating(granted),
         "seven rounds: fourteen turns"
     );
 }
 
-#[test]
-fn a_proposal_for_a_longer_discussion_rides_on_the_reply() {
-    let turn = reply_turn();
-    let answer = Answer {
+fn answer_with(
+    proposal: Option<flow_like_types::bot_message::DiscussionProposal>,
+    outcome: Option<flow_like_types::bot_message::DiscussionOutcome>,
+) -> Answer {
+    Answer {
         acknowledgement: false,
         text: "This needs more rounds.".into(),
         resumed: false,
@@ -733,17 +781,53 @@ fn a_proposal_for_a_longer_discussion_rides_on_the_reply() {
         note: None,
         tool_calls: Vec::new(),
         files: Vec::new(),
-        discussion_proposal: Some(flow_like_types::bot_message::DiscussionProposal {
+        discussion_proposal: proposal,
+        discussion_outcome: outcome,
+        usage_stats: Vec::new(),
+        taint: Default::default(),
+    }
+}
+
+#[test]
+fn a_proposal_or_an_outcome_rides_on_the_reply() {
+    let turn = reply_turn();
+    let proposing = answer_with(
+        Some(flow_like_types::bot_message::DiscussionProposal {
             rounds: 12,
             reason: "Three markets to compare".into(),
         }),
-        usage_stats: Vec::new(),
-        taint: Default::default(),
-    };
-    let body = answer_request(&turn, &answer).unwrap().envelope.unwrap()["body"].clone();
+        None,
+    );
+    let body = answer_request(&turn, &proposing).unwrap().envelope.unwrap()["body"].clone();
     assert_eq!(
         body["discussion_proposal"],
         json!({ "rounds": 12, "reason": "Three markets to compare" })
+    );
+    assert!(body.get("discussion_outcome").is_none());
+
+    let ending = answer_with(
+        None,
+        Some(flow_like_types::bot_message::DiscussionOutcome {
+            agreed: false,
+            summary: "Price is settled, the date stays open.".into(),
+        }),
+    );
+    let mut granted = turn.clone();
+    granted.discussion_hops = Some(13);
+    let body = answer_request(&granted, &ending).unwrap().envelope.unwrap()["body"].clone();
+    assert_eq!(
+        body["discussion_outcome"],
+        json!({ "agreed": false, "summary": "Price is settled, the date stays open." })
+    );
+    assert_eq!(
+        body["discussion_hops"],
+        json!(13),
+        "the room reads the budget off the reply"
+    );
+    assert!(
+        answer_request(&turn, &ending).unwrap().envelope.unwrap()["body"]
+            .get("discussion_hops")
+            .is_none()
     );
 }
 
@@ -970,6 +1054,7 @@ fn usage_stats_yield_to_reply_files_near_the_body_limit() {
             Some("application/pdf".into()),
         )],
         discussion_proposal: None,
+        discussion_outcome: None,
         usage_stats: Vec::new(),
         taint: Default::default(),
     };
@@ -1007,6 +1092,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         tool_calls: Vec::new(),
         files: Vec::new(),
         discussion_proposal: None,
+        discussion_outcome: None,
         usage_stats: Vec::new(),
         taint: Default::default(),
     };
@@ -1022,6 +1108,7 @@ fn only_a_spoken_answer_posts_a_reply() {
         tool_calls: Vec::new(),
         files: Vec::new(),
         discussion_proposal: None,
+        discussion_outcome: None,
         usage_stats: Vec::new(),
         taint: Default::default(),
     };

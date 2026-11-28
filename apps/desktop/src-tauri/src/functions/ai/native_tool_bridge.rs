@@ -70,7 +70,7 @@ pub struct NativeRunOptions {
     /// Collects the files the bot attaches to its reply; set by hosts that store the reply.
     pub reply_files: Option<flow_like::flow::copilot::ReplyFiles>,
     /// The longer discussion a room turn proposes, for the host that posts it on the reply.
-    pub discussion: Option<flow_like::flow::copilot::bot_discussion::DiscussionProposals>,
+    pub discussion: Option<flow_like::flow::copilot::bot_discussion::DiscussionReply>,
     /// Shared or unreadable interactive conversation metadata forbids legacy memory writes.
     pub legacy_memory_read_only: bool,
     /// An interactive inbox run's explicit owner-memory permission. Missing metadata denies

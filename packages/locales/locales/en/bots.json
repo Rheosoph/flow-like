@@ -2811,6 +2811,19 @@
 		"grantText": "@{{bot}} go ahead: up to {{rounds}} rounds.",
 		"limit": "Turns of bots you don't own count toward your 20 a day with each.",
 		"payer": "Each bot's owner pays for their own bot.",
+		"thread": {
+			"agreed": "Agreed after {{round}} of {{rounds}} rounds",
+			"between": "Discussion between {{first}} and {{second}}",
+			"disagreed": "No agreement after {{round}} of {{rounds}} rounds",
+			"goOn": "Mention a bot to let them go on.",
+			"label": "Discussion",
+			"pair": "{{first}} and {{second}}",
+			"replying": "{{name}} is replying",
+			"round": "Round {{round}} of {{rounds}}",
+			"roundsUsed": "All {{rounds}} rounds used",
+			"turn": "{{name}}'s turn",
+			"upTo": "up to {{rounds}} rounds"
+		},
 		"title": "Up to {{rounds}} rounds, {{messages}} messages",
 		"waiting": "The bots wait until someone allows it."
 	},

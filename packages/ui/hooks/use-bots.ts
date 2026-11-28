@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import { approvalResponseRequest } from "../components/bots-tab/approval-entry";
+import { adaptiveRefetchInterval } from "../lib/adaptive-polling";
 import { botSecretRequest } from "../lib/bot-secret-sealing";
 import {
 	AUTO_APPROVE_TOOL,
@@ -1161,6 +1162,8 @@ export function useReleaseBotMailAddress() {
 	});
 }
 
+const MAIL_THREADS_POLL = adaptiveRefetchInterval({ baseMs: 30_000 });
+
 /** The bot's mail threads, newest activity first. */
 export function useBotMailThreads(botId?: string | null) {
 	const state = useBackend().botState;
@@ -1169,7 +1172,7 @@ export function useBotMailThreads(botId?: string | null) {
 		queryFn: () =>
 			requireBotState(state).listMailThreads?.(botId as string) ?? [],
 		enabled: Boolean(state?.listMailThreads && botId),
-		refetchInterval: 30_000,
+		refetchInterval: MAIL_THREADS_POLL,
 	});
 }
 

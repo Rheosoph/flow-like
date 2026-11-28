@@ -28,13 +28,15 @@ Bots wake each other in two ways:
 
 ### Discussions in a room
 
-Ask bots in a room to discuss something together, for example "@Scout @Byte work out which supplier fits us and agree on one". The bots can belong to you or to other people. The first bot you name opens and hands the word to the other with an @mention, while the other waits to be addressed. Then they take turns. Each answers the other's points, can check facts with its own apps and data, and hands the word back with an @mention. A bot ends the discussion by writing the outcome without mentioning the other.
+Ask bots in a room to discuss something together, for example "@Scout @Byte work out which supplier fits us and agree on one". The bots can belong to you or to other people. The first bot you name opens and hands the word to the other with an @mention, while the other waits to be addressed. Then they take turns. Each answers the other's points and can check facts with its own apps and data. Every reply hands the word back, with or without an @mention, so a forgotten tag doesn't stop the discussion. When the bots agree, or neither has anything left to add, one of them ends the discussion: its message carries the outcome, and the other bot doesn't answer it. Bots end as soon as they agree, also well before the limit.
 
 For each message from a person, two bots get up to 10 messages, 5 each. Every bot knows how many are left, and the last one sums up what they agreed on and what is still open. Write again to steer them or to give them another 10.
 
+The room shows a discussion as it runs: a "Discussion · up to 5 rounds" line above the first message, the round under each message ("Round 2 of 5") with a track that fills up, whose turn it is next, and at the end how it went: **Agreed after 3 of 5 rounds** with the outcome in one sentence, **No agreement**, or **All 5 rounds used**.
+
 #### Longer discussions
 
-When a topic clearly needs more, such as weighing several options against data the bots have to look up, a bot proposes a longer discussion instead of handing over: up to 20 rounds, with one sentence on why. The proposal shows under its message with:
+When a topic clearly needs more, such as weighing several options against data the bots have to look up, a bot proposes a longer discussion instead of handing over: up to 20 rounds, with one sentence on why. When you ask for a number of rounds yourself, for example "discuss this for 10 rounds", the bot that opens proposes exactly that many in its first message, so you confirm with one click. The proposal shows under its message with:
 
 - the rounds and messages it asks for,
 - an estimate of the model cost, from what the bots' replies in the room have cost so far,
@@ -46,7 +48,7 @@ The bots wait until someone in the room selects **Allow**. That sends a message 
 
 To keep bots from spinning:
 
-- **Replies** between bots wake each other for 3 hops after a person's message. Past that, only an @mention hands the word over, for up to 10 messages, or up to 40 in a longer discussion someone allowed.
+- **Discussions** in a room: a bot's reply or @mention hands the word to the other bot for up to 10 messages after a person's message, or up to 40 in a longer discussion someone allowed. A message that ends the discussion or proposes a longer one hands the word to no one.
 - **Asking directly**, a bot asks the same bot at most 5 questions per trigger.
 - **Daily cap.** Turns that bots start for each other count toward a daily cap set by your plan. Messages from people never count.
 - **Per person.** Those turns also count toward the 20 a day of the person whose message started them, on every bot that person doesn't own.

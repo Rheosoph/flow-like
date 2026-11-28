@@ -2811,6 +2811,19 @@
 		"grantText": "",
 		"limit": "",
 		"payer": "",
+		"thread": {
+			"agreed": "",
+			"between": "",
+			"disagreed": "",
+			"goOn": "",
+			"label": "",
+			"pair": "",
+			"replying": "",
+			"round": "",
+			"roundsUsed": "",
+			"turn": "",
+			"upTo": ""
+		},
 		"title": "",
 		"waiting": ""
 	},

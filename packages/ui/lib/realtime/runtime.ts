@@ -81,6 +81,8 @@ interface Scope {
 	providerStatus?: RealtimeProviderStatus;
 	wakeTimer?: ReturnType<typeof setTimeout>;
 	wakePending?: boolean;
+	/** Safety replays over a live provider in a row that brought nothing new. */
+	quietReplays: number;
 }
 
 interface Authorization {
@@ -109,6 +111,8 @@ export interface RealtimeRuntimeOptions {
 	sweepMs?: number;
 	authorizationTimeoutMs?: number;
 	providerRecoveryMs?: number;
+	/** Longest gap between safety replays over a live provider while they keep coming back empty. */
+	providerRecoveryMaxMs?: number;
 	providerRunRecoveryMs?: number;
 }
 
@@ -414,6 +418,7 @@ export class RealtimeRuntime {
 			sweepMs: 15_000,
 			authorizationTimeoutMs: 5_000,
 			providerRecoveryMs: 30_000,
+			providerRecoveryMaxMs: 300_000,
 			providerRunRecoveryMs: 5_000,
 			...options,
 		};
@@ -435,6 +440,7 @@ export class RealtimeRuntime {
 					rotation: 0,
 					blockedFailures: 0,
 					unavailable: new Map(),
+					quietReplays: 0,
 				};
 				this.scopes.set(key, scope);
 			}
@@ -707,6 +713,7 @@ export class RealtimeRuntime {
 
 	private restart(scope: Scope): void {
 		scope.epoch++;
+		scope.quietReplays = 0;
 		scope.controller?.abort();
 		scope.controller = undefined;
 		clearTimeout(scope.timer);
@@ -770,6 +777,20 @@ export class RealtimeRuntime {
 		return online;
 	}
 
+	/** Until a hidden account pauses; the replay that pauses it must not back off past that. */
+	private hiddenGraceLeft(scope: Scope): number | undefined {
+		if (scope.hiddenSince === undefined) return undefined;
+		const online = [...scope.ports].filter((port) => port.activity.online);
+		if (
+			online.some((port) => port.runs.size > 0 || port.backgroundNotifications)
+		)
+			return undefined;
+		return Math.max(
+			0,
+			scope.hiddenSince + this.options.hiddenGraceMs - Date.now(),
+		);
+	}
+
 	/** Every active account negotiates a grant; an HTTP grant still says how long a poll may wait. */
 	private syncProvider(scope: Scope): void {
 		const active = scope.blocked
@@ -791,6 +812,7 @@ export class RealtimeRuntime {
 			},
 			wakeup: () => {
 				if (scope.wakeTimer || !scope.ports.size || scope.blocked) return;
+				scope.quietReplays = 0;
 				scope.wakeTimer = setTimeout(() => {
 					scope.wakeTimer = undefined;
 					if (scope.controller) scope.wakePending = true;
@@ -983,8 +1005,9 @@ export class RealtimeRuntime {
 
 	/**
 	 * Live providers wake replay; their dropped wakeups are covered by a chase poll while a run
-	 * streams. Without one, the API's poll wait decides between long polls and an interval. A
-	 * long poll that comes back early without changes was not held, so it paces like an interval.
+	 * streams, and otherwise by a safety replay that backs off while it keeps coming back empty.
+	 * Without one, the API's poll wait decides between long polls and an interval. A long poll
+	 * that comes back early without changes was not held, so it paces like an interval.
 	 */
 	private nextDelay(
 		scope: Scope,
@@ -1007,12 +1030,25 @@ export class RealtimeRuntime {
 				response.runs.some(
 					(run) => run.events.length && !isTerminalRunStatus(run.status),
 				)
-			)
+			) {
+				scope.quietReplays = 0;
 				return CHASE_MS;
-			return runs
-				? this.options.providerRunRecoveryMs
-				: this.options.providerRecoveryMs;
+			}
+			if (runs) {
+				scope.quietReplays = 0;
+				return this.options.providerRunRecoveryMs;
+			}
+			scope.quietReplays = hasPollChanges(response)
+				? 0
+				: scope.quietReplays + 1;
+			return Math.min(
+				this.options.providerRecoveryMaxMs,
+				this.options.providerRecoveryMs *
+					2 ** Math.max(0, scope.quietReplays - 1),
+				this.hiddenGraceLeft(scope) ?? Number.POSITIVE_INFINITY,
+			);
 		}
+		scope.quietReplays = 0;
 		const held = elapsedMs >= Math.min(request.timeout_ms / 2, HELD_MS);
 		if (request.timeout_ms > 0 && (held || hasPollChanges(response))) return 50;
 		return jitter(runs ? RUN_INTERVAL_MS : IDLE_INTERVAL_MS);

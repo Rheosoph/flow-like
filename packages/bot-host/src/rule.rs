@@ -219,13 +219,27 @@ fn discussion_budget(message: &Message, bot_sender: bool) -> Option<u32> {
 /// Whether `message` still wakes `bot_id` after the bot turns behind it: a bot's room message
 /// that hands it the word ([`hands_over`]) gets its discussion's budget, anything else the hop
 /// limit ([`hop_limit`]).
-fn within_hops(kind: ConversationKind, bot_id: &str, message: &Message, bot_sender: bool) -> bool {
+fn within_hops(
+    kind: ConversationKind,
+    bot_id: &str,
+    message: &Message,
+    messages: &[Message],
+    bot_sender: bool,
+) -> bool {
     let handed_over = bot_sender
-        && message
-            .body
-            .as_ref()
-            .is_some_and(|body| hands_over(kind, body, bot_id));
+        && message.body.as_ref().is_some_and(|body| {
+            hands_over(kind, body, bot_id, replies_to(message, bot_id, messages))
+        });
     hops_of(message, bot_sender) <= hop_limit(handed_over, discussion_budget(message, bot_sender))
+}
+
+/// Whether `message` replies to a message `bot_id` sent.
+fn replies_to(message: &Message, bot_id: &str, messages: &[Message]) -> bool {
+    message.reply_to().is_some_and(|target| {
+        messages.iter().any(|candidate| {
+            candidate.entry.message_id == target && candidate.entry.sender_id == bot_id
+        })
+    })
 }
 
 fn is_host_reply(message_id: &str) -> bool {
@@ -275,11 +289,7 @@ fn addressed(
         return body.mentions.is_empty() || body.mentions.iter().any(|mention| mention == bot_id);
     }
     body.mentions.iter().any(|mention| mention == bot_id)
-        || body.reply_to.as_deref().is_some_and(|target| {
-            messages.iter().any(|candidate| {
-                candidate.entry.message_id == target && candidate.entry.sender_id == bot_id
-            })
-        })
+        || (!body.rests_discussion() && replies_to(message, bot_id, messages))
 }
 
 /// The newest message of someone else that `bot_id` has yet to answer, from `entries` (newest
@@ -382,7 +392,7 @@ pub fn waiting_held(
                 && message.body.is_some()
                 && message.entry.created_at >= not_before
                 && !hold.is_some_and(|hold| hold.keeps(message))
-                && within_hops(kind, bot_id, message, bot_sender)
+                && within_hops(kind, bot_id, message, &messages, bot_sender)
                 && (addressed(kind, bot_id, message, &messages)
                     || reads_along(
                         kind,
@@ -454,6 +464,7 @@ pub fn waiting_participant(
                 kind,
                 bot_id,
                 message,
+                &messages,
                 participant_id != flow_like_local_bots::LOCAL_OWNER_ID,
             )
     })?;

@@ -21,7 +21,7 @@ pub mod env;
 pub mod hub;
 pub mod runner;
 
-use crate::enrollment::DeviceSession;
+use crate::{enrollment::DeviceSession, wake::WakeSubscription};
 use env::Machines;
 use flow_like::{
     state::{FlowLikeConfig, FlowLikeState},
@@ -93,8 +93,18 @@ pub async fn run(
     device: Arc<DeviceSession>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
+    run_woken(state_dir, device, None, cancel).await
+}
+
+/// `run`, polling rarely while `wake` is live and polling at once on each wakeup.
+pub async fn run_woken(
+    state_dir: std::path::PathBuf,
+    device: Arc<DeviceSession>,
+    wake: Option<WakeSubscription>,
+    cancel: CancellationToken,
+) -> anyhow::Result<()> {
     let coordinator = container::Coordinator::new(state_dir.clone(), device, cancel.clone());
-    let result = run_with_api(state_dir, coordinator.native_api(), cancel).await;
+    let result = run_with_api_woken(state_dir, coordinator.native_api(), wake, cancel).await;
     coordinator.shutdown().await;
     result
 }
@@ -105,10 +115,19 @@ pub async fn run_with_api(
     api: Arc<dyn DeviceApi>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
+    run_with_api_woken(state_dir, api, None, cancel).await
+}
+
+pub async fn run_with_api_woken(
+    state_dir: std::path::PathBuf,
+    api: Arc<dyn DeviceApi>,
+    wake: Option<WakeSubscription>,
+    cancel: CancellationToken,
+) -> anyhow::Result<()> {
     let host_id = host_id(api.device_id());
     let base_url = api.base_url().to_owned();
     flow_like_model_provider::embedding::proxy_config::set_api_base_url(&base_url);
-    let hub = Arc::new(DeviceTurnHub::new(api, host_id.clone()));
+    let hub = Arc::new(DeviceTurnHub::woken(api, host_id.clone(), wake.clone()));
     let state = Arc::new(FlowLikeState::new(
         FlowLikeConfig::new(),
         HTTPClient::new_without_refetch(),
@@ -137,8 +156,18 @@ pub async fn run_with_api(
             None
         }
     };
+    let doorbell = async {
+        let Some(mut wake) = wake else {
+            return std::future::pending().await;
+        };
+        loop {
+            wake.changed().await;
+            host.poke();
+        }
+    };
     tokio::select! {
         () = host.clone().run() => {}
+        () = doorbell => {}
         () = cancel.cancelled() => {}
     }
     host.withdraw().await;

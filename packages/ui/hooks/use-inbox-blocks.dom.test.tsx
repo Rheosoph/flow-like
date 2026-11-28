@@ -16,7 +16,7 @@ vi.mock("../state/backend-state", () => ({
 }));
 vi.mock("./use-inbox", () => ({
 	inboxKeys: { all: ["inbox"] },
-	INBOX_POLL_MS: { conversations: 15_000 },
+	INBOX_LIST_POLL: 15_000,
 }));
 
 import {

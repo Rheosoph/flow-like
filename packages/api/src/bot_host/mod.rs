@@ -67,7 +67,7 @@ pub(crate) use ledger::{chain_of, enqueue_in};
 pub use worker::{WorkerConfig, spawn_worker};
 
 use crate::{
-    entity::bot_turn,
+    entity::{bot, bot_turn},
     error::ApiError,
     routes::{
         chat::hosted_worker,
@@ -78,10 +78,10 @@ use crate::{
 use chrono::Duration;
 use flow_like_types::{
     bot::BotLocation,
-    bot_turn::{STORED_QUEUED, STORED_SERVER, TurnHostKind, turn_id},
+    bot_turn::{STORED_DEVICE, STORED_QUEUED, STORED_SERVER, TurnHostKind, turn_id},
     tokio::sync::Notify,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 
 static KICK: Notify = Notify::const_new();
 
@@ -104,28 +104,82 @@ pub(crate) async fn dispatch(state: &AppState, recipients: &[BotRecipient]) {
         .filter(|recipient| recipient.location == BotLocation::Server)
         .map(|recipient| turn_id(&recipient.bot_id, &recipient.trigger_message_id))
         .collect();
-    dispatch_turns(state, ids).await;
+    let devices = recipients
+        .iter()
+        .filter(|recipient| recipient.location == BotLocation::Device)
+        .filter_map(|recipient| recipient.device_id.clone());
+    futures::join!(ring_devices(state, devices), dispatch_turns(state, ids));
 }
 
-/// [`dispatch`] for turns named by id; turns that aren't queued server turns are left alone.
+/// [`dispatch`] for turns named by id: queued server turns start, the devices of queued device
+/// turns are rung; anything else is left alone.
 pub(crate) async fn dispatch_turns(state: &AppState, ids: Vec<String>) {
     if ids.is_empty() {
         return;
     }
     kick();
-    if !hosted_worker::enabled() {
+    let kinds: Vec<&str> = [
+        hosted_worker::enabled().then_some(STORED_SERVER),
+        state.channels.pushes().then_some(STORED_DEVICE),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if kinds.is_empty() {
         return;
     }
     let queued = bot_turn::Entity::find()
         .filter(bot_turn::Column::Id.is_in(ids))
-        .filter(bot_turn::Column::HostKind.eq(STORED_SERVER))
+        .filter(bot_turn::Column::HostKind.is_in(kinds))
         .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
         .all(&state.db)
         .await;
-    match queued {
-        Ok(turns) => enqueue_hosted(state, turns.iter().map(|turn| turn.id.as_str())).await,
-        Err(error) => tracing::warn!(%error, "Bot turns not dispatched"),
+    let turns = match queued {
+        Ok(turns) => turns,
+        Err(error) => {
+            tracing::warn!(%error, "Bot turns not dispatched");
+            return;
+        }
+    };
+    let (server, device): (Vec<_>, Vec<_>) = turns
+        .into_iter()
+        .partition(|turn| turn.host_kind == STORED_SERVER);
+    futures::join!(
+        enqueue_hosted(state, server.iter().map(|turn| turn.id.as_str())),
+        ring_bot_devices(state, device.into_iter().map(|turn| turn.bot_id).collect()),
+    );
+}
+
+/// Rings the doorbell of the devices hosting `bot_ids`. Best effort, like every wakeup.
+async fn ring_bot_devices(state: &AppState, bot_ids: Vec<String>) {
+    if bot_ids.is_empty() {
+        return;
     }
+    let devices = bot::Entity::find()
+        .select_only()
+        .column(bot::Column::DeviceId)
+        .filter(bot::Column::Id.is_in(bot_ids))
+        .into_tuple::<Option<String>>()
+        .all(&state.db)
+        .await;
+    match devices {
+        Ok(devices) => ring_devices(state, devices.into_iter().flatten()).await,
+        Err(error) => tracing::warn!(%error, "Devices of queued bot turns were not woken"),
+    }
+}
+
+/// Each device once: its own authenticated poll fetches what is waiting.
+async fn ring_devices(state: &AppState, devices: impl Iterator<Item = String>) {
+    if !state.channels.pushes() {
+        return;
+    }
+    let devices: std::collections::BTreeSet<String> = devices.collect();
+    futures::future::join_all(
+        devices
+            .iter()
+            .map(|device| state.channels.publish_device_wakeup(device)),
+    )
+    .await;
 }
 
 async fn enqueue_hosted<'a>(state: &AppState, ids: impl Iterator<Item = &'a str>) {

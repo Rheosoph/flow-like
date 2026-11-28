@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import { personUnreadTotal } from "../components/bots-tab/crew-model";
+import { adaptiveRefetchInterval, backedOffMs } from "../lib/adaptive-polling";
 import { isMissingResourceError } from "../lib/api-error";
 import {
 	attachmentParts,
@@ -66,6 +67,11 @@ export const INBOX_POLL_MS = {
 	openConversation: 4_000,
 	openConversationSafety: 30_000,
 } as const;
+
+/** Inbox lists also refresh on the realtime notification replay, so their poll backs off. */
+export const INBOX_LIST_POLL = adaptiveRefetchInterval({
+	baseMs: INBOX_POLL_MS.conversations,
+});
 
 /** Matches inbox queries other than the entries of conversations the realtime feed keeps current. */
 export function unwatchedInboxPredicate(
@@ -195,8 +201,7 @@ export function useConversations(
 		queryKey: inboxKeys.conversations(as),
 		queryFn: () => requireInboxState(state).listConversations(as),
 		enabled: Boolean(state),
-		refetchInterval:
-			options.poll === false ? false : INBOX_POLL_MS.conversations,
+		refetchInterval: options.poll === false ? false : INBOX_LIST_POLL,
 		refetchIntervalInBackground: false,
 	});
 }
@@ -309,6 +314,7 @@ export function useInboxEntries(
 			queryClient.getQueryData<EntryPages>(key)?.pages[0]?.tail;
 		const fetching = () =>
 			queryClient.isFetching({ queryKey: key, exact: true }) > 0;
+		let quietPolls = 0;
 		const poll = async () => {
 			const after = tail();
 			const page = await state.listEntries(conversationId, {
@@ -318,10 +324,11 @@ export function useInboxEntries(
 			});
 			if (cancelled || fetching() || tail() !== after) return;
 			if (await addTailPage(queryClient, key, page)) {
+				quietPolls = 0;
 				void queryClient.invalidateQueries({
 					queryKey: inboxKeys.conversations(as),
 				});
-			}
+			} else quietPolls++;
 		};
 		const tick = async () => {
 			if (polling || fetching() || document.visibilityState !== "visible")
@@ -338,7 +345,8 @@ export function useInboxEntries(
 		let lastPoll = Date.now();
 		const due = () =>
 			hasConversationFeed()
-				? Date.now() - lastPoll >= INBOX_POLL_MS.openConversationSafety
+				? Date.now() - lastPoll >=
+					backedOffMs(INBOX_POLL_MS.openConversationSafety, quietPolls)
 				: true;
 		const timer = window.setInterval(() => {
 			if (!due()) return;
@@ -351,6 +359,7 @@ export function useInboxEntries(
 				if (cancelled) return;
 				const newest = entries.at(-1)?.cursor;
 				if (!newest) return;
+				quietPolls = 0;
 				let fresh = false;
 				queryClient.setQueryData<EntryPages>(key, (pages) => {
 					const merged = mergeNewestEntries(pages, entries);
@@ -539,7 +548,7 @@ export function useInvitations() {
 		queryKey: inboxKeys.invitations(),
 		queryFn: () => requireInboxState(state).listInvitations(),
 		enabled: Boolean(state),
-		refetchInterval: INBOX_POLL_MS.conversations,
+		refetchInterval: INBOX_LIST_POLL,
 		refetchIntervalInBackground: false,
 	});
 }

@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBackend } from "../state/backend-state";
 import type { IInboxState } from "../state/backend-state/inbox-state";
-import { INBOX_POLL_MS, inboxKeys } from "./use-inbox";
+import { INBOX_LIST_POLL, inboxKeys } from "./use-inbox";
 
 export const inboxBlockKeys = {
 	all: [...inboxKeys.all, "blocks"] as const,
@@ -20,7 +20,7 @@ export function useInboxBlocks(enabled = true) {
 		queryKey: inboxBlockKeys.all,
 		queryFn: () => requireInboxState(state).listBlocks(),
 		enabled: enabled && Boolean(state?.listBlocks),
-		refetchInterval: INBOX_POLL_MS.conversations,
+		refetchInterval: INBOX_LIST_POLL,
 		refetchIntervalInBackground: false,
 	});
 }

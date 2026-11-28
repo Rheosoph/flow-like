@@ -3,6 +3,11 @@
 import { useBackend, useBackendReady } from "@flow-like/flow-like-ui";
 import { IncomingCallProvider } from "@flow-like/flow-like-ui/components/incoming-call-provider";
 import { unwatchedInboxPredicate } from "@flow-like/flow-like-ui/hooks/use-inbox";
+import { resetAdaptivePolling } from "@flow-like/flow-like-ui/lib/adaptive-polling";
+import {
+	clearRealtimeStatus,
+	recordRealtimeUpdate,
+} from "@flow-like/flow-like-ui/lib/realtime/realtime-status";
 import { deliverRealtimeReply } from "@flow-like/flow-like-ui/lib/realtime/reply-streams";
 import type { RealtimeConversationSubscription } from "@flow-like/flow-like-ui/lib/realtime/types";
 import { useQueryClient } from "@tanstack/react-query";
@@ -15,7 +20,10 @@ import {
 	onWatchedConversationsChange,
 } from "../lib/desktop-conversation-feed";
 import { localRegistries } from "../lib/local-bots/registry";
-import { watchNativeRealtime } from "../lib/native-realtime";
+import {
+	type NativeRealtimeMessage,
+	watchNativeRealtime,
+} from "../lib/native-realtime";
 import { TauriBackend } from "./tauri-provider";
 
 const NOTIFICATION_QUERIES = new Set([
@@ -26,6 +34,18 @@ const NOTIFICATION_QUERIES = new Set([
 ]);
 
 const WATCH_DEBOUNCE_MS = 100;
+
+/** The app's account connection, in the terms the shared status store and adaptive polling read. */
+function recordNativeRealtimeState(
+	message: Extract<NativeRealtimeMessage, { type: "state" }>,
+): void {
+	const state = message.state === "signed_out" ? "closed" : message.state;
+	recordRealtimeUpdate("native", { type: "state", state });
+	recordRealtimeUpdate("native", {
+		type: "provider",
+		status: { live: state === "connected" && message.live === true },
+	});
+}
 
 interface AccountConversations {
 	readonly subscriptions: RealtimeConversationSubscription[];
@@ -131,7 +151,10 @@ export function NativeRealtimeBridge() {
 						);
 						return;
 					}
-					if (message.type !== "update") return;
+					if (message.type === "state") {
+						recordNativeRealtimeState(message);
+						return;
+					}
 					for (const item of message.response.conversations ?? [])
 						desktopConversationFeed.deliver(
 							localId(item.conversation_id),
@@ -141,6 +164,7 @@ export function NativeRealtimeBridge() {
 					const update = message.response.notifications;
 					if (!update || update.revision === revision) return;
 					pokeBotHost();
+					resetAdaptivePolling();
 					return queryClient
 						.invalidateQueries(
 							{
@@ -184,6 +208,7 @@ export function NativeRealtimeBridge() {
 			clearTimeout(timer);
 			stopListening();
 			stopWatching?.();
+			clearRealtimeStatus();
 		};
 	}, [
 		ready,

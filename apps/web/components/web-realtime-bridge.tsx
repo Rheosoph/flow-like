@@ -2,6 +2,7 @@
 
 import { IncomingCallProvider } from "@flow-like/flow-like-ui/components/incoming-call-provider";
 import { unwatchedInboxPredicate } from "@flow-like/flow-like-ui/hooks/use-inbox";
+import { resetAdaptivePolling } from "@flow-like/flow-like-ui/lib/adaptive-polling";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { registerConversationFeed } from "@flow-like/flow-like-ui/lib/realtime/conversation-feed";
 import { ConversationFeedHub } from "@flow-like/flow-like-ui/lib/realtime/conversation-feed-hub";
@@ -136,6 +137,7 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 				for (const item of update.snapshot.conversations ?? [])
 					feedHub.deliver(item.conversation_id, item.entries, { as: item.as });
 				if (!update.snapshot.notifications) return;
+				resetAdaptivePolling();
 				await Promise.all([
 					...[
 						backend.userState.getNotifications,

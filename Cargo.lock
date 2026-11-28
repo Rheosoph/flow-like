@@ -12860,6 +12860,7 @@ dependencies = [
  "flow-like-bot-tools-host",
  "flow-like-bots",
  "flow-like-catalog",
+ "flow-like-channels",
  "flow-like-device-crypto",
  "flow-like-device-protocol",
  "flow-like-local-bots",

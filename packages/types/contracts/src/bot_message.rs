@@ -98,6 +98,9 @@ pub struct MessageBody {
     /// On a bot's message: a longer discussion it asks a person in the room to allow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discussion_proposal: Option<DiscussionProposal>,
+    /// On a bot's message: it ends its discussion with this outcome, and hands the word to no one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_outcome: Option<DiscussionOutcome>,
     /// On a bot's message in a room: the bot turns its discussion may reach, carried forward by
     /// hosts that keep no turn rows ([`crate::bot_turn::hop_limit`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -134,6 +137,17 @@ impl DiscussionGrant {
 pub struct DiscussionProposal {
     pub rounds: u32,
     pub reason: String,
+}
+
+/// A discussion outcome's summary has at most this many characters.
+pub const MAX_DISCUSSION_SUMMARY_CHARS: usize = 280;
+
+/// How a bot ended a discussion: whether the bots agreed, and in one sentence on what, or what
+/// stays open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiscussionOutcome {
+    pub agreed: bool,
+    pub summary: String,
 }
 
 /// Names the interactive chat run that answers a message.
@@ -1015,7 +1029,21 @@ impl MessageBody {
             note.check()
                 .map_err(|error| BodyError(format!("body.note: {error}")))?;
         }
+        if let Some(outcome) = &self.discussion_outcome
+            && outcome.summary.chars().count() > MAX_DISCUSSION_SUMMARY_CHARS
+        {
+            return refuse(format!(
+                "body.discussion_outcome.summary has {} characters; at most {MAX_DISCUSSION_SUMMARY_CHARS}",
+                outcome.summary.chars().count()
+            ));
+        }
         Ok(())
+    }
+
+    /// A bot's message that pauses its discussion for a person's answer or ends it: the bot it
+    /// replies to doesn't get the word back.
+    pub fn rests_discussion(&self) -> bool {
+        self.discussion_proposal.is_some() || self.discussion_outcome.is_some()
     }
 
     fn check_mentions(&self) -> Result<(), BodyError> {
