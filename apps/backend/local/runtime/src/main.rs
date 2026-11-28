@@ -8,8 +8,8 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use dotenv::dotenv;
-use flow_like_api::execution::{QueueConfig, QueueWorker, QueuedJob};
 use flow_like_catalog::initialize as initialize_catalog;
+use flow_like_execution_queue::{QueueConfig, QueueWorker, QueuedJob};
 use flow_like_executor::{
     execute, executor_router, ExecutionRequest, ExecutorConfig, ExecutorState,
 };

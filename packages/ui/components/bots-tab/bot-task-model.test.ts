@@ -3,6 +3,7 @@ import type { IBotTask } from "../../state/backend-state/bot-state";
 import {
 	describeSchedule,
 	emptyTaskDraft,
+	scheduledTasks,
 	taskRequest,
 	taskState,
 } from "./bot-task-model";
@@ -99,5 +100,88 @@ describe("task display", () => {
 				}),
 			),
 		).toBe("paused");
+	});
+});
+
+describe("place tasks", () => {
+	const place = (patch: Partial<NonNullable<IBotTask["place"]>> = {}) =>
+		task({
+			kind: "place",
+			title: "Groceries",
+			place: {
+				latitude: 52.5,
+				longitude: 13.4,
+				radius_m: 150,
+				on: "enter",
+				label: "Home",
+				repeat: false,
+				...patch,
+			},
+		});
+
+	test("reads like the trigger, with its repeat and end", () => {
+		expect(describeSchedule(place(), "en")).toBe(
+			"When you arrive at Home · once",
+		);
+		expect(
+			describeSchedule(place({ on: "exit", label: "Office", repeat: true })),
+		).toBe("When you leave Office · every time");
+		expect(describeSchedule(place({ on: "both", label: "Gym" }))).toBe(
+			"When you arrive at or leave Gym · once",
+		);
+		const until = "2026-11-20T18:00:00Z";
+		const text = describeSchedule(place({ until }), "en");
+		expect(text).toContain("until ");
+		expect(text).toContain("2026");
+	});
+
+	test("watching, done, expired and paused", () => {
+		const now = Date.parse("2026-11-19T12:00:00Z");
+		expect(taskState(place(), now)).toBe("active");
+		expect(
+			taskState(
+				{ ...place(), enabled: false, last_run_at: "2026-11-19T10:00:00Z" },
+				now,
+			),
+		).toBe("done");
+		expect(
+			taskState(
+				{ ...place({ repeat: true }), last_run_at: "2026-11-19T10:00:00Z" },
+				now,
+			),
+		).toBe("active");
+		expect(taskState(place({ until: "2026-11-19T11:00:00Z" }), now)).toBe(
+			"expired",
+		);
+		expect(taskState(place({ until: "2026-11-19T13:00:00Z" }), now)).toBe(
+			"active",
+		);
+		expect(taskState({ ...place(), enabled: false }, now)).toBe("paused");
+		expect(
+			taskState(
+				{
+					...place({ repeat: true }),
+					enabled: false,
+					last_run_at: "2026-11-19T10:00:00Z",
+				},
+				now,
+			),
+		).toBe("paused");
+	});
+});
+
+describe("scheduledTasks", () => {
+	test("leaves the bot's calendar events to the Calendar tab", () => {
+		const tasks = [
+			task({ id: "once" }),
+			task({ id: "cron", kind: "cron" }),
+			task({ id: "place", kind: "place" }),
+			task({ id: "event", kind: "event" }),
+		];
+		expect(scheduledTasks(tasks).map((item) => item.id)).toEqual([
+			"once",
+			"cron",
+			"place",
+		]);
 	});
 });

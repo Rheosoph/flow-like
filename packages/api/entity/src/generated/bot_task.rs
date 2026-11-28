@@ -4,7 +4,7 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[sea_orm::model]
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(schema_name = "public", table_name = "BotTask")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
@@ -48,6 +48,22 @@ pub struct Model {
     pub request_conversation_id: Option<String>,
     #[sea_orm(column_name = "requestMessageId", column_type = "Text", nullable)]
     pub request_message_id: Option<String>,
+    #[sea_orm(column_name = "placeLatitude", nullable)]
+    pub place_latitude: Option<f64>,
+    #[sea_orm(column_name = "placeLongitude", nullable)]
+    pub place_longitude: Option<f64>,
+    #[sea_orm(column_name = "placeRadiusM", nullable)]
+    pub place_radius_m: Option<f64>,
+    #[sea_orm(column_name = "placeOn", column_type = "Text", nullable)]
+    pub place_on: Option<String>,
+    #[sea_orm(column_name = "placeLabel", column_type = "Text", nullable)]
+    pub place_label: Option<String>,
+    #[sea_orm(column_name = "placeRepeat", nullable, default_value = false)]
+    pub place_repeat: Option<bool>,
+    #[sea_orm(column_name = "placeUntil", nullable)]
+    pub place_until: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub event: Option<Json>,
     #[sea_orm(
         belongs_to,
         from = "bot_id",

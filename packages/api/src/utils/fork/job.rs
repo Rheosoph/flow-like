@@ -152,6 +152,10 @@ pub struct ForkJobSpec {
     pub public_fork_source_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_event_token_encrypted: Option<String>,
+    /// Upload only: every id of the local app, so the app-edit endpoints can
+    /// re-key what the desktop pushes. Absent for desktops that predate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_ids: Option<super::upload::UploadIdInventory>,
 }
 
 impl ForkJobSpec {
@@ -173,10 +177,14 @@ impl ForkJobSpec {
             ),
             remote_event_token_encrypted: remote_event_token
                 .map(|token| encrypt_token(token, &state.encryption_key)),
+            upload_ids: None,
         }
     }
 
-    pub fn offline_upload(language: &str) -> Self {
+    pub fn offline_upload(
+        language: &str,
+        upload_ids: Option<super::upload::UploadIdInventory>,
+    ) -> Self {
         Self {
             kind: ForkJobKind::OfflineUpload,
             language: language.to_string(),
@@ -184,6 +192,7 @@ impl ForkJobSpec {
             policy: ForkPolicy::default(),
             public_fork_source_id: None,
             remote_event_token_encrypted: None,
+            upload_ids,
         }
     }
 
@@ -193,7 +202,7 @@ impl ForkJobSpec {
             .and_then(|encrypted| decrypt_token(encrypted, &state.encryption_key))
     }
 
-    fn parse(job: &fork_job::Model) -> Result<Self, ApiError> {
+    pub(crate) fn parse(job: &fork_job::Model) -> Result<Self, ApiError> {
         serde_json::from_value(job.policy.clone()).map_err(|e| {
             ApiError::internal(format!("fork job {} has an unreadable spec: {e}", job.id))
         })
@@ -657,6 +666,7 @@ fn hidden_app_shell(
         updated_at: Set(now),
         bot_id: Set(None),
         refuse_bots: Set(None),
+        showcase: Set(None),
     }
 }
 
@@ -1477,6 +1487,7 @@ mod tests {
             policy: ForkPolicy::default(),
             public_fork_source_id: None,
             remote_event_token_encrypted: Some("enc".to_string()),
+            upload_ids: None,
         };
         let stripped = serde_json::to_value(spec.without_secrets()).expect("serialize");
         assert!(stripped.get("remote_event_token_encrypted").is_none());

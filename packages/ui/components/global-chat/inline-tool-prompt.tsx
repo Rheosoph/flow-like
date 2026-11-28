@@ -11,7 +11,7 @@ import {
 	SlidersHorizontalIcon,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useBotSecretSealing } from "../../hooks/use-bot-secret-sealing";
 import { Button, Checkbox, useBackend, useInvoke } from "../../index";
 import {
@@ -21,6 +21,7 @@ import {
 	isAskUserFormComplete,
 } from "../../lib/ask-user";
 import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
 import {
 	type GlobalToolPrompt,
 	type GlobalToolSecret,
@@ -315,8 +316,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 	const isConfiguration =
 		isApproval && requiresFreshToolApproval(prompt.toolName);
 	const settingsText = useBotSettingsApprovalText(prompt.toolName);
-	const rememberable =
-		!isConfiguration && !prompt.asksAgain && prompt.rememberable !== false;
+	const rememberable = !isConfiguration && prompt.rememberable !== false;
 	const tone: RequestTone = isApproval ? "warning" : "primary";
 
 	const canSend = isAskUserFormComplete(ask, drafts);
@@ -344,6 +344,17 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 		if (!canSend) return;
 		prompt.respond({ answer: askUserAnswerPayload(ask, drafts) });
 	};
+	const answerApproval = (approved: boolean) => {
+		emitGuideEvent("bots:approval-answered");
+		prompt.respond({
+			approved,
+			remember: approved && rememberable && remember,
+		});
+	};
+
+	useEffect(() => {
+		if (isApproval) emitGuideEvent("bots:approval-shown");
+	}, [isApproval]);
 
 	const hasBody =
 		Boolean(prompt.appId) ||
@@ -362,6 +373,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 				tone={tone}
 				live
 				aria-label={title}
+				data-guide={isApproval ? "approval" : undefined}
 				className="max-h-full shadow-floating"
 			>
 				<RequestCardHeader
@@ -447,9 +459,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 						size="sm"
 						className={requestButtonClass}
 						onClick={() =>
-							isApproval
-								? prompt.respond({ approved: false, remember: false })
-								: prompt.respond(null)
+							isApproval ? answerApproval(false) : prompt.respond(null)
 						}
 					>
 						{isApproval
@@ -464,10 +474,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 						className={requestButtonClass}
 						onClick={() => {
 							if (isApproval) {
-								prompt.respond({
-									approved: true,
-									remember: rememberable && remember,
-								});
+								answerApproval(true);
 							} else {
 								submit();
 							}

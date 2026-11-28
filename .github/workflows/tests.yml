@@ -27,7 +27,8 @@ jobs:
   rust-tests:
     name: Rust tests
     if: inputs.rust
-    runs-on: ubuntu-latest
+    # ubuntu-26.04 ships PipeWire 1.6 headers, which libspa 0.8 (xcap -> pipewire 0.8) cannot bind.
+    runs-on: ubuntu-24.04
     env:
       # Unoptimised test executables are mostly symbol table, and CI never
       # symbolises backtraces. Stripping keeps the ~300 linked workspace

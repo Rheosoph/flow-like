@@ -186,6 +186,22 @@ export function planPreviewUpdates(
 	});
 }
 
+/** `<svg` after whitespace, an optional XML declaration and comments; a comment ends at its first `-->`. */
+const startsWithSvgElement = (text: string): boolean => {
+	let rest = text.trimStart();
+	if (rest.slice(0, 5).toLowerCase() === "<?xml") {
+		const end = rest.indexOf(">");
+		if (end < 0 || rest[end - 1] !== "?") return false;
+		rest = rest.slice(end + 1).trimStart();
+	}
+	while (rest.startsWith("<!--")) {
+		const end = rest.indexOf("-->", 4);
+		if (end < 0) return false;
+		rest = rest.slice(end + 3).trimStart();
+	}
+	return /^<svg[\s>]/i.test(rest);
+};
+
 function hasMediaSignature(bytes: Uint8Array, kind: PreviewKind): boolean {
 	const ascii = new TextDecoder().decode(bytes.subarray(0, 256));
 	const tag = (offset: number) =>
@@ -199,7 +215,7 @@ function hasMediaSignature(bytes: Uint8Array, kind: PreviewKind): boolean {
 			/^GIF8[79]a/.test(ascii) ||
 			(tag(0) === "RIFF" && tag(8) === "WEBP") ||
 			(tag(4) === "ftyp" && /avif|avis/.test(ascii)) ||
-			/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/i.test(ascii)
+			startsWithSvgElement(ascii)
 		);
 	if (kind === "video")
 		return (

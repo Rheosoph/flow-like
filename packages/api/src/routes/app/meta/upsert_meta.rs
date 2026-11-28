@@ -7,6 +7,7 @@ use crate::{
     middleware::jwt::AppUser,
     routes::app::meta::{MetaMode, MetaQuery},
     state::AppState,
+    utils::fork::upload::upload_id_map,
 };
 use axum::{
     Extension, Json,
@@ -14,6 +15,26 @@ use axum::{
 };
 use flow_like_types::create_id;
 use sea_orm::ActiveModelTrait;
+
+/// An upload names widgets and templates by their local ids; their rows live under the ids the
+/// upload minted.
+async fn rekey_uploaded_target(
+    state: &AppState,
+    app_id: &str,
+    mode: MetaMode,
+) -> Result<MetaMode, ApiError> {
+    if !matches!(mode, MetaMode::Template(_) | MetaMode::Widget(_)) {
+        return Ok(mode);
+    }
+    let Some(maps) = upload_id_map(state, app_id).await? else {
+        return Ok(mode);
+    };
+    Ok(match mode {
+        MetaMode::Template(id) => MetaMode::Template(maps.mint(&id)),
+        MetaMode::Widget(id) => MetaMode::Widget(maps.mint(&id)),
+        other => other,
+    })
+}
 
 #[utoipa::path(
     put,
@@ -48,7 +69,7 @@ pub async fn upsert_meta(
     Query(query): Query<MetaQuery>,
     Json(meta): Json<flow_like::bit::Metadata>,
 ) -> Result<Json<()>, ApiError> {
-    let mode = MetaMode::new(&query, &app_id);
+    let mode = rekey_uploaded_target(&state, &app_id, MetaMode::new(&query, &app_id)).await?;
     mode.ensure_write_permission(&user, &app_id, &state).await?;
 
     let language = query.language.clone().unwrap_or_else(|| "en".to_string());

@@ -584,6 +584,8 @@ pub enum TriggerSource {
     Webhook,
     Email,
     Event,
+    /// Someone outside Flow-Like wrote in a Microsoft Teams or Discord chat the bot is part of.
+    Channel,
 }
 
 impl TriggerSource {
@@ -593,6 +595,7 @@ impl TriggerSource {
             Self::Webhook => "webhook",
             Self::Email => "email",
             Self::Event => "event",
+            Self::Channel => "channel",
         }
     }
 }
@@ -704,6 +707,17 @@ pub enum ActivityBody {
         exchange_id: String,
         question: String,
     },
+    /// The lead `lead_id` of `team_id` answered the person's `#Team` request
+    /// `request_message_id` in their thread `thread_id`; `text` is the answer, clipped to
+    /// [`crate::bot_team::TEAM_ANSWER_MAX_CHARS`], and the thread holds all of it.
+    TeamAnswer {
+        team_id: String,
+        lead_id: String,
+        thread_id: String,
+        request_message_id: String,
+        reply_message_id: String,
+        text: String,
+    },
 }
 
 impl ActivityBody {
@@ -724,40 +738,94 @@ impl ActivityBody {
         }
     }
 
+    /// A `team_answer` whose text is clipped to [`crate::bot_team::TEAM_ANSWER_MAX_CHARS`].
+    pub fn team_answer(
+        team_id: impl Into<String>,
+        lead_id: impl Into<String>,
+        thread_id: impl Into<String>,
+        request_message_id: impl Into<String>,
+        reply_message_id: impl Into<String>,
+        text: &str,
+    ) -> Self {
+        let max = crate::bot_team::TEAM_ANSWER_MAX_CHARS;
+        let text = text.trim();
+        let text = match text.char_indices().nth(max) {
+            Some((index, _)) => format!("{}…", text[..index].trim_end()),
+            None => text.to_string(),
+        };
+        Self::TeamAnswer {
+            team_id: team_id.into(),
+            lead_id: lead_id.into(),
+            thread_id: thread_id.into(),
+            request_message_id: request_message_id.into(),
+            reply_message_id: reply_message_id.into(),
+            text,
+        }
+    }
+
     pub fn parse(body: &Value) -> Result<Self, String> {
         let activity: Self = serde_json::from_value(body.clone()).map_err(|error| {
             format!(
-                "an activity body is {{ type: \"bot_ask\", ask_id, asker_id, callee_id, exchange_id, question }}: {error}"
+                "an activity body is {{ type: \"bot_ask\", ask_id, asker_id, callee_id, exchange_id, question }} or {{ type: \"team_answer\", team_id, lead_id, thread_id, request_message_id, reply_message_id, text }}: {error}"
             )
         })?;
-        let Self::BotAsk {
-            ask_id,
-            asker_id,
-            callee_id,
-            exchange_id,
-            question,
-        } = &activity;
-        for (name, value) in [
-            ("ask_id", ask_id),
-            ("asker_id", asker_id),
-            ("callee_id", callee_id),
-            ("exchange_id", exchange_id),
-        ] {
-            if value.trim().is_empty() {
-                return Err(format!("an activity needs a non-empty body.{name}"));
+        match &activity {
+            Self::BotAsk {
+                ask_id,
+                asker_id,
+                callee_id,
+                exchange_id,
+                question,
+            } => {
+                non_empty_fields(&[
+                    ("ask_id", ask_id),
+                    ("asker_id", asker_id),
+                    ("callee_id", callee_id),
+                    ("exchange_id", exchange_id),
+                ])?;
+                let chars = question.chars().count();
+                if chars > ACTIVITY_QUESTION_MAX_CHARS {
+                    return Err(format!(
+                        "an activity question has at most {ACTIVITY_QUESTION_MAX_CHARS} characters; this one has {chars}"
+                    ));
+                }
             }
-        }
-        let chars = question.chars().count();
-        if chars > ACTIVITY_QUESTION_MAX_CHARS {
-            return Err(format!(
-                "an activity question has at most {ACTIVITY_QUESTION_MAX_CHARS} characters; this one has {chars}"
-            ));
+            Self::TeamAnswer {
+                team_id,
+                lead_id,
+                thread_id,
+                request_message_id,
+                reply_message_id,
+                text,
+            } => {
+                non_empty_fields(&[
+                    ("team_id", team_id),
+                    ("lead_id", lead_id),
+                    ("thread_id", thread_id),
+                    ("request_message_id", request_message_id),
+                    ("reply_message_id", reply_message_id),
+                ])?;
+                let max = crate::bot_team::TEAM_ANSWER_MAX_CHARS + 1;
+                let chars = text.chars().count();
+                if chars > max {
+                    return Err(format!(
+                        "a team answer activity has at most {max} characters; this one has {chars}"
+                    ));
+                }
+            }
         }
         Ok(activity)
     }
 
     pub fn envelope(&self) -> Value {
         plain_envelope(serde_json::to_value(self).unwrap_or(Value::Null))
+    }
+}
+
+fn non_empty_fields(fields: &[(&str, &String)]) -> Result<(), String> {
+    match fields.iter().find(|(_, value)| value.trim().is_empty()) {
+        Some((name, _)) => Err(format!("an activity needs a non-empty body.{name}")),
+        None => Ok(()),
     }
 }
 
@@ -1221,7 +1289,9 @@ mod tests {
     #[test]
     fn an_activity_body_round_trips_clips_and_rejects() {
         let body = ActivityBody::bot_ask("a1", "scout", "pebble", "ex1", &"q".repeat(500));
-        let ActivityBody::BotAsk { question, .. } = &body;
+        let ActivityBody::BotAsk { question, .. } = &body else {
+            panic!("a bot_ask builds a bot ask");
+        };
         assert_eq!(question.chars().count(), ACTIVITY_QUESTION_MAX_CHARS);
         let envelope = body.envelope();
         assert_eq!(check_envelope(&envelope), Ok(EnvelopeKind::Plain));
@@ -1233,6 +1303,30 @@ mod tests {
             "exchange_id": "e", "question": "x".repeat(ACTIVITY_QUESTION_MAX_CHARS + 1) });
         assert!(ActivityBody::parse(&long).is_err());
         assert!(ActivityBody::parse(&json!({ "type": "nope" })).is_err());
+    }
+
+    #[test]
+    fn a_team_answer_activity_round_trips_clips_and_rejects() {
+        let long = "a".repeat(crate::bot_team::TEAM_ANSWER_MAX_CHARS + 50);
+        let body = ActivityBody::team_answer("t1", "lead", "thread", "m1", "re-1", &long);
+        let ActivityBody::TeamAnswer { text, .. } = &body else {
+            panic!("team_answer builds a team answer");
+        };
+        assert_eq!(
+            text.chars().count(),
+            crate::bot_team::TEAM_ANSWER_MAX_CHARS + 1
+        );
+        assert!(text.ends_with('…'));
+        let envelope = body.envelope();
+        assert_eq!(envelope["body"]["type"], "team_answer");
+        assert_eq!(ActivityBody::parse(&envelope["body"]), Ok(body.clone()));
+        let blank = ActivityBody::team_answer("t1", "lead", " ", "m1", "re-1", "ok");
+        assert!(ActivityBody::parse(&blank.envelope()["body"]).is_err());
+        let oversized = json!({
+            "type": "team_answer", "team_id": "t", "lead_id": "l", "thread_id": "c",
+            "request_message_id": "m", "reply_message_id": "r", "text": long,
+        });
+        assert!(ActivityBody::parse(&oversized).is_err());
     }
 
     #[test]

@@ -17,6 +17,7 @@ import type { FlowSelectorDataRef } from "../flow-selector-data";
 import { resolvePinEditorKind } from "./pin-editor-kind";
 import { BitVariable } from "./variable-types/bit-select";
 import { BooleanVariable } from "./variable-types/boolean-variable";
+import { BotSelect } from "./variable-types/bot-select";
 import { VariableDescription } from "./variable-types/default-text";
 import { ElementSelect } from "./variable-types/element-select";
 import { EnumVariable } from "./variable-types/enum-variable";
@@ -177,6 +178,14 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 		case "taxCode":
 			return (
 				<TaxCodeSelect
+					pin={pin}
+					value={cachedDefaultValue}
+					setValue={updateDefaultValue}
+				/>
+			);
+		case "bot":
+			return (
+				<BotSelect
 					pin={pin}
 					value={cachedDefaultValue}
 					setValue={updateDefaultValue}

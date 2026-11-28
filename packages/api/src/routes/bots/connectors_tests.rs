@@ -18,7 +18,8 @@ async fn database() -> DatabaseConnection {
             "label" TEXT NOT NULL, "providerId" TEXT, "url" TEXT, "authKind" TEXT NOT NULL,
             "authRef" TEXT, "grantEncrypted" TEXT, "scopes" TEXT NOT NULL,
             "defaultPolicy" TEXT NOT NULL, "toolPolicies" TEXT NOT NULL,
-            "toolsSnapshot" TEXT NOT NULL, "confirmedHashes" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "updatedAt" TEXT NOT NULL)"#,
+            "toolsSnapshot" TEXT NOT NULL, "confirmedHashes" TEXT NOT NULL, "calendarUrl" TEXT,
+            "calendars" TEXT, "createdAt" TEXT NOT NULL, "updatedAt" TEXT NOT NULL)"#,
     )
     .await
     .unwrap();
@@ -44,6 +45,8 @@ fn mcp(label: &str) -> NewConnector {
         grant_encrypted: None,
         scopes: Vec::new(),
         policy: ConnectorPolicy::Ask,
+        calendar_url: None,
+        calendars: None,
     }
 }
 
@@ -202,6 +205,54 @@ async fn an_account_is_refused_only_when_reads_and_writes_are_never() {
     let all_off = with_policies(
         &db,
         &writes_off,
+        serde_json::json!({ "read": "never", "write": "never" }),
+        serde_json::json!([]),
+    )
+    .await;
+    assert_eq!(
+        refusal_code(&all_off).as_deref(),
+        Some("BOT_CONNECTOR_SWITCHED_OFF")
+    );
+}
+
+#[tokio::test]
+async fn a_caldav_connector_keeps_its_calendars_and_never_shows_its_password() {
+    use crate::bot_tools::connectors::to_contract;
+    use flow_like_types::bot_connector::ConnectorAuth;
+
+    let db = database().await;
+    insert_bot(&db, "bot-a", "user-a", "SERVER").await;
+    let mut caldav = mcp("Family calendar");
+    caldav.kind = ConnectorKind::Caldav;
+    caldav.url = Some("https://caldav.icloud.com/".into());
+    caldav.provider_id = Some("caldav".into());
+    caldav.auth_kind = "BASIC";
+    caldav.auth_ref = Some("me@icloud.com".into());
+    caldav.grant_encrypted = Some("sealed".into());
+    caldav.calendar_url = Some("https://p52-caldav.icloud.com/1/calendars/home/".into());
+    caldav.calendars = Some(serde_json::json!([
+        { "url": "https://p52-caldav.icloud.com/1/calendars/home/", "name": "Home", "color": "#1BADF8FF", "writable": true, "zone": "Europe/Berlin" },
+        { "url": "https://p52-caldav.icloud.com/1/calendars/family/", "name": "Family", "writable": false }
+    ]));
+    let row = create_in(&db, "user-a", "bot-a", caldav).await.unwrap();
+    let connector = to_contract(&row).unwrap();
+    assert_eq!(connector.kind, ConnectorKind::Caldav);
+    assert_eq!(
+        connector.auth,
+        ConnectorAuth::Basic {
+            username: "me@icloud.com".into()
+        }
+    );
+    assert!(connector.has_grant);
+    assert_eq!(connector.calendars.len(), 2);
+    assert_eq!(connector.calendar().unwrap().name, "Home");
+    let wire = serde_json::to_string(&connector).unwrap();
+    assert!(!wire.contains("sealed"));
+    assert!(wire.contains(r#""calendar_url":"https://p52-caldav.icloud.com/1/calendars/home/""#));
+
+    let all_off = with_policies(
+        &db,
+        &row,
         serde_json::json!({ "read": "never", "write": "never" }),
         serde_json::json!([]),
     )

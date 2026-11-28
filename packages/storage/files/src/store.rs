@@ -1,5 +1,5 @@
 use crate::object_path::join_object_path;
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like_types_contracts::Cacheable;
 use flow_like_types_data_url::pathbuf_to_data_url;
@@ -435,14 +435,19 @@ impl FlowLikeStore {
         Ok(())
     }
 
-    pub async fn put_from_url(&self, url: &str) -> Result<(Path, usize)> {
-        let parsed = Url::parse(url)?;
-        let store = self.as_generic();
-        match parsed.scheme() {
-            "http" | "https" => helper::put_http(parsed, store).await,
-            "data" => helper::put_data_url(url, store).await,
-            scheme => Err(anyhow!("Unsupported scheme: {scheme}")),
-        }
+    /// Stores the body of `response`, the answer to a GET of `url`, under a name taken from the
+    /// response and the link. The caller sends the request under its own egress policy.
+    pub async fn put_response(
+        &self,
+        url: &Url,
+        response: reqwest::Response,
+    ) -> Result<(Path, usize)> {
+        helper::put_http_response(url, response, self.as_generic()).await
+    }
+
+    /// Stores the payload of a `data:` URL.
+    pub async fn put_data_url(&self, url: &str) -> Result<(Path, usize)> {
+        helper::put_data_url(url, self.as_generic()).await
     }
 }
 

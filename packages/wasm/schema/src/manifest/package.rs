@@ -303,7 +303,10 @@ impl PackageManifest {
     /// Reads each skill's `instructions_file` (default `skills/<name>/SKILL.md`) from the
     /// package source folder into `instructions`, so the registry stores the text with the
     /// manifest. The SKILL.md front matter is dropped; its description fills an empty one.
-    pub fn embed_skill_instructions(&mut self, project_dir: &std::path::Path) -> Result<(), String> {
+    pub fn embed_skill_instructions(
+        &mut self,
+        project_dir: &std::path::Path,
+    ) -> Result<(), String> {
         use flow_like_types_contracts::bot_skill as rules;
         for skill in &mut self.skills {
             let file = skill
@@ -311,8 +314,9 @@ impl PackageManifest {
                 .clone()
                 .unwrap_or_else(|| format!("skills/{}/{}", skill.name, rules::SKILL_FILE));
             let relative = rules::safe_relative_path(&file)?;
-            let text = std::fs::read_to_string(project_dir.join(&relative))
-                .map_err(|error| format!("Skill '{}': cannot read {relative}: {error}", skill.name))?;
+            let text = std::fs::read_to_string(project_dir.join(&relative)).map_err(|error| {
+                format!("Skill '{}': cannot read {relative}: {error}", skill.name)
+            })?;
             let parsed = rules::parse_skill_md(&text)
                 .map_err(|error| format!("Skill '{}': {relative}: {error}", skill.name))?;
             if parsed.name != skill.name {
@@ -536,9 +540,15 @@ tools = ["fill_form"]
         )
         .unwrap();
         let mut manifest = PackageManifest::from_toml(SKILL_TOML).unwrap();
-        assert!(manifest.validate().is_err(), "no instructions are embedded yet");
+        assert!(
+            manifest.validate().is_err(),
+            "no instructions are embedded yet"
+        );
         manifest.embed_skill_instructions(dir.path()).unwrap();
-        assert_eq!(manifest.skills[0].instructions.as_deref(), Some("1. Call fill_form"));
+        assert_eq!(
+            manifest.skills[0].instructions.as_deref(),
+            Some("1. Call fill_form")
+        );
         assert_eq!(
             manifest.skills[0].instructions_file.as_deref(),
             Some("skills/pdf-forms/SKILL.md")
@@ -560,7 +570,12 @@ tools = ["fill_form"]
             "---\nname: other\ndescription: x\n---\nbody",
         )
         .unwrap();
-        assert!(manifest.embed_skill_instructions(dir.path()).unwrap_err().contains("named"));
+        assert!(
+            manifest
+                .embed_skill_instructions(dir.path())
+                .unwrap_err()
+                .contains("named")
+        );
         std::fs::write(
             folder.join("SKILL.md"),
             "---\nname: pdf-forms\ndescription: x\n---\nbody\u{200B}",
@@ -569,6 +584,12 @@ tools = ["fill_form"]
         assert!(manifest.embed_skill_instructions(dir.path()).is_err());
         manifest.skills[0].instructions = Some("ok".into());
         manifest.skills.push(manifest.skills[0].clone());
-        assert!(manifest.validate().unwrap_err().iter().any(|e| e.contains("Duplicate skill")));
+        assert!(
+            manifest
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("Duplicate skill"))
+        );
     }
 }

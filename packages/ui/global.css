@@ -424,6 +424,36 @@
 	}
 }
 
+/* Touch: those controls give way to the long-press menu; saved reactions stay. */
+@media not all and (hover: hover) and (pointer: fine) {
+	[data-fl-chat-message-row] [data-fl-chat-hover-action],
+	[data-fl-chat-room-actions] {
+		display: none;
+	}
+
+	[data-fl-chat-message-row] {
+		-webkit-touch-callout: none;
+		-webkit-user-select: none;
+		user-select: none;
+	}
+
+	[data-fl-chat-message-row] :is(input, textarea, [contenteditable="true"]) {
+		-webkit-user-select: text;
+		user-select: text;
+	}
+
+	[data-fl-chat-message][data-fl-pressing] {
+		transform: scale(0.98);
+		transition: transform 120ms ease-out;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-fl-chat-message][data-fl-pressing] {
+		transform: none;
+	}
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.fl-chat-chrome {
 		transition: none;
@@ -2912,6 +2942,15 @@ html[data-engine="webkit"] [class*="backdrop-blur"] {
 	}
 }
 
+/* The activity line keeps its live region mounted but takes no room while nobody types or answers. */
+[data-fl-conversation-activity]:empty {
+	height: 0;
+}
+
+[data-fl-chat-inline-prompt]:has(> [data-fl-conversation-activity]:empty) {
+	padding-top: 0;
+}
+
 /* A room message's floating actions: hidden until the message is hovered or focused (tap on touch). */
 [data-fl-chat-room-actions] {
 	opacity: 0;
@@ -2935,5 +2974,29 @@ html[data-engine="webkit"] [class*="backdrop-blur"] {
 @media (prefers-reduced-motion: reduce) {
 	[data-fl-chat-room-actions] {
 		transition: none;
+	}
+}
+
+:root {
+	--showcase-text: #2a78d6;
+	--showcase-number: #eb6834;
+	--showcase-time: #1baf7a;
+	--showcase-vector: #eda100;
+	--showcase-geo: #e87ba4;
+	--showcase-other: #9a9aa6;
+}
+
+.dark {
+	--showcase-text: #3987e5;
+	--showcase-number: #d95926;
+	--showcase-time: #199e70;
+	--showcase-vector: #c98500;
+	--showcase-geo: #d55181;
+	--showcase-other: #6b7080;
+}
+
+@keyframes showcase-flow {
+	to {
+		stroke-dashoffset: -12;
 	}
 }

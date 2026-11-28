@@ -81,6 +81,22 @@ export const CAPABILITY_DETAILS: Readonly<
 		tools: ["schedule_task", "list_tasks", "update_task", "cancel_task"],
 		note: "One-time runs and cron schedules, at most every 5 minutes, 50 tasks per bot.",
 	},
+	calendar: {
+		tools: [
+			"calendar_list",
+			"calendar_create",
+			"calendar_update",
+			"calendar_delete",
+			"calendar_free_slots",
+			"calendar_wake_settings",
+		],
+		asks: "Before it creates, changes or deletes an event in a connected calendar, under that connector's policy. Its own calendar and its wake-ups never ask.",
+		note: "The bot's own events and the main calendar of each Google or Microsoft account you connected to it. Wake-ups start the bot a set time before an event, in your 1:1 chat. It reads and writes events only in your 1:1 chat; in a group it can only look up free times. At most 500 events per bot, counted apart from its 50 tasks.",
+	},
+	location: {
+		tools: ["find_place", "watch_place", "list_tasks", "cancel_task"],
+		note: "Place tasks fire when your phone arrives at or leaves a place the bot watches, once or every time, optionally until a set time. They fire in your 1:1 chat with the bot only, never in a group or someone else's chat. Your phone needs location access set to Always. At most 20 watched places across all your bots, counted in the 50 tasks per bot. Addresses are looked up with OpenStreetMap.",
+	},
 	storage: {
 		tools: ["file_list", "file_read", "file_save", "file_write"],
 		asks: "Before file_save downloads from a new site.",

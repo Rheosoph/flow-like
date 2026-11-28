@@ -5,7 +5,7 @@ pub mod mlx_pack;
 use super::{
     device::{self, ModelEndpoint},
     factory_cache::{FactoryCache, MODEL_IDLE_TTL},
-    media::{MediaReader, OwnStorage, RemoteMediaModel, runs_on_users_machine},
+    media::{MediaLinks, MediaReader, OwnStorage, RemoteMediaModel, runs_on_users_machine},
 };
 use crate::{
     bit::Bit,
@@ -134,6 +134,16 @@ async fn own_storage(app_state: &FlowLikeState) -> OwnStorage {
         return OwnStorage::default();
     }
     OwnStorage::signed_by(file_stores(app_state).await).await
+}
+
+/// The GETs a direct model call of `app_state` makes for the media links it reads: its own store
+/// as it is, and every other host as the state's egress policy allows.
+pub async fn media_links(app_state: &FlowLikeState) -> MediaLinks {
+    MediaLinks::new(
+        app_state.execution_environment,
+        own_storage(app_state).await,
+        app_state.model_egress,
+    )
 }
 
 /// The secret-free view of a private Bit that a server run receives: at most its model id.
@@ -527,12 +537,13 @@ impl ModelFactory {
                 own_storage(&app_state).await,
             )));
         }
-        Ok(Arc::new(RemoteMediaModel::direct(
+        Ok(Arc::new(RemoteMediaModel::confined(
             model,
             app_state.execution_environment,
             reader,
             local_storage_roots(&app_state).await,
             own_storage(&app_state).await,
+            app_state.model_egress,
         )))
     }
 

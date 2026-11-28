@@ -7,12 +7,10 @@
 //! [`super::ForkOptions`] field, so a caller can neither supply it nor have
 //! it silently ignored.
 //!
-//! This is hygiene, not confidentiality. Every caller that passes
-//! `check_can_fork` holds `RolePermissions::ReadFiles`, which alone guards
-//! the file download endpoints and satisfies the project-database routes
-//! (including arbitrary SQL). A forker can already read anything the policy
-//! excludes — excluding it keeps the *copy* clean, it does not protect the
-//! data.
+//! Fork authorization requires read permissions for the included categories.
+//! A fork that excludes files and databases does not require `ReadFiles`, so
+//! transfer endpoints must enforce those exclusions before issuing downloads.
+//! A user's independent file permissions can still authorize other API reads.
 
 use crate::entity::app;
 use flow_like_types::storage_paths::{
@@ -155,15 +153,39 @@ fn skips_database_object(databases: ForkDatabaseMode, relative_under_storage: &s
     }
 }
 
-/// Content-store prefixes (relative to `apps/{src_app_id}/`) the desktop
-/// must not mirror on an offline fork. The legacy training ledger prefixes
-/// are always listed, `storage/models/` whenever the database data stays
-/// behind.
-///
-/// Advisory: the caller already holds `ReadFiles` on the source, so this is
-/// hygiene rather than a boundary. `skip_tables` are the source's
-/// non-reserved table names, needed because a blanket `storage/db/` would
-/// also drop the reserved artifact tables schema-only mode carries.
+/// Whether an offline fork leaves the source content object at `relative`
+/// (rooted at `apps/{src_app_id}/`) behind. The server applies it while it
+/// hands out download URLs, so what the desktop receives already follows the
+/// owner's policy.
+pub fn offline_skips_content(policy: &ForkPolicy, relative: &str) -> bool {
+    is_legacy_training_ledger_path(relative)
+        || excluded_category(policy, relative)
+        || relative
+            .strip_prefix("storage/")
+            .is_some_and(|under_storage| storage_skipped(policy.databases, under_storage))
+}
+
+fn excluded_category(policy: &ForkPolicy, relative: &str) -> bool {
+    [
+        (policy.files, "upload/"),
+        (policy.widgets, "metadata/widgets/"),
+        (policy.templates, "metadata/templates/"),
+    ]
+    .iter()
+    .any(|(kept, prefix)| !kept && relative.starts_with(prefix))
+}
+
+fn storage_skipped(databases: ForkDatabaseMode, under_storage: &str) -> bool {
+    (databases != ForkDatabaseMode::WithData && is_published_model(under_storage))
+        || skips_database_object(databases, under_storage)
+}
+
+/// Source-relative prefixes excluded when staging the offline bundle.
+/// The content listing separately applies `offline_skips_content` before
+/// signing downloads. The legacy training ledger is always excluded, and
+/// `storage/models/` is excluded whenever database data stays behind.
+/// `skip_tables` names the non-reserved tables, since schema-only mode keeps
+/// reserved artifact tables.
 pub fn offline_content_exclude_prefixes(
     policy: &ForkPolicy,
     skip_tables: &[String],
@@ -229,6 +251,7 @@ mod tests {
             app_type: None,
             bot_id: None,
             refuse_bots: None,
+            showcase: None,
         }
     }
 
@@ -376,5 +399,44 @@ mod tests {
             offline_content_exclude_prefixes(&bare, &tables),
             with_ledger(&["metadata/widgets/", "metadata/templates/"])
         );
+    }
+
+    #[test]
+    fn offline_downloads_skip_what_the_policy_excludes() {
+        let open = ForkPolicy::default();
+        for path in [
+            "upload/a.csv",
+            "metadata/widgets/w/en.meta",
+            "storage/db/notes.lance/data/0.lance",
+            "storage/models/m/model.onnx",
+        ] {
+            assert!(!offline_skips_content(&open, path), "{path}");
+        }
+        assert!(offline_skips_content(
+            &open,
+            "storage/inspection/jobs.sqlite"
+        ));
+
+        let closed = ForkPolicy {
+            files: false,
+            widgets: false,
+            templates: false,
+            databases: ForkDatabaseMode::SchemaOnly,
+            ..Default::default()
+        };
+        for path in [
+            "upload/a.csv",
+            "metadata/widgets/w/en.meta",
+            "metadata/templates/t/en.meta",
+            "storage/db/notes.lance/data/0.lance",
+            "storage/models/m/model.onnx",
+        ] {
+            assert!(offline_skips_content(&closed, path), "{path}");
+        }
+        assert!(!offline_skips_content(&closed, "metadata/en.meta"));
+        assert!(!offline_skips_content(
+            &closed,
+            "storage/db/__flowlike_tables__.lance/data/0.lance"
+        ));
     }
 }

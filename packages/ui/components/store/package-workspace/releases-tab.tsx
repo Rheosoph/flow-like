@@ -22,6 +22,8 @@ import { CountBadge, WorkspaceSection } from "./workspace-parts";
 
 export interface ReleasesTabProps {
 	entry: RegistryEntry;
+	/** The name the workspace header shows (listing name first). */
+	displayName?: string;
 	isOwner: boolean;
 	canInstall: boolean;
 	publishAction?: ReactNode;
@@ -33,6 +35,7 @@ export interface ReleasesTabProps {
 
 export function ReleasesTab({
 	entry,
+	displayName,
 	isOwner,
 	canInstall,
 	publishAction,
@@ -46,7 +49,7 @@ export function ReleasesTab({
 	const live = liveVersion(versions);
 	const showPublicationAudit =
 		entry.status !== PackageStatus.Active || !!pendingVersion(versions);
-	const packageName = entry.manifest.name || entry.id;
+	const packageName = displayName || entry.manifest.name || entry.id;
 
 	return (
 		<div className="grid items-start gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">

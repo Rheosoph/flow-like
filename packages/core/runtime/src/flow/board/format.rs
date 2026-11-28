@@ -4,13 +4,17 @@
 //! load and persistence boundary to the client's supported version. The runtime also applies its
 //! own ceiling when an executor or local editor operates without an HTTP request.
 
-use std::{collections::HashMap, future::Future};
+use std::future::Future;
 
+use ahash::AHashSet;
 use flow_like_types::{Result, proto, tokio};
 use serde_json::Value;
 
 use super::Board;
-use crate::flow::{pin::resolve_schema, variable::VariableType};
+use crate::flow::{
+    pin::{SchemaRefs, resolve_schema},
+    variable::VariableType,
+};
 
 pub const LEGACY_BOARD_FORMAT_VERSION: u32 = 1;
 pub const CURRENT_BOARD_FORMAT_VERSION: u32 = 2;
@@ -65,8 +69,8 @@ pub fn ensure_supported(required: u32) -> Result<()> {
     Ok(())
 }
 
-fn schema_requires_geometry(schema: Option<&str>, refs: &HashMap<String, String>) -> bool {
-    let Some(schema) = schema.and_then(|schema| resolve_schema(schema, refs).ok()) else {
+fn schema_requires_geometry(schema: &str, refs: &impl SchemaRefs) -> bool {
+    let Ok(schema) = resolve_schema(schema, refs) else {
         return false;
     };
     let Ok(schema) = serde_json::from_str::<Value>(schema) else {
@@ -93,14 +97,21 @@ fn schema_requires_geometry(schema: Option<&str>, refs: &HashMap<String, String>
 pub(crate) fn required_version<'a>(
     declared: u32,
     types: impl Iterator<Item = (bool, Option<&'a str>)>,
-    refs: &HashMap<String, String>,
+    refs: &impl SchemaRefs,
 ) -> u32 {
     let mut required = declared.max(LEGACY_BOARD_FORMAT_VERSION);
     if required >= CURRENT_BOARD_FORMAT_VERSION {
         return required;
     }
+    // Inspecting a schema parses its JSON, and a board's pins share a few schemas: thousands of
+    // pins on one row schema would otherwise parse it thousands of times on every call.
+    let mut inspected = AHashSet::new();
     for (geometry, schema) in types {
-        if geometry || schema_requires_geometry(schema, refs) {
+        if geometry
+            || schema.is_some_and(|schema| {
+                inspected.insert(schema) && schema_requires_geometry(schema, refs)
+            })
+        {
             required = required.max(2);
             break;
         }
@@ -345,6 +356,40 @@ mod tests {
         assert_eq!(board.required_format_version(), 2);
     }
 
+    #[test]
+    fn a_schema_shared_by_many_pins_does_not_hide_a_later_geometry_schema() {
+        let mut board = board();
+        board
+            .refs
+            .insert("row".into(), r#"{"type":"object"}"#.into());
+        board.refs.insert(
+            "place".into(),
+            r#"{"type":"object","properties":{"at":{"$id":"flow:geometry"}}}"#.into(),
+        );
+        let mut node = Node::new("test", "Test", "", "test");
+        for index in 0..8 {
+            node.add_input_pin(&format!("row_{index}"), "Row", "", VariableType::Struct)
+                .schema = Some("row".into());
+        }
+        board.nodes.insert(node.id.clone(), node);
+        assert_eq!(board.required_format_version(), 1);
+
+        let mut layer = Layer::new("function".into(), "Function".into(), LayerType::Function);
+        let mut inner = Node::new("test", "Inner", "", "test");
+        inner
+            .add_input_pin("row", "Row", "", VariableType::Struct)
+            .schema = Some("row".into());
+        inner
+            .add_input_pin("place", "Place", "", VariableType::Struct)
+            .schema = Some("place".into());
+        layer.nodes.insert(inner.id.clone(), inner);
+        board.layers.insert(layer.id.clone(), layer);
+        assert_eq!(board.required_format_version(), 2);
+        let mut compiled = crate::flow::compiled::compile_board(&board).unwrap();
+        compiled.board_format_version = 1;
+        assert_eq!(compiled.required_board_format_version(), 2);
+    }
+
     #[tokio::test]
     async fn scopes_are_isolated_and_runtime_ceiling_cannot_be_lifted_by_the_client() {
         let (old, new) = tokio::join!(
@@ -377,6 +422,35 @@ mod tests {
         .await;
         compiled.board_format_version = 3;
         assert_format_error(compiled.validate().unwrap_err(), 3, 2);
+    }
+
+    #[tokio::test]
+    async fn a_template_answers_format_support_as_its_board_view_would() {
+        use crate::flow::compiled::{CompiledRunTemplate, compile_board};
+        use crate::state::FlowNodeRegistryInner;
+
+        for source in [board(), geometry_board()] {
+            let required = source.required_format_version();
+            let mut compiled = compile_board(&source).unwrap();
+            compiled.board_format_version = 1;
+            let template = CompiledRunTemplate::from_compiled(
+                &compiled,
+                &FlowNodeRegistryInner::new(0),
+                Path::from("boards"),
+            )
+            .unwrap();
+            assert_eq!(template.board.format_version, required);
+            assert_eq!(template.board.required_format_version(), required);
+            let legacy_client = with_supported_version(1, async {
+                (
+                    template.ensure_supported_format().is_ok(),
+                    template.board.ensure_supported_format().is_ok(),
+                )
+            })
+            .await;
+            assert_eq!(legacy_client, (required == 1, required == 1));
+            assert!(template.ensure_supported_format().is_ok());
+        }
     }
 
     #[tokio::test]

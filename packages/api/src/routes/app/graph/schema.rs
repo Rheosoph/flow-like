@@ -1,16 +1,13 @@
 use crate::{
-    ensure_any_permission,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, column_reader},
-    state::AppState,
+    ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, routes::app::db::ScopeParams, state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like_storage::databases::graph::{GraphStore, lancegraph};
+use flow_like_query::graph::GraphOperation;
+use flow_like_storage::databases::graph::{GraphLabelInfo, GraphSchemaResult};
 
 #[utoipa::path(
     get,
@@ -24,9 +21,12 @@ use flow_like_storage::databases::graph::{GraphStore, lancegraph};
     ),
     responses(
         (status = 200, description = "Graph schema", body = Object),
+        (status = 400, description = "A table of the overlay could not be read"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 404, description = "Overlay not found")
+        (status = 404, description = "Overlay not found"),
+        (status = 503, description = "The query service is unavailable"),
+        (status = 504, description = "Reading the schema ran out of time")
     ),
     security(
         ("bearer_auth" = []),
@@ -52,55 +52,46 @@ pub async fn graph_schema(
         RolePermissions::ReadDatabase
     );
 
-    let (connection, overlay) =
-        super::load_scoped_overlay(&state, &user, &app_id, &overlay_id, &scope).await?;
-    let store = lancegraph::LanceGraphStore::new_for(
-        connection,
-        overlay,
-        None,
-        column_reader(&permission, &scope),
+    let schema_result: GraphSchemaResult = super::read_overlay(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &overlay_id,
+        &scope,
+        |overlay| GraphOperation::Schema {
+            overlay: Box::new(overlay),
+        },
     )
     .await?;
-    let schema_result = store.schema().await?;
 
-    let schema = flow_like_catalog_core::GraphSchema {
+    Ok(Json(flow_like_catalog_core::GraphSchema {
         node_labels: schema_result
             .node_labels
             .into_iter()
-            .map(|l| flow_like_catalog_core::GraphLabelInfo {
-                label: l.label,
-                table: l.table,
-                properties: l
-                    .properties
-                    .into_iter()
-                    .map(|p| flow_like_catalog_core::GraphPropertyInfo {
-                        name: p.name,
-                        data_type: p.data_type,
-                        nullable: p.nullable,
-                        metadata: p.metadata,
-                    })
-                    .collect(),
-            })
+            .map(label_info)
             .collect(),
         edge_labels: schema_result
             .edge_labels
             .into_iter()
-            .map(|l| flow_like_catalog_core::GraphLabelInfo {
-                label: l.label,
-                table: l.table,
-                properties: l
-                    .properties
-                    .into_iter()
-                    .map(|p| flow_like_catalog_core::GraphPropertyInfo {
-                        name: p.name,
-                        data_type: p.data_type,
-                        nullable: p.nullable,
-                        metadata: p.metadata,
-                    })
-                    .collect(),
+            .map(label_info)
+            .collect(),
+    }))
+}
+
+fn label_info(label: GraphLabelInfo) -> flow_like_catalog_core::GraphLabelInfo {
+    flow_like_catalog_core::GraphLabelInfo {
+        label: label.label,
+        table: label.table,
+        properties: label
+            .properties
+            .into_iter()
+            .map(|property| flow_like_catalog_core::GraphPropertyInfo {
+                name: property.name,
+                data_type: property.data_type,
+                nullable: property.nullable,
+                metadata: property.metadata,
             })
             .collect(),
-    };
-
-    Ok(Json(schema))
+    }
 }

@@ -31,6 +31,7 @@ mod workspace;
 #[cfg(test)]
 mod tests;
 
+pub use bots::BuiltInDeletion;
 pub use error::{Error, Result, codes};
 pub use inbox::LocalConversationFile;
 pub use model::{

@@ -156,6 +156,21 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                     "storage event deduplication outlives the app",
                 ),
                 keep(
+                    "BotTeamChat",
+                    "ownerId",
+                    "the owner's bots cascade with the account, and their chats with them",
+                ),
+                keep(
+                    "BotChannelLink",
+                    "ownerId",
+                    "the owner's bots cascade with the account, and their chat links with them",
+                ),
+                keep(
+                    "BotOrgClassification",
+                    "setBy",
+                    "attribution only; the classification belongs to the org and outlives the admin",
+                ),
+                keep(
                     "LockedItem",
                     "appId",
                     "revision-safe records outlive the app while their objects are retained",
@@ -200,6 +215,7 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 sweep("InboxKey", "principalId"),
                 sweep("PinnedConversation", "principalId"),
                 sweep("StarredMessage", "principalId"),
+                sweep("BotTeamApp", "pinnedBy"),
                 sweep("QuotaWarningState", "payerId"),
             ],
             restrict_as_cascade: vec![
@@ -207,6 +223,26 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 ("WasmPackageInvitation", "inviteeId"),
             ],
             keep: vec![
+                keep(
+                    "BotTeam",
+                    "createdBy",
+                    "attribution only; the team belongs to its people and outlives its creator",
+                ),
+                keep(
+                    "BotTeamPerson",
+                    "invitedBy",
+                    "attribution only; the invitee's membership outlives the inviter",
+                ),
+                keep(
+                    "BotTeamApp",
+                    "approvedBy",
+                    "attribution only; the pin belongs to its team and outlives the approving admin",
+                ),
+                keep(
+                    "BotTeamBot",
+                    "invitedBy",
+                    "attribution only; the bot's membership outlives the inviter",
+                ),
                 keep(
                     "LockedItem",
                     "ownerId",
@@ -372,6 +408,11 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                     "messages stay in their recipients' inboxes and show a deleted account",
                 ),
                 keep("Conversation", "createdBy", "attribution"),
+                keep(
+                    "AppDataSource",
+                    "createdBy",
+                    "an external database belongs to its app; the creator id is attribution",
+                ),
                 keep(
                     "ConversationFile",
                     "uploaderId",

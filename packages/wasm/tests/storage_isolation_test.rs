@@ -1,3 +1,5 @@
+#![cfg(feature = "execution")]
+
 use flow_like_runtime::state::FlowLikeStores;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::{

@@ -578,3 +578,51 @@ describe("materializing a board this device does not have", () => {
 		expect((error as BoardMaterializationError).cause).toBeInstanceOf(Error);
 	});
 });
+
+describe("run requirements hub refresh", () => {
+	const requirements = {
+		runtime_variables: [],
+		oauth_requirements: [],
+		requires_local_execution: false,
+		execution_mode: "Hybrid",
+		wasm_package_ids: [],
+		wasm_package_permissions: {},
+		instantiates_widgets: false,
+	};
+
+	function runRequirementsInvoke() {
+		const fallback = nativeInvoke({ present: true });
+		return async (command: string, args?: unknown) =>
+			command === "get_board_run_requirements"
+				? requirements
+				: fallback(command, args);
+	}
+
+	test("a live board runs as held locally without asking the hub", async () => {
+		mocks.invoke.mockImplementation(runRequirementsInvoke());
+		const backend = fakeBackend({ offline: false });
+		const state = new BoardState(backend as never);
+
+		const result = await state.getBoardRunRequirements(APP, BOARD, undefined, {
+			skipHubRefresh: true,
+		});
+
+		expect(result).toEqual(requirements);
+		expect(mocks.fetcher).not.toHaveBeenCalled();
+		expect(backend.getOfflineSyncCommands).not.toHaveBeenCalled();
+		expect(mocks.invoke.mock.calls.map(([command]) => command)).toEqual([
+			"get_board_run_requirements",
+		]);
+	});
+
+	test("other callers still pull a newer hub revision first", async () => {
+		mocks.invoke.mockImplementation(runRequirementsInvoke());
+		mocks.fetcher.mockResolvedValue(syncResponse());
+		const backend = fakeBackend({ offline: false });
+		const state = new BoardState(backend as never);
+
+		await state.getBoardRunRequirements(APP, BOARD);
+
+		expect(backend.getOfflineSyncCommands).toHaveBeenCalled();
+	});
+});

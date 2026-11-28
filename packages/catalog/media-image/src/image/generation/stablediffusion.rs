@@ -1,7 +1,8 @@
 use super::*;
 use flow_like::flow_like_storage::blake3;
+use flow_like::models::generation::generate_guarded;
 use flow_like_model_provider::stablediffusion::{
-    GenerationMode, GenerationRequest, PROVIDER_NAME, StableDiffusionConfig, generate,
+    GenerationMode, GenerationRequest, PROVIDER_NAME, StableDiffusionConfig,
 };
 use flow_like_types::json::{to_value, to_vec};
 
@@ -191,6 +192,7 @@ fn request_params(
 }
 
 pub(super) async fn generate_image(
+    environment: ExecutionEnvironment,
     provider: &ModelProvider,
     prompt: &str,
     options: &ImageGenerationProviderOptions,
@@ -202,7 +204,8 @@ pub(super) async fn generate_image(
         .and_then(|params| params.get("stablediffusion"))
         .ok_or_else(|| anyhow!("stable-diffusion.cpp provider is missing its configuration"))?;
     let config: StableDiffusionConfig = from_value(config.clone())?;
-    let assets = generate(
+    let assets = generate_guarded(
+        environment,
         &config,
         &GenerationRequest {
             mode: GenerationMode::Image,

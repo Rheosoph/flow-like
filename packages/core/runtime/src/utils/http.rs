@@ -1,29 +1,86 @@
+use flow_like_model_provider::egress::ProviderEgress;
 use flow_like_storage::blake3;
 use flow_like_types::{
     Value,
-    reqwest::{self, Request},
+    reqwest::{self, Request, Url},
     sync::{DashMap, mpsc},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     sync::{Arc, OnceLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use super::cache::{cache_file_exists, delete_cache_file, read_cache_file, write_cache_file};
 
-/// Client for hub metadata requests.
+/// How long a cached response is served before a read queues its revalidation.
+/// Profile reads resolve every bit through this cache, so revalidating on every
+/// read sent one hub request per bit each time a profile was read.
+const REVALIDATE_AFTER: Duration = Duration::from_secs(5 * 60);
+
+/// Redirects a confined hub request may follow.
+const CONFINED_REDIRECTS: usize = 5;
+
+/// Builder of the client for hub metadata requests.
 ///
 /// These are small JSON calls, so they get a whole-request budget: an
 /// unanswered one otherwise blocks bit listings and dependency resolution for
 /// as long as the connection stays open.
-fn hub_client() -> reqwest::Client {
+fn hub_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .user_agent(concat!("flow-like/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(60))
-        .build()
-        .unwrap_or_default()
+}
+
+fn hub_client() -> reqwest::Client {
+    hub_client_builder().build().unwrap_or_default()
+}
+
+/// Where hub requests may connect on a host that follows hub addresses its
+/// callers choose: a profile's hubs, the hub a Bit names, a hub's dependencies.
+///
+/// A request to one of the operator's own hubs is sent as on any other host.
+/// Every other request must pass `egress` on its URL, on each address its host
+/// resolves to, and on each redirect.
+#[derive(Clone, Debug)]
+pub struct HubEgress {
+    egress: ProviderEgress,
+    own_origins: Vec<url::Origin>,
+}
+
+impl HubEgress {
+    /// `own_hubs` are URLs of the hubs the operator configured; only their
+    /// origins count.
+    pub fn new(egress: ProviderEgress, own_hubs: impl IntoIterator<Item = Url>) -> Self {
+        Self {
+            egress,
+            own_origins: own_hubs
+                .into_iter()
+                .map(|hub| hub.origin())
+                .filter(url::Origin::is_tuple)
+                .collect(),
+        }
+    }
+
+    fn is_own(&self, url: &Url) -> bool {
+        self.own_origins.contains(&url.origin())
+    }
+
+    fn check(&self, url: &Url) -> flow_like_types::Result<()> {
+        self.egress.check_url(url).map_err(|refused| {
+            flow_like_types::anyhow!(
+                "Hub '{}' is outside the addresses this server may reach: {refused}",
+                url.host_str().unwrap_or_default()
+            )
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ConfinedHubs {
+    policy: HubEgress,
+    client: reqwest::Client,
 }
 
 const HEADERS_TO_CACHE: [&str; 8] = [
@@ -64,10 +121,17 @@ pub struct HTTPClient {
     #[serde(skip)]
     sender: Option<mpsc::Sender<Refetch>>,
 
+    /// When each cached response was last fetched or queued for revalidation.
+    #[serde(skip)]
+    checked_at: Arc<DashMap<String, Option<Instant>>>,
+
     /// Lazily initialized to avoid triggering iOS Network.framework
     /// before the run loop is active (causes `nw_dictionary_copy null`).
     #[serde(skip)]
     client: OnceLock<reqwest::Client>,
+
+    #[serde(skip)]
+    confined: Option<ConfinedHubs>,
 }
 
 impl HTTPClient {
@@ -98,7 +162,7 @@ impl HTTPClient {
     where
         for<'de> T: Deserialize<'de> + Clone + Serialize,
     {
-        let response = self.client().execute(request).await?;
+        let response = self.execute(request).await?;
         let status = response.status();
 
         if !status.is_success() {
@@ -119,6 +183,8 @@ impl HTTPClient {
         }
         let parsed = flow_like_types::json::from_value::<T>(value.clone())?;
         let _ = self.put(request_hash, &value);
+        self.checked_at
+            .insert(request_hash.to_string(), Some(Instant::now()));
         Ok(parsed)
     }
 
@@ -128,7 +194,9 @@ impl HTTPClient {
             HTTPClient {
                 cache: Arc::new(DashMap::new()),
                 sender: Some(tx),
+                checked_at: Arc::new(DashMap::new()),
                 client: OnceLock::new(),
+                confined: None,
             },
             rx,
         )
@@ -138,16 +206,48 @@ impl HTTPClient {
         HTTPClient {
             cache: Arc::new(DashMap::new()),
             sender: None,
+            checked_at: Arc::new(DashMap::new()),
             client: OnceLock::new(),
+            confined: None,
         }
     }
 
-    /// Queues a background revalidation. A cached read never waits for it: when
-    /// the queue is full (the hub is slow or unreachable) the refetch is dropped.
-    fn refetch<T: DeserializeOwned>(&self, request: &Request) {
+    /// This client with every request outside `hubs`' own origins held to its
+    /// egress mode. The guarded client is built here, so a host that cannot
+    /// build it gets an error instead of an unguarded one.
+    pub fn confined_to(mut self, hubs: HubEgress) -> flow_like_types::Result<Self> {
+        let client = hubs
+            .egress
+            .guard_following_redirects(hub_client_builder(), CONFINED_REDIRECTS)
+            .build()?;
+        self.confined = Some(ConfinedHubs {
+            policy: hubs,
+            client,
+        });
+        Ok(self)
+    }
+
+    /// Claims the revalidation of a cached response when it was last fetched or
+    /// queued at least [`REVALIDATE_AFTER`] before `now`.
+    fn revalidation_due(&self, request_hash: &str, now: Instant) -> bool {
+        let mut checked = self.checked_at.entry(request_hash.to_string()).or_default();
+        if checked.is_some_and(|at| now.saturating_duration_since(at) < REVALIDATE_AFTER) {
+            return false;
+        }
+        *checked = Some(now);
+        true
+    }
+
+    /// Queues a background revalidation, at most once per [`REVALIDATE_AFTER`]
+    /// for each request. A cached read never waits for it: when the queue is full
+    /// (the hub is slow or unreachable) the refetch is dropped.
+    fn refetch<T: DeserializeOwned>(&self, request_hash: &str, request: &Request) {
         let Some(sender) = &self.sender else {
             return;
         };
+        if !self.revalidation_due(request_hash, Instant::now()) {
+            return;
+        }
         let Some(request) = request.try_clone() else {
             tracing::debug!("Skipping refetch: request body is not clonable");
             return;
@@ -184,7 +284,7 @@ impl HTTPClient {
         let value = flow_like_types::json::from_value::<T>(value)?;
 
         if let Some(request) = request {
-            self.refetch::<T>(request);
+            self.refetch::<T>(request_hash, request);
         }
         Ok(value)
     }
@@ -217,7 +317,7 @@ impl HTTPClient {
             .insert(request_hash.to_string(), generic_value.clone());
         let value = flow_like_types::json::from_value::<T>(generic_value)?;
         if let Some(request) = request {
-            self.refetch::<T>(request);
+            self.refetch::<T>(request_hash, request);
         }
         Ok(value)
     }
@@ -256,8 +356,36 @@ impl HTTPClient {
         hex.to_string()
     }
 
+    /// The client hub requests are built with. On a confined client this is
+    /// the guarded one, which vets the addresses a name resolves to and every
+    /// redirect. A literal address is only checked by [`Self::execute`], which
+    /// also lets an own hub on the host's network through, so send with that.
     pub fn client(&self) -> reqwest::Client {
+        match &self.confined {
+            Some(confined) => confined.client.clone(),
+            None => self.open_client(),
+        }
+    }
+
+    fn open_client(&self) -> reqwest::Client {
         self.client.get_or_init(hub_client).clone()
+    }
+
+    /// Sends a hub request: to one of the operator's own hubs as it is, to any
+    /// other host under the egress mode this client is confined to.
+    pub async fn execute(&self, request: Request) -> flow_like_types::Result<reqwest::Response> {
+        let client = match &self.confined {
+            Some(confined) if !confined.policy.is_own(request.url()) => {
+                confined.policy.check(request.url())?;
+                confined.client.clone()
+            }
+            _ => self.open_client(),
+        };
+        Ok(client.execute(request).await?)
+    }
+
+    pub async fn get(&self, url: Url) -> flow_like_types::Result<reqwest::Response> {
+        self.execute(self.client().get(url).build()?).await
     }
 
     pub async fn hashed_request<T>(&self, request: Request) -> flow_like_types::Result<T>
@@ -350,6 +478,42 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_cached_response_is_revalidated_at_most_once_per_interval() {
+        let (http, mut refetches) = HTTPClient::new();
+        let request = http
+            .client()
+            .get("http://127.0.0.1:9/api/v1/bit/cached")
+            .build()
+            .unwrap();
+        let hash = http.quick_hash(&request);
+
+        http.refetch::<Value>(&hash, &request);
+        http.refetch::<Value>(&hash, &request);
+        assert!(refetches.try_recv().is_ok());
+        assert!(refetches.try_recv().is_err());
+
+        let now = Instant::now();
+        assert!(!http.revalidation_due(&hash, now));
+        assert!(http.revalidation_due(&hash, now + REVALIDATE_AFTER));
+    }
+
+    #[tokio::test]
+    async fn a_freshly_fetched_response_is_not_revalidated_by_the_next_read() {
+        let (url, server) = serve_once(200, r#"["model"]"#).await;
+        let (http, mut refetches) = HTTPClient::new();
+        let request = || http.client().get(&url).build().unwrap();
+        let hash = http.quick_hash(&request());
+
+        let fetched = http.hashed_request::<Vec<String>>(request()).await.unwrap();
+        server.await.unwrap();
+        let cached = http.hashed_request::<Vec<String>>(request()).await.unwrap();
+
+        assert_eq!(fetched, cached);
+        assert!(refetches.try_recv().is_err());
+        let _ = delete_cache_file(&format!("http/{hash}"));
+    }
+
     async fn serve_once(status: u16, body: &'static str) -> (String, JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/api/v1/bit", listener.local_addr().unwrap());
@@ -409,6 +573,106 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    fn confined(egress: ProviderEgress, own_hubs: &[&str]) -> HTTPClient {
+        let own_hubs = own_hubs.iter().map(|hub| Url::parse(hub).unwrap());
+        HTTPClient::new_without_refetch()
+            .confined_to(HubEgress::new(egress, own_hubs))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_confined_client_never_connects_to_the_hosts_own_network() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        for (egress, url) in [
+            (
+                ProviderEgress::Public,
+                format!("http://127.0.0.1:{port}/api/v1"),
+            ),
+            (
+                ProviderEgress::Public,
+                format!("https://127.0.0.1:{port}/api/v1"),
+            ),
+            (
+                ProviderEgress::Public,
+                "https://169.254.169.254/api/v1".to_string(),
+            ),
+            (
+                ProviderEgress::Public,
+                "https://10.0.0.5/api/v1".to_string(),
+            ),
+            (
+                ProviderEgress::Private,
+                format!("http://127.0.0.1:{port}/api/v1"),
+            ),
+            (
+                ProviderEgress::Private,
+                format!("http://localhost:{port}/api/v1"),
+            ),
+            (
+                ProviderEgress::Private,
+                "http://[fd00:ec2::254]/api/v1".to_string(),
+            ),
+        ] {
+            let http = confined(egress, &["https://hub.example.com/api/v1"]);
+            let request = http.client().get(&url).build().unwrap();
+            let refused = http
+                .revalidated_request::<Value>(request)
+                .await
+                .expect_err(&url);
+            assert!(
+                refused
+                    .to_string()
+                    .contains("is outside the addresses this server may reach"),
+                "{egress:?} {url}: {refused}"
+            );
+        }
+
+        let by_name = confined(ProviderEgress::Private, &[]);
+        let sent_directly = by_name
+            .client()
+            .get(format!("http://localhost:{port}/api/v1"))
+            .send()
+            .await;
+        assert!(sent_directly.is_err());
+
+        let connected =
+            flow_like_types::tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                .await;
+        assert!(connected.is_err(), "a refused hub request opened a socket");
+    }
+
+    #[tokio::test]
+    async fn a_confined_client_still_reaches_the_operators_own_hub() {
+        let (url, server) = serve_once(200, r#"["model"]"#).await;
+        let http = confined(ProviderEgress::Public, &[url.as_str()]);
+        let request = http.client().get(&url).build().unwrap();
+        let hash = http.quick_hash(&request);
+
+        let fetched = http.hashed_request::<Vec<String>>(request).await.unwrap();
+        server.await.unwrap();
+        assert_eq!(fetched, ["model"]);
+        let _ = delete_cache_file(&format!("http/{hash}"));
+
+        let same_host_other_port = Url::parse("http://127.0.0.1:1/api/v1").unwrap();
+        let refused = http.get(same_host_other_port).await.unwrap_err();
+        assert!(
+            refused
+                .to_string()
+                .contains("is outside the addresses this server may reach"),
+            "{refused}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unconfined_client_sends_every_request_as_before() {
+        let (url, server) = serve_once(200, r#"["model"]"#).await;
+        let http = HTTPClient::new_without_refetch();
+        let response = http.get(Url::parse(&url).unwrap()).await.unwrap();
+        server.await.unwrap();
+        assert_eq!(response.json::<Vec<String>>().await.unwrap(), ["model"]);
     }
 
     #[tokio::test]

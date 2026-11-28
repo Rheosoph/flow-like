@@ -442,9 +442,11 @@ async fn usage_summary(db: &DatabaseConnection, sub: &str) -> Result<UsageSummar
         embedding_usage_tracking::Entity::find()
             .filter(embedding_usage_tracking::Column::UserId.eq(sub))
             .count(db),
-        execution_usage_tracking::Entity::find()
-            .filter(execution_usage_tracking::Column::UserId.eq(sub))
-            .count(db),
+        crate::execution_usage_rollup::lifetime_executions(
+            db,
+            sub,
+            chrono::Utc::now().fixed_offset()
+        ),
     );
 
     let user_record = user_record?.ok_or(ApiError::FORBIDDEN)?;

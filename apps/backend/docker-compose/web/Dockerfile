@@ -21,6 +21,11 @@ COPY . .
 RUN rm -rf apps/web/public/device-crypto apps/desktop/public/device-crypto \
     apps/web/public/wordcraft apps/desktop/public/wordcraft \
     apps/web/public/craft apps/desktop/public/craft
+# Build one editor at a time to reduce peak memory across browser bundles.
+ARG CARGO_BUILD_JOBS=2
+ARG CRAFT_BUILD_CONCURRENCY=1
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
+    CRAFT_BUILD_CONCURRENCY=${CRAFT_BUILD_CONCURRENCY}
 RUN --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sharing=shared \
     --mount=type=cache,target=/app/target,id=cargo-target-device-crypto-web-rust-beta-2026-09-27,sharing=locked \
     CARGO_HOME=/cargo-home node packages/device-crypto/build-web.mjs && \
@@ -83,7 +88,7 @@ RUN --mount=type=cache,id=flow-like-next-node24-next16-${TARGETARCH},target=/app
 # ============================================================
 # Stage 3: Runtime (nginx to serve static files)
 # ============================================================
-FROM nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+FROM nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3
 
 # Copy custom nginx configuration
 COPY apps/backend/kubernetes/web/nginx-main.conf /etc/nginx/nginx.conf

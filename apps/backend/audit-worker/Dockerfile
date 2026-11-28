@@ -2,7 +2,7 @@
 FROM rust:1.97.1-bookworm AS builder
 COPY rust-toolchain.toml /rust-toolchain.toml
 RUN rustup toolchain install
-RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
 # The worker compiles the audit section of this document and accepts no runtime
@@ -11,12 +11,13 @@ COPY . .
 ARG FLOW_LIKE_CONFIG=apps/backend/docker-compose/flow-like.config.example.json
 RUN cp "$FLOW_LIKE_CONFIG" /app/flow-like.config.json
 ARG AUDIT_FEATURES=aws,azure,gcp
-ARG CARGO_BUILD_JOBS=2
+ARG CARGO_BUILD_JOBS=1
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 RUN --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sharing=shared \
     --mount=type=cache,target=/app/target,id=cargo-target-audit-worker-rust-beta-2026-09-27,sharing=locked \
-    CARGO_HOME=/cargo-home cargo build --locked --release --package flow-like-audit-worker --features "$AUDIT_FEATURES" && \
-    cp /app/target/release/flow-like-audit-worker /tmp/flow-like-audit-worker
+    CARGO_HOME=/cargo-home cargo build --locked --profile server --package flow-like-audit-worker --features "$AUDIT_FEATURES" && \
+    cp /app/target/server/flow-like-audit-worker /tmp/flow-like-audit-worker && \
+    strip --strip-all /tmp/flow-like-audit-worker
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/* && \

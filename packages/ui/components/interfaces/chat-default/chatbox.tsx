@@ -6,6 +6,7 @@ import AudioWaveform from "lucide-react/dist/esm/icons/audio-waveform.js";
 import CornerDownRight from "lucide-react/dist/esm/icons/corner-down-right.js";
 import FileIcon from "lucide-react/dist/esm/icons/file.js";
 import MicIcon from "lucide-react/dist/esm/icons/mic.js";
+import PlusIcon from "lucide-react/dist/esm/icons/plus.js";
 import Send from "lucide-react/dist/esm/icons/send.js";
 import SquareIcon from "lucide-react/dist/esm/icons/square.js";
 import WrenchIcon from "lucide-react/dist/esm/icons/wrench.js";
@@ -16,6 +17,7 @@ import {
 	memo,
 	useCallback,
 	useEffect,
+	useId,
 	useImperativeHandle,
 	useMemo,
 	useRef,
@@ -25,6 +27,8 @@ import { cn, humanFileSize } from "../../../lib/utils";
 import type { ComposerAttachSource } from "../../../state/composer-capture";
 import { useMentionPicker } from "../../bots-tab/mention-picker";
 import type { Mentionable } from "../../bots-tab/mentions";
+import type { TeamTagOption } from "../../bots-tab/team-tag-model";
+import { useTeamTagPicker } from "../../bots-tab/team-tag-picker";
 import type { ThinkingOption } from "../../thinking/thinking-options";
 import { ThinkingPicker } from "../../thinking/thinking-picker";
 import { Button } from "../../ui/button";
@@ -38,6 +42,7 @@ import { AttachMenu } from "./chatbox/attach-menu";
 import { useComposerHandoff } from "./chatbox/composer-handoff";
 import { FileManagerDialog } from "./chatbox/file-dialog";
 import { isImageFile, useImagePreviewUrls } from "./chatbox/image-previews";
+import { useCompactComposer } from "./compact-composer";
 import { type ChatBoxModel, ChatModelPicker } from "./model-picker";
 
 export type { ChatBoxModel } from "./model-picker";
@@ -89,6 +94,8 @@ interface ChatBoxProps {
 	actions?: ReactNode;
 	/** Who typing `@` suggests; the text keeps `@Name`, so the host reads mentions from it. */
 	mentionables?: readonly Mentionable[];
+	/** Teams a leading `#` suggests; the text keeps `#Tag`, which the server reads. */
+	teamTags?: readonly TeamTagOption[];
 	placeholder?: string;
 	/** This chat's own "+" sources, e.g. its app storage. Keep the array stable between renders. */
 	attachSources?: readonly ComposerAttachSource[];
@@ -108,6 +115,9 @@ export interface ChatBoxThinking {
 }
 
 const DEFAULT_TOOLS = ["Reason"];
+
+const ACTION_SIZE = "h-11 w-11 sm:h-8 sm:w-8";
+const COMPACT_ACTION_SIZE = "size-9 extend-touch-target";
 
 function formatTime(seconds: number) {
 	const mins = Math.floor(seconds / 60);
@@ -159,6 +169,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			model,
 			actions,
 			mentionables,
+			teamTags,
 			placeholder,
 			attachSources,
 		}: Readonly<ChatBoxProps>,
@@ -181,6 +192,13 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		const transcriptionBaseRef = useRef("");
 		const mentionPicker = useMentionPicker({
 			mentionables,
+			value: input,
+			onChange: setInput,
+			inputRef: chatboxRef,
+		});
+
+		const teamTagPicker = useTeamTagPicker({
+			teams: teamTags,
 			value: input,
 			onChange: setInput,
 			inputRef: chatboxRef,
@@ -239,6 +257,15 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			!!input.trim() || !!recordedAudio || attachedFiles.length > 0;
 		const hasDraft = hasContent || isRecording || isTranscribing;
 		const showStop = !!stop && !hasDraft;
+		const compact = useCompactComposer();
+		const actionSize = compact ? COMPACT_ACTION_SIZE : ACTION_SIZE;
+		const [trayOpen, setTrayOpen] = useState(false);
+		const trayId = useId();
+		const hasSettings =
+			Boolean(model) ||
+			(thinking?.options.length ?? 0) > 0 ||
+			Boolean(actions) ||
+			availableTools.length > 0;
 
 		// biome-ignore lint/correctness/useExhaustiveDependencies: `voiceMode` is the trigger; a newly configured mode clears the previous mode's speech failure and error.
 		useEffect(() => {
@@ -366,6 +393,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			writeDraft("", []);
 			setRecordedAudio(null);
 			setRecordedDuration(0);
+			setTrayOpen(false);
 
 			try {
 				await onSendMessage(message, files, activeTools, audio);
@@ -420,7 +448,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
 			if (e.nativeEvent.isComposing || composing) return;
-			if (mentionPicker.handleKeyDown(e)) return;
+			if (mentionPicker.handleKeyDown(e) || teamTagPicker.handleKeyDown(e))
+				return;
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
 				void handleSubmit(e);
@@ -541,6 +570,223 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			[renderRunStatus, showStop],
 		);
 
+		const textField = (className: string) => (
+			<Textarea
+				aria-label={placeholder ?? "Message"}
+				ref={chatboxRef}
+				value={input}
+				onChange={(e) => {
+					setInput(e.target.value);
+					mentionPicker.track(e.target);
+					teamTagPicker.track(e.target);
+				}}
+				onCompositionStart={() => setComposing(true)}
+				onCompositionEnd={() => setComposing(false)}
+				onKeyDown={handleKeyDown}
+				onKeyUp={(e) => {
+					mentionPicker.handleKeyUp(e);
+					teamTagPicker.handleKeyUp(e);
+				}}
+				onPaste={handlePaste}
+				placeholder={
+					placeholder ?? i18next.t("typeAMessage", "Type a message...")
+				}
+				className={className}
+				rows={Math.min(5, Math.max(1, input.split("\n").length))}
+				style={{
+					boxShadow: "none",
+					outline: "none",
+				}}
+				// iOS keyboard and input behavior tweaks
+				inputMode="text"
+				enterKeyHint="send"
+				autoCapitalize="sentences"
+				autoCorrect="on"
+				spellCheck
+			/>
+		);
+
+		const sendControls = (
+			<>
+				{runStatus}
+
+				{/* Voice-to-text transcription button (STT mode) */}
+				{audioInput && effectiveVoiceMode === "stt" && (
+					<Button
+						aria-label={
+							isTranscribing
+								? i18next.t(
+										"stopVoiceTranscription",
+										"Stop voice transcription",
+									)
+								: i18next.t(
+										"startVoiceTranscription",
+										"Start voice transcription",
+									)
+						}
+						type="button"
+						size="sm"
+						variant={isTranscribing ? "destructive" : "ghost"}
+						className={cn(
+							`${actionSize} p-0 rounded-full transition-colors`,
+							isTranscribing && "animate-pulse",
+						)}
+						onClick={isTranscribing ? stopTranscription : startTranscription}
+						disabled={isRecording || sendDisabled}
+					>
+						<AudioLines className="w-4 h-4" />
+					</Button>
+				)}
+
+				{/* Audio Recording Button (record mode) */}
+				{audioInput && effectiveVoiceMode === "record" && (
+					<div className="flex items-center gap-1">
+						{voiceInvoke === "hold" ? (
+							<>
+								<Button
+									aria-label={i18next.t("holdToRecord", "Hold to record")}
+									type="button"
+									size="sm"
+									variant={isRecording ? "destructive" : "ghost"}
+									className={cn(
+										`${actionSize} p-0 rounded-full select-none transition-colors`,
+										isRecording ? "animate-pulse" : "hover:bg-accent",
+									)}
+									disabled={
+										!!recordedAudio || sendDisabled || !recorder.isSupported
+									}
+									onPointerDown={() => startRecording()}
+									onPointerUp={() => stopRecording()}
+									onPointerLeave={() => {
+										if (isRecording) stopRecording();
+									}}
+									onContextMenu={(e) => e.preventDefault()}
+								>
+									<MicIcon className="w-4 h-4" />
+								</Button>
+								{isRecording && (
+									<span className="text-xs text-muted-foreground font-mono">
+										{formatTime(recorder.recordingTime)}
+									</span>
+								)}
+							</>
+						) : isRecording ? (
+							<>
+								<Button
+									aria-label={i18next.t(
+										"stopAudioRecording",
+										"Stop audio recording",
+									)}
+									type="button"
+									size="sm"
+									variant="destructive"
+									className={`${actionSize} p-0 rounded-full animate-pulse`}
+									onClick={stopRecording}
+								>
+									<SquareIcon className="w-3 h-3" />
+								</Button>
+								<Button
+									aria-label={i18next.t(
+										"cancelAudioRecording",
+										"Cancel audio recording",
+									)}
+									type="button"
+									size="sm"
+									variant="ghost"
+									className={`${actionSize} p-0 rounded-full`}
+									onClick={cancelRecording}
+								>
+									<X className="w-3 h-3" />
+								</Button>
+								<span className="text-xs text-muted-foreground font-mono">
+									{formatTime(recorder.recordingTime)}
+								</span>
+							</>
+						) : (
+							<Button
+								aria-label={i18next.t(
+									"startAudioRecording",
+									"Start audio recording",
+								)}
+								disabled={
+									!!recordedAudio || sendDisabled || !recorder.isSupported
+								}
+								type="button"
+								size="sm"
+								variant="ghost"
+								className={`${actionSize} p-0 rounded-full hover:bg-accent transition-colors`}
+								onClick={startRecording}
+							>
+								<MicIcon className="w-4 h-4 text-muted-foreground" />
+							</Button>
+						)}
+					</div>
+				)}
+
+				{/* Voice Mode Button */}
+				{audioInput && onVoiceModeToggle && (
+					<Button
+						type="button"
+						size="sm"
+						variant="ghost"
+						className={`${actionSize} p-0 rounded-full hover:bg-violet-500/10 hover:text-violet-500 transition-colors`}
+						onClick={onVoiceModeToggle}
+						disabled={isRecording || isTranscribing || sendDisabled}
+						title={i18next.t("voiceMode", "Voice mode")}
+					>
+						<AudioWaveform className="w-4 h-4" />
+					</Button>
+				)}
+
+				{onSteer && !showStop && (
+					<Button
+						aria-label={i18next.t(
+							"addToTheRunningResponse",
+							"Add to the running response",
+						)}
+						title={i18next.t(
+							"addToTheRunningResponseFlowpilotPicksItUpWithoutRestarting",
+							"Add to the running response — FlowPilot picks it up without restarting",
+						)}
+						type="button"
+						size="sm"
+						disabled={
+							sendDisabled ||
+							!input.trim() ||
+							isSteering ||
+							isRecording ||
+							isTranscribing
+						}
+						variant="secondary"
+						onMouseDown={keepComposerFocus}
+						onClick={handleSteer}
+						className={`${actionSize} p-0 rounded-full transition-all duration-200`}
+					>
+						<CornerDownRight className="w-4 h-4" />
+					</Button>
+				)}
+
+				{stop && showStop ? (
+					<StopButton stop={stop} sizeClass={actionSize} />
+				) : (
+					<Button
+						aria-label={sendHint ?? i18next.t("sendMessage", "Send message")}
+						title={sendHint}
+						type="submit"
+						size="sm"
+						disabled={
+							sendDisabled || isRecording || isTranscribing || !hasContent
+						}
+						variant={hasContent ? "default" : "secondary"}
+						onMouseDown={keepComposerFocus}
+						className={`${actionSize} p-0 rounded-full transition-all duration-200`}
+					>
+						<Send className="w-4 h-4" />
+					</Button>
+				)}
+			</>
+		);
+
 		return (
 			<div className="w-full max-w-screen-xl px-2">
 				<AttachmentStrip
@@ -567,263 +813,145 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					onSubmit={handleSubmit}
 					className="relative"
 					data-fl-chat-composer
+					data-guide="chat-composer"
 				>
 					{mentionPicker.menu}
-					<div
-						className="flex flex-col items-start overflow-hidden rounded-xl border border-border shadow-sm transition-all duration-200 focus-within:border-input focus-within:ring-2 focus-within:ring-ring"
-						onDrop={handleDrop}
-						onDragOver={handleDragOver}
-						style={{
-							backgroundColor:
-								"var(--fl-chat-composer-background, var(--background))",
-						}}
-					>
-						{/* Text Input */}
-						<div className="flex-1 py-2 w-full pr-2">
-							<Textarea
-								aria-label={placeholder ?? "Message"}
-								ref={chatboxRef}
-								value={input}
-								onChange={(e) => {
-									setInput(e.target.value);
-									mentionPicker.track(e.target);
-								}}
-								onCompositionStart={() => setComposing(true)}
-								onCompositionEnd={() => setComposing(false)}
-								onKeyDown={handleKeyDown}
-								onKeyUp={mentionPicker.handleKeyUp}
-								onPaste={handlePaste}
-								placeholder={
-									placeholder ?? i18next.t("typeAMessage", "Type a message...")
-								}
-								className="min-w-0 border-0 focus:ring-0 resize-none bg-transparent! placeholder:text-muted-foreground text-[16px] sm:text-sm leading-relaxed min-h-[44px] max-h-[180px] overflow-y-auto w-full"
-								rows={Math.min(5, Math.max(1, input.split("\n").length))}
-								style={{
-									boxShadow: "none",
-									outline: "none",
-								}}
-								// iOS keyboard and input behavior tweaks
-								inputMode="text"
-								enterKeyHint="send"
-								autoCapitalize="sentences"
-								autoCorrect="on"
-								spellCheck
-							/>
-						</div>
-
-						{/* Tool bar and settings */}
-						<div className="flex w-full items-center justify-between rounded-b-xl">
-							<ComposerTools
-								fileUpload={fileUpload}
-								model={model}
-								thinking={thinking}
-								actions={actions}
-								availableTools={availableTools}
-								activeTools={activeTools}
-								attachedCount={attachedFiles.length}
-								attachSources={attachSources}
-								onFileUpload={handleFileUpload}
-								onAddFiles={addFiles}
-								onInsertText={insertText}
-								onToolToggle={handleToolToggle}
-								onClearFiles={clearFiles}
-							/>
-
-							{/* Send Button & Audio Controls */}
-							<div className="p-2 pt-0 flex items-center gap-2">
-								{runStatus}
-
-								{/* Voice-to-text transcription button (STT mode) */}
-								{audioInput && effectiveVoiceMode === "stt" && (
-									<Button
-										aria-label={
-											isTranscribing
-												? i18next.t(
-														"stopVoiceTranscription",
-														"Stop voice transcription",
-													)
-												: i18next.t(
-														"startVoiceTranscription",
-														"Start voice transcription",
-													)
-										}
-										type="button"
-										size="sm"
-										variant={isTranscribing ? "destructive" : "ghost"}
-										className={cn(
-											"h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-colors",
-											isTranscribing && "animate-pulse",
-										)}
-										onClick={
-											isTranscribing ? stopTranscription : startTranscription
-										}
-										disabled={isRecording || sendDisabled}
-									>
-										<AudioLines className="w-4 h-4" />
-									</Button>
-								)}
-
-								{/* Audio Recording Button (record mode) */}
-								{audioInput && effectiveVoiceMode === "record" && (
-									<div className="flex items-center gap-1">
-										{voiceInvoke === "hold" ? (
-											<>
-												<Button
-													aria-label={i18next.t(
-														"holdToRecord",
-														"Hold to record",
-													)}
-													type="button"
-													size="sm"
-													variant={isRecording ? "destructive" : "ghost"}
-													className={cn(
-														"h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full select-none transition-colors",
-														isRecording ? "animate-pulse" : "hover:bg-accent",
-													)}
-													disabled={
-														!!recordedAudio ||
-														sendDisabled ||
-														!recorder.isSupported
-													}
-													onPointerDown={() => startRecording()}
-													onPointerUp={() => stopRecording()}
-													onPointerLeave={() => {
-														if (isRecording) stopRecording();
-													}}
-													onContextMenu={(e) => e.preventDefault()}
-												>
-													<MicIcon className="w-4 h-4" />
-												</Button>
-												{isRecording && (
-													<span className="text-xs text-muted-foreground font-mono">
-														{formatTime(recorder.recordingTime)}
-													</span>
-												)}
-											</>
-										) : isRecording ? (
-											<>
-												<Button
-													aria-label={i18next.t(
-														"stopAudioRecording",
-														"Stop audio recording",
-													)}
-													type="button"
-													size="sm"
-													variant="destructive"
-													className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full animate-pulse"
-													onClick={stopRecording}
-												>
-													<SquareIcon className="w-3 h-3" />
-												</Button>
-												<Button
-													aria-label={i18next.t(
-														"cancelAudioRecording",
-														"Cancel audio recording",
-													)}
-													type="button"
-													size="sm"
-													variant="ghost"
-													className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full"
-													onClick={cancelRecording}
-												>
-													<X className="w-3 h-3" />
-												</Button>
-												<span className="text-xs text-muted-foreground font-mono">
-													{formatTime(recorder.recordingTime)}
-												</span>
-											</>
-										) : (
-											<Button
-												aria-label={i18next.t(
-													"startAudioRecording",
-													"Start audio recording",
-												)}
-												disabled={
-													!!recordedAudio ||
-													sendDisabled ||
-													!recorder.isSupported
-												}
-												type="button"
-												size="sm"
-												variant="ghost"
-												className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full hover:bg-accent transition-colors"
-												onClick={startRecording}
-											>
-												<MicIcon className="w-4 h-4 text-muted-foreground" />
-											</Button>
-										)}
+					{teamTagPicker.menu}
+					{compact ? (
+						<div
+							className="flex flex-col overflow-hidden rounded-[22px] border border-border shadow-sm transition-[border-color] duration-200 focus-within:border-muted-foreground/40"
+							onDrop={handleDrop}
+							onDragOver={handleDragOver}
+							style={{
+								backgroundColor:
+									"var(--fl-chat-composer-background, var(--background))",
+							}}
+						>
+							{hasSettings && (
+								<div
+									id={trayId}
+									inert={!trayOpen || undefined}
+									className={cn(
+										"grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
+										trayOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+									)}
+								>
+									<div className="min-h-0 overflow-hidden">
+										<ComposerTools
+											tray
+											fileUpload={fileUpload}
+											model={model}
+											thinking={thinking}
+											actions={actions}
+											availableTools={availableTools}
+											activeTools={activeTools}
+											attachedCount={attachedFiles.length}
+											attachSources={attachSources}
+											onFileUpload={handleFileUpload}
+											onAddFiles={addFiles}
+											onInsertText={insertText}
+											onToolToggle={handleToolToggle}
+											onClearFiles={clearFiles}
+										/>
 									</div>
-								)}
-
-								{/* Voice Mode Button */}
-								{audioInput && onVoiceModeToggle && (
+								</div>
+							)}
+							<div className="flex w-full items-end gap-0.5 p-1">
+								{hasSettings ? (
 									<Button
 										type="button"
 										size="sm"
 										variant="ghost"
-										className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full hover:bg-violet-500/10 hover:text-violet-500 transition-colors"
-										onClick={onVoiceModeToggle}
-										disabled={isRecording || isTranscribing || sendDisabled}
-										title={i18next.t("voiceMode", "Voice mode")}
-									>
-										<AudioWaveform className="w-4 h-4" />
-									</Button>
-								)}
-
-								{onSteer && !showStop && (
-									<Button
-										aria-label={i18next.t(
-											"addToTheRunningResponse",
-											"Add to the running response",
-										)}
-										title={i18next.t(
-											"addToTheRunningResponseFlowpilotPicksItUpWithoutRestarting",
-											"Add to the running response — FlowPilot picks it up without restarting",
-										)}
-										type="button"
-										size="sm"
-										disabled={
-											sendDisabled ||
-											!input.trim() ||
-											isSteering ||
-											isRecording ||
-											isTranscribing
-										}
-										variant="secondary"
-										onMouseDown={keepComposerFocus}
-										onClick={handleSteer}
-										className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-all duration-200"
-									>
-										<CornerDownRight className="w-4 h-4" />
-									</Button>
-								)}
-
-								{stop && showStop ? (
-									<StopButton stop={stop} />
-								) : (
-									<Button
+										aria-expanded={trayOpen}
+										aria-controls={trayId}
 										aria-label={
-											sendHint ?? i18next.t("sendMessage", "Send message")
+											trayOpen
+												? i18next.t(
+														"composerHideOptions",
+														"Hide attachments and options",
+													)
+												: i18next.t(
+														"composerShowOptions",
+														"Attachments and options",
+													)
 										}
-										title={sendHint}
-										type="submit"
-										size="sm"
-										disabled={
-											sendDisabled ||
-											isRecording ||
-											isTranscribing ||
-											!hasContent
-										}
-										variant={hasContent ? "default" : "secondary"}
 										onMouseDown={keepComposerFocus}
-										className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-all duration-200"
+										onClick={() => setTrayOpen((open) => !open)}
+										className={cn(
+											COMPACT_ACTION_SIZE,
+											"shrink-0 rounded-full p-0 text-muted-foreground",
+										)}
 									>
-										<Send className="w-4 h-4" />
+										<PlusIcon
+											className={cn(
+												"size-5 transition-transform duration-200 motion-reduce:transition-none",
+												trayOpen && "rotate-45",
+											)}
+										/>
 									</Button>
+								) : (
+									<AttachMenu
+										fileUpload={fileUpload}
+										sources={attachSources}
+										onFileUpload={handleFileUpload}
+										onAddFiles={addFiles}
+										onInsertText={insertText}
+										triggerClassName={cn(
+											COMPACT_ACTION_SIZE,
+											"shrink-0 rounded-full",
+										)}
+									/>
 								)}
+								{textField(
+									"min-w-0 flex-1 border-0 focus:ring-0 focus-visible:ring-0 resize-none bg-transparent! shadow-none placeholder:text-muted-foreground text-[16px] leading-6 min-h-9 max-h-[180px] overflow-y-auto rounded-none px-1.5 py-1.5",
+								)}
+								<div className="flex shrink-0 items-center gap-0.5">
+									{sendControls}
+								</div>
 							</div>
 						</div>
-					</div>
+					) : (
+						<div
+							className="flex flex-col items-start overflow-hidden rounded-xl border border-border shadow-sm transition-all duration-200 focus-within:border-input focus-within:ring-2 focus-within:ring-ring"
+							onDrop={handleDrop}
+							onDragOver={handleDragOver}
+							style={{
+								backgroundColor:
+									"var(--fl-chat-composer-background, var(--background))",
+							}}
+						>
+							{/* Text Input */}
+							<div className="flex-1 py-2 w-full pr-2">
+								{textField(
+									"min-w-0 border-0 focus:ring-0 resize-none bg-transparent! placeholder:text-muted-foreground text-[16px] sm:text-sm leading-relaxed min-h-[44px] max-h-[180px] overflow-y-auto w-full",
+								)}
+							</div>
+
+							{/* Tool bar and settings */}
+							<div className="flex w-full items-center justify-between rounded-b-xl">
+								<ComposerTools
+									fileUpload={fileUpload}
+									model={model}
+									thinking={thinking}
+									actions={actions}
+									availableTools={availableTools}
+									activeTools={activeTools}
+									attachedCount={attachedFiles.length}
+									attachSources={attachSources}
+									onFileUpload={handleFileUpload}
+									onAddFiles={addFiles}
+									onInsertText={insertText}
+									onToolToggle={handleToolToggle}
+									onClearFiles={clearFiles}
+								/>
+
+								{/* Send Button & Audio Controls */}
+								<div className="p-2 pt-0 flex items-center gap-2">
+									{sendControls}
+								</div>
+							</div>
+						</div>
+					)}
 				</form>
 				{voiceError && (
 					<p className="mt-2 px-2 text-xs text-destructive" role="alert">
@@ -942,7 +1070,9 @@ const AttachmentStrip = memo(function AttachmentStrip({
 							className="h-8 rounded-full px-3 text-xs text-muted-foreground"
 							onClick={onShowAll}
 						>
-							+{files.length - 6} more
+							{t("chipoverflowMore", "+{{chipOverflow}} more", {
+								chipOverflow: files.length - 6,
+							})}
 						</Button>
 					)}
 
@@ -964,6 +1094,8 @@ const AttachmentStrip = memo(function AttachmentStrip({
 });
 
 interface ComposerToolsProps {
+	/** Inside the phone composer's tray: one scrolling row, a paperclip for files. */
+	readonly tray?: boolean;
 	readonly fileUpload: boolean;
 	readonly model?: ChatBoxModel;
 	readonly thinking?: ChatBoxThinking;
@@ -981,6 +1113,7 @@ interface ComposerToolsProps {
 
 /** The composer's left controls. None depend on the draft, so typing skips them. */
 const ComposerTools = memo(function ComposerTools({
+	tray = false,
 	fileUpload,
 	model,
 	thinking,
@@ -997,13 +1130,21 @@ const ComposerTools = memo(function ComposerTools({
 }: ComposerToolsProps) {
 	const { t } = useTranslation();
 	return (
-		<div className="flex min-w-0 flex-wrap items-center gap-1 p-2 pt-0">
+		<div
+			className={cn(
+				"flex min-w-0 items-center gap-1",
+				tray
+					? "flex-nowrap overflow-x-auto overscroll-x-contain border-b px-1.5 py-1.5 [scrollbar-width:none]"
+					: "flex-wrap p-2 pt-0",
+			)}
+		>
 			<AttachMenu
 				fileUpload={fileUpload}
 				sources={attachSources}
 				onFileUpload={onFileUpload}
 				onAddFiles={onAddFiles}
 				onInsertText={onInsertText}
+				icon={tray ? "paperclip" : "plus"}
 			/>
 
 			{model && <ChatModelPicker {...model} />}
@@ -1099,7 +1240,10 @@ const ComposerTools = memo(function ComposerTools({
 });
 
 /** Send's stand-in while a response streams; the ring spins until every response is cancelling. */
-function StopButton({ stop }: { stop: ChatBoxStop }) {
+function StopButton({
+	stop,
+	sizeClass,
+}: Readonly<{ stop: ChatBoxStop; sizeClass: string }>) {
 	return (
 		<Button
 			aria-label={stop.label}
@@ -1109,7 +1253,7 @@ function StopButton({ stop }: { stop: ChatBoxStop }) {
 			variant="secondary"
 			disabled={stop.stopping}
 			onClick={stop.onStop}
-			className="relative h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full"
+			className={cn("relative p-0 rounded-full", sizeClass)}
 		>
 			{!stop.stopping && (
 				<span

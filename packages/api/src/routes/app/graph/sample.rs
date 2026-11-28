@@ -1,4 +1,3 @@
-use crate::routes::app::db::column_reader;
 use crate::{
     ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
@@ -8,7 +7,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like_catalog_core::DEFAULT_GRAPH_SAMPLE_SIZE;
-use flow_like_storage::databases::graph::lancegraph;
+use flow_like_query::graph::GraphOperation;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct SampleParams {
@@ -44,9 +43,12 @@ impl SampleParams {
     ),
     responses(
         (status = 200, description = "Sample data", body = Vec<flow_like_types::Value>),
+        (status = 400, description = "The label is not part of the overlay, or the sample failed"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 404, description = "Label not found")
+        (status = 404, description = "Overlay not found"),
+        (status = 503, description = "The query service is unavailable"),
+        (status = 504, description = "The sample ran out of time")
     ),
     security(
         ("bearer_auth" = []),
@@ -74,13 +76,20 @@ pub async fn sample_nodes(
 
     let scope = params.scope_params();
 
-    let (connection, overlay) =
-        super::load_scoped_overlay(&state, &user, &app_id, &overlay_id, &scope).await?;
-    let overlay =
-        lancegraph::restrict_overlay(&connection, overlay, &column_reader(&permission, &scope))
-            .await?;
-    let results =
-        lancegraph::sample_overlay(&connection, &overlay, &params.label, params.n.min(500)).await?;
+    let results = super::read_overlay(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &overlay_id,
+        &scope,
+        |overlay| GraphOperation::Sample {
+            overlay: Box::new(overlay),
+            label: params.label,
+            n: params.n.min(super::MAX_SAMPLE_ROWS),
+        },
+    )
+    .await?;
 
     Ok(Json(results))
 }

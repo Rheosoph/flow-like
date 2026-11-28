@@ -1,15 +1,7 @@
 "use client";
 
 import { Loader2, Plus, Trash2 } from "lucide-react";
-import {
-	type ReactNode,
-	cloneElement,
-	isValidElement,
-	useEffect,
-	useId,
-	useMemo,
-	useState,
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { getApiOrigin } from "../../lib/api-url";
 import { NATIVE_CHART_TYPES } from "../../lib/native-widget";
@@ -23,14 +15,24 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { HomeDataWidget } from "./data-widget";
+import { Choice, Field } from "./data-widget-settings-fields";
+import {
+	HomeDataSqlSettings,
+	homeDataCacheChoices,
+	newHomeDataSqlSource,
+} from "./data-widget-sql-settings";
 import {
 	HOME_DATA_AGGREGATIONS,
 	HOME_DATA_FILTER_OPERATORS,
+	HOME_DATA_LIMIT_WARNING,
+	HOME_DATA_MAX_LIMIT,
 	HOME_DATA_VISUALIZATIONS,
 	type HomeDataConfig,
 	extractHomeQueryParameters,
 	homeDataColumns,
 	homeDataMeasureTitle,
+	homeDataSqlConfigError,
+	homeDataSqlSchemaQuery,
 	homeOntologyColumns,
 	homeSavedQuerySchemaQuery,
 	normalizeHomeDataConfig,
@@ -39,62 +41,6 @@ import {
 } from "./home-data-query";
 import type { IHomeWidget } from "./types";
 
-const selectClass =
-	"h-9 w-full min-w-0 rounded-md border border-input bg-background px-2 text-sm";
-function Field({
-	label,
-	children,
-	hint,
-}: { label: string; children: ReactNode; hint?: string }) {
-	const id = useId();
-	return (
-		<div className="flex min-w-0 flex-col gap-1.5 text-sm">
-			<label htmlFor={id} className="text-xs font-medium">
-				{label}
-			</label>
-			{isValidElement<Record<string, unknown>>(children)
-				? cloneElement(children, { id })
-				: children}
-			{hint && (
-				<span className="text-xs font-normal text-muted-foreground">
-					{hint}
-				</span>
-			)}
-		</div>
-	);
-}
-function Choice({
-	label,
-	value,
-	options,
-	onChange,
-	optional,
-	hint,
-}: {
-	label: string;
-	value: string;
-	options: readonly (readonly [string, string])[];
-	onChange: (value: string) => void;
-	optional?: string;
-	hint?: string;
-}) {
-	return (
-		<Field label={label} hint={hint}>
-			<select
-				className={selectClass}
-				value={value}
-				onChange={(event) => onChange(event.target.value)}
-			>
-				{optional !== undefined && <option value="">{optional}</option>}
-				{options.map(([id, name]) => (
-					<option key={id} value={id}>
-						{name}
-					</option>
-				))}
-			</select>
-		</Field>
-	);
-}
 const filterNames = {
 	eq: "Equals",
 	neq: "Does not equal",
@@ -144,6 +90,19 @@ export function HomeDataWidgetSettings({
 	const stableParams = useMemo(
 		() => JSON.parse(paramSignature) as Record<string, unknown>,
 		[paramSignature],
+	);
+	const sqlSignature = JSON.stringify({
+		sql: config.sql,
+		sources: config.sources,
+		cacheSeconds: config.cacheSeconds,
+	});
+	const sqlSource = useMemo(
+		() =>
+			JSON.parse(sqlSignature) as Pick<
+				HomeDataConfig,
+				"sql" | "sources" | "cacheSeconds"
+			>,
+		[sqlSignature],
 	);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: A profile switch must refresh available apps even when its backend instance is reused.
 	useEffect(() => {
@@ -228,6 +187,36 @@ export function HomeDataWidgetSettings({
 		let active = true;
 		setColumns([]);
 		setColumnError(null);
+		if (config.sourceKind === "sql") {
+			if (homeDataSqlConfigError(sqlSource)) return;
+			const timer = setTimeout(() => {
+				void (async () => {
+					try {
+						const result = await backend.queryState.executeCrossAppSql(
+							homeDataSqlSchemaQuery(
+								sqlSource,
+								resolveHomeQueryParams(
+									{ queryParams: stableParams },
+									auth?.user?.profile?.sub,
+								),
+							),
+						);
+						if (active) setColumns(result.columns);
+					} catch (reason) {
+						if (active)
+							setColumnError(
+								reason instanceof Error
+									? reason.message
+									: "Fields could not be loaded.",
+							);
+					}
+				})();
+			}, 600);
+			return () => {
+				active = false;
+				clearTimeout(timer);
+			};
+		}
 		if (!config.appId) return;
 		if (config.sourceKind === "ontology") {
 			if (overlay) setColumns(homeOntologyColumns(overlay, config.objectType));
@@ -280,6 +269,7 @@ export function HomeDataWidgetSettings({
 		config.objectType,
 		overlay,
 		savedQuery,
+		sqlSource,
 		stableParams,
 		personal,
 		auth?.user?.profile?.sub,
@@ -333,13 +323,15 @@ export function HomeDataWidgetSettings({
 			</p>
 			<div className="space-y-3 rounded-xl border border-border/60 bg-muted/10 p-3">
 				<p className="text-xs font-semibold">Data source</p>
-				<Choice
-					label="App"
-					value={config.appId}
-					options={apps}
-					optional="Choose an app"
-					onChange={(appId) => patch({ ...resetSource, appId })}
-				/>
+				{config.sourceKind !== "sql" && (
+					<Choice
+						label="App"
+						value={config.appId}
+						options={apps}
+						optional="Choose an app"
+						onChange={(appId) => patch({ ...resetSource, appId })}
+					/>
+				)}
 				<div className="grid grid-cols-2 gap-3">
 					<Choice
 						label="Source"
@@ -348,26 +340,46 @@ export function HomeDataWidgetSettings({
 							["table", "Native table"],
 							["ontology", "Ontology objects"],
 							["query", "Saved query or view"],
+							...(native ? [] : [["sql", "SQL across apps"] as const]),
 						]}
 						onChange={(value) =>
 							patch({
 								...resetSource,
 								sourceKind: value as HomeDataConfig["sourceKind"],
+								...(value === "sql" && !config.sources.length
+									? { sources: [newHomeDataSqlSource()] }
+									: {}),
 							})
 						}
 					/>
-					<Choice
-						label="Database"
-						value={config.scope}
-						options={[
-							["project", "Project data"],
-							["personal", "Viewer's personal data"],
-						]}
-						onChange={(value) =>
-							patch({ ...resetSource, scope: value as HomeDataConfig["scope"] })
-						}
-					/>
+					{config.sourceKind === "sql" ? (
+						<Choice
+							label="Reuse results for"
+							hint="Shared with people who have the same access. A change to a queried table refreshes it."
+							value={String(config.cacheSeconds)}
+							options={homeDataCacheChoices(config.cacheSeconds)}
+							onChange={(value) => patch({ cacheSeconds: Number(value) })}
+						/>
+					) : (
+						<Choice
+							label="Database"
+							value={config.scope}
+							options={[
+								["project", "Project data"],
+								["personal", "Viewer's personal data"],
+							]}
+							onChange={(value) =>
+								patch({
+									...resetSource,
+									scope: value as HomeDataConfig["scope"],
+								})
+							}
+						/>
+					)}
 				</div>
+				{config.sourceKind === "sql" && (
+					<HomeDataSqlSettings config={config} apps={apps} patch={patch} />
+				)}
 				{loading && (
 					<p className="flex items-center gap-2 text-xs text-muted-foreground">
 						<Loader2 className="size-3 animate-spin" />
@@ -1011,11 +1023,18 @@ export function HomeDataWidgetSettings({
 						})
 					}
 				/>
-				<Field label="Result limit">
+				<Field
+					label="Result limit"
+					hint={
+						!native && config.limit > HOME_DATA_LIMIT_WARNING
+							? "Large results slow down Home; aggregate in SQL where you can."
+							: undefined
+					}
+				>
 					<Input
 						type="number"
 						min={1}
-						max={native ? 120 : 500}
+						max={native ? 120 : HOME_DATA_MAX_LIMIT}
 						value={config.limit}
 						onChange={(event) => patch({ limit: Number(event.target.value) })}
 					/>

@@ -1,7 +1,7 @@
 {
 	"repository": "https://github.com/storytold/vectorcraft.git",
-	"revision": "5628de96f866185d8eb289b167b89691f213c0c3",
-	"version": "0.20.0",
+	"revision": "8e7a6142fccc26f6aba3e1627e30202a1a9f79de",
+	"version": "0.24.1",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "vectorcraft-web",
 	"label": "Flows Vector",

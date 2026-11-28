@@ -35,16 +35,29 @@ function Dots() {
 export function ConversationActivityLine({
 	bots,
 	typing,
+	drafting,
 	directory,
 }: Readonly<{
 	bots: readonly BotActivity[];
 	typing: readonly string[];
+	/** Bots whose reply shows as a live bubble; they are not announced a second time. */
+	drafting?: ReadonlySet<string>;
 	directory: CrewDirectory;
 }>) {
 	const { t } = useTranslation("bots");
 
+	const announced = useMemo(
+		() =>
+			drafting?.size
+				? bots.filter(
+						(bot) => !(bot.status === "running" && drafting.has(bot.botId)),
+					)
+				: bots,
+		[bots, drafting],
+	);
+
 	const text = useMemo(() => {
-		const parts = bots.map((bot) => {
+		const parts = announced.map((bot) => {
 			const name = directory(bot.botId).name;
 			if (bot.status === "running")
 				return bot.statusText
@@ -76,11 +89,12 @@ export function ConversationActivityLine({
 			parts.push(t("crew.activity.typingMany", "Several people are typing"));
 		}
 		return parts.join(" · ");
-	}, [bots, typing, directory, t]);
+	}, [announced, typing, directory, t]);
 
 	const avatars = useMemo(
-		() => [...bots.map((bot) => bot.botId), ...typing].slice(0, MAX_AVATARS),
-		[bots, typing],
+		() =>
+			[...announced.map((bot) => bot.botId), ...typing].slice(0, MAX_AVATARS),
+		[announced, typing],
 	);
 
 	return (

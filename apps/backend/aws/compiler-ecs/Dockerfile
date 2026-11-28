@@ -5,15 +5,6 @@ WORKDIR /app
 
 ARG CARGO_BUILD_JOBS
 
-RUN apt-get update && apt-get install -y \
-        clang \
-        cmake \
-        pkg-config \
-        libssl-dev \
-        libclang-dev \
-        protobuf-compiler \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY . .
 
 RUN --mount=type=cache,id=flow-like-rust-beta-2026-09-27-bookworm-arm64-registry,target=/usr/local/cargo/registry,sharing=locked \

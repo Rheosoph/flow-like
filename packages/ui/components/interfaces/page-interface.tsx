@@ -884,6 +884,7 @@ function PageInterfaceInner({
 						onA2UIMessage={handleA2UIMessage}
 						onNavigationMessage={onNavigationMessage}
 						isPreviewMode={!executionPending}
+						executionPending={executionPending}
 						openDialog={openDialog}
 						closeDialog={closeDialog}
 						agentBridge={

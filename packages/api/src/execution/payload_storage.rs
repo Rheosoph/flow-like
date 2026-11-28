@@ -36,6 +36,10 @@ pub struct StoredPayload {
     pub path: String,
 }
 
+fn payload_path(app_id: &str, run_id: &str) -> StoragePath {
+    StoragePath::from(format!("runs/{}/{}/payload", app_id, run_id))
+}
+
 /// Store an encrypted payload in object storage.
 ///
 /// Returns the base64-encoded key (which includes the nonce) to be stored in the database.
@@ -61,8 +65,7 @@ pub async fn store_payload(
         .encrypt(&nonce, payload)
         .map_err(|e| PayloadStorageError::Encryption(e.to_string()))?;
 
-    // Store in object storage
-    let path = StoragePath::from(format!("runs/{}/{}/payload", app_id, run_id));
+    let path = payload_path(app_id, run_id);
     store.put(&path, PutPayload::from(ciphertext)).await?;
 
     // Combine nonce + key for storage (nonce is not secret, but convenient to store together)
@@ -96,9 +99,7 @@ pub async fn retrieve_payload(
     let nonce_bytes = &key_with_nonce[..NONCE_LEN];
     let key = &key_with_nonce[NONCE_LEN..];
 
-    // Fetch from object storage
-    let path = StoragePath::from(format!("runs/{}/{}/payload", app_id, run_id));
-    let result = store.get(&path).await?;
+    let result = store.get(&payload_path(app_id, run_id)).await?;
     let ciphertext = result.bytes().await?;
 
     // Decrypt
@@ -113,6 +114,16 @@ pub async fn retrieve_payload(
         .map_err(|e| PayloadStorageError::Decryption(e.to_string()))?;
 
     Ok(plaintext)
+}
+
+/// Remove the payload of a run that was never recorded, whose key therefore exists nowhere.
+pub async fn discard_payload(
+    store: Arc<dyn ObjectStore>,
+    app_id: &str,
+    run_id: &str,
+) -> Result<(), PayloadStorageError> {
+    store.delete(&payload_path(app_id, run_id)).await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -134,5 +145,24 @@ mod tests {
             .unwrap();
 
         assert_eq!(payload.as_slice(), retrieved.as_slice());
+    }
+
+    #[tokio::test]
+    async fn a_discarded_payload_is_gone() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let stored = store_payload(store.clone(), "app1", "run1", b"refused")
+            .await
+            .unwrap();
+
+        discard_payload(store.clone(), "app1", "run1")
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            retrieve_payload(store, "app1", "run1", &stored.key).await,
+            Err(PayloadStorageError::Storage(
+                flow_like_storage::object_store::Error::NotFound { .. }
+            ))
+        ));
     }
 }

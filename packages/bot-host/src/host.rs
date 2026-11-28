@@ -8,7 +8,7 @@ use flow_like::copilot::UnifiedChatMessage;
 use flow_like_types::bot_turn::TurnStatus;
 use serde::Serialize;
 use serde_json::json;
-use std::{any::Any, sync::Arc};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 pub const CODE_TIMEOUT: &str = "BOT_TURN_TIMEOUT";
 pub const CODE_MODEL: &str = "BOT_TURN_MODEL_ERROR";
@@ -74,6 +74,8 @@ pub struct TurnJob {
     pub trail: Option<flow_like::flow::copilot::ToolTrail>,
     /// The files the bot attaches to its reply, for a host that posts them with it.
     pub reply_files: Option<flow_like::flow::copilot::ReplyFiles>,
+    /// The longer discussion a room turn proposes, for a host that posts it on the reply.
+    pub discussion: Option<flow_like::flow::copilot::bot_discussion::DiscussionReply>,
     /// Takes the reply while the model writes it, for a live call on this computer
     /// ([`crate::live_reply`]); a runner given one hands text on as it comes.
     pub reply_stream: Option<flow_like::flow::copilot::reply_stream::ReplySink>,
@@ -161,22 +163,34 @@ pub trait TurnRunner: Send + Sync + 'static {
     fn cancel(&self, run_id: &str);
 }
 
-/// Only text and speaker identity reach the classifier, within a bounded recent window.
+/// Only text and speaker identity reach the classifier, within a bounded recent window. Each
+/// message names its speaker, and `is_this_bot` marks the bot's own.
 pub fn participation_request(
     job: &TurnJob,
     trigger: &str,
     entries: &[flow_like_local_bots::InboxEntry],
     participants: &[flow_like::flow::copilot::decision::DecisionParticipant],
+    names: &HashMap<String, String>,
 ) -> flow_like_types::Result<flow_like::flow_like_model_provider::systemone::SystemOneRequest> {
     use flow_like::flow::copilot::decision;
     use flow_like_types::inbox::{InboxEntryKind, is_tombstone};
+    let name_of = |id: &str| {
+        participants
+            .iter()
+            .find(|participant| participant.id == id)
+            .map(|participant| participant.name.as_str())
+            .or_else(|| names.get(id).map(String::as_str))
+            .unwrap_or(id)
+            .to_owned()
+    };
     let mut recent: Vec<_> = entries
         .iter()
         .rev()
         .filter(|entry| !is_tombstone(&entry.envelope))
         .filter_map(|entry| {
             let text = entry.envelope.get("body")?.get("text")?.as_str()?;
-            Some(json!({"sender_id": entry.sender_id, "kind": entry.kind,
+            Some(json!({"sender": name_of(&entry.sender_id),
+                "is_this_bot": entry.sender_id == job.bot_id, "kind": entry.kind,
                 "text": decision::excerpt(text, 1000)}))
         })
         .take(12)
@@ -188,8 +202,14 @@ pub fn participation_request(
     decision::request(
         &job.bot_id,
         json!({
+            "bot_name": name_of(&job.bot_id),
             "prompt": decision::excerpt(&job.prompt, 4000),
             "addressed": job.requester.as_ref().is_none_or(|requester| requester.addressed),
+            "talking_with": job
+                .requester
+                .as_ref()
+                .and_then(|requester| requester.talking_with.as_ref())
+                .map(|partner| partner.decision_context()),
             "interaction": if call { "call" } else { "chat" },
             "recent_messages": recent,
         }),

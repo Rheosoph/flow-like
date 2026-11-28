@@ -12,8 +12,13 @@ import {
 } from "../../../../state/backend-state/bot-state";
 import { Label } from "../../../ui/label";
 import { Switch } from "../../../ui/switch";
+import { BotCalendarConnectorsCard } from "../../bot-calendar-connectors";
 import { BotConnectorsCard } from "../../bot-connectors";
-import { BotEmailAddress } from "../../bot-mail";
+import {
+	BotEmailAddress,
+	BotEmailLocalNote,
+	BotPendingEmailAddress,
+} from "../../bot-mail";
 import { BotSkillsCard } from "../../bot-skills";
 import {
 	BOT_CAPABILITY_GROUPS,
@@ -84,6 +89,8 @@ export function AbilitiesStep({
 	appAccess,
 	pendingAppIds,
 	onPendingAppIdsChange,
+	pendingEmailAlias,
+	onPendingEmailAliasChange,
 	onToggle,
 	onProfileChange,
 	onEmbeddingModelChange,
@@ -96,6 +103,8 @@ export function AbilitiesStep({
 	appAccess: BotAppDraft;
 	pendingAppIds: readonly string[];
 	onPendingAppIdsChange: (ids: string[]) => void;
+	pendingEmailAlias: string;
+	onPendingEmailAliasChange: (alias: string) => void;
 	onToggle: (capability: BotCapability, enabled: boolean) => void;
 	onProfileChange: (profileId: string) => void;
 	onEmbeddingModelChange: (embeddingModel: string | null) => void;
@@ -124,15 +133,16 @@ export function AbilitiesStep({
 		),
 		email: botId ? (
 			<BotEmailAddress botId={botId} />
+		) : localOnly ? (
+			<BotEmailLocalNote />
 		) : (
-			<p className="text-xs text-muted-foreground">
-				{t(
-					"panel.mail.afterSave",
-					"Save the bot first, then pick its address here or in its Details.",
-				)}
-			</p>
+			<BotPendingEmailAddress
+				alias={pendingEmailAlias}
+				onChange={onPendingEmailAliasChange}
+			/>
 		),
 		connectors: <BotConnectorsCard botId={botId} />,
+		calendar: <BotCalendarConnectorsCard botId={botId} localOnly={localOnly} />,
 		skills: botId ? (
 			<BotSkillsCard botId={botId} />
 		) : (

@@ -21,4 +21,5 @@ export {
 export { I18nProvider, useLanguage, type UseLanguageResult } from "./provider";
 export { SOURCE_RESOURCES, type SourceResources } from "./resources";
 export { Trans, useTranslation } from "react-i18next";
+export type { FallbackTranslate } from "./types";
 import "./types";

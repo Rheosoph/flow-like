@@ -1,14 +1,16 @@
 //! The desktop's connectors for a bot's turn. A local bot's live in the local store, an account
 //! bot's at the hub. The calls run in this process: an OAuth account's sign-in comes from the
 //! native OAuth store under the bot's workspace app id (the person consented there), an MCP
-//! server's from a bot secret. Localhost MCP servers are reachable; the token still goes only to
-//! the provider's API hosts.
+//! server's from a bot secret, a CalDAV calendar's password from the local store (an account
+//! bot's CalDAV password stays sealed at the hub). Localhost MCP and CalDAV servers are
+//! reachable; the token still goes only to the provider's API hosts.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use flow_like::flow::compiled::prerun::PrerunOAuthRequirement;
+use flow_like_bot_tools::calendar::caldav::{account_hosts, basic_credential};
 use flow_like_bot_tools::services::{
     CallAudit, CallBudget, ConnectorEntry, ConnectorSource, Credential,
 };
@@ -119,6 +121,7 @@ fn entry_of(connector: &BotConnector, hosts: HubHosts) -> ConnectorEntry {
                 .map(|hosts| hosts.api_hosts.as_slice())
                 .unwrap_or_default(),
         ),
+        (_, ConnectorKind::Caldav) => account_hosts(connector.url.as_deref().unwrap_or_default()),
         _ => Vec::new(),
     };
     ConnectorEntry {
@@ -127,6 +130,7 @@ fn entry_of(connector: &BotConnector, hosts: HubHosts) -> ConnectorEntry {
         url: connector.url.clone(),
         provider_id: connector.provider_id.clone(),
         api_hosts,
+        calendar: connector.calendar().cloned(),
     }
 }
 
@@ -188,6 +192,23 @@ pub(crate) async fn credential_for(
 ) -> Result<Credential> {
     match &connector.auth {
         ConnectorAuth::None => Ok(Credential::none()),
+        ConnectorAuth::Basic { username } => {
+            let bots = app
+                .try_state::<LocalBots>()
+                .ok_or_else(|| anyhow!("Bots on this device are unavailable"))?;
+            let (bot_id, connector_id) = (connector.bot_id.clone(), connector.id.clone());
+            let password = on_store(&bots, move |store| {
+                store.connector_password(&bot_id, &connector_id)
+            })
+            .await
+            .map_err(|error| {
+                anyhow!(
+                    "'{}' keeps its password where it was connected, and this device cannot read it: {error}",
+                    connector.label
+                )
+            })?;
+            Ok(basic_credential(username, &password))
+        }
         ConnectorAuth::Secret { name } => {
             let value = secrets.secret(name).await?.ok_or_else(|| {
                 anyhow!(

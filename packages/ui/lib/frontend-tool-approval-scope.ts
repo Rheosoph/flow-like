@@ -1,5 +1,10 @@
 import type { IBotState } from "../state/backend-state/bot-state";
-import { SCOPE_ALL, programName } from "./tool-grant-scopes";
+import {
+	SCOPE_ALL,
+	grantScopes,
+	programName,
+	siteReadsOnly,
+} from "./tool-grant-scopes";
 
 export interface FrontendToolApprovalScopeInput {
 	requestId: string;
@@ -12,7 +17,7 @@ export interface FrontendToolApprovalScopeInput {
 	asksAgain?: AsksAgain;
 }
 
-/** The turn read web pages first, so the host set a standing grant for this call aside. */
+/** The turn read web pages first: only a grant for the site of a plain read still covers the call. */
 export type AsksAgain = "web_content";
 
 /** The host's `asks_again` mark on a request's approval, in either spelling the hosts send. */
@@ -181,17 +186,21 @@ export class StandingApprovals {
 		return request;
 	}
 
-	/** Whether the bot's persisted grants cover every scope of this call; false when they can't be read. */
+	/**
+	 * Whether the bot's persisted grants cover every scope of this call; false when they can't be
+	 * read. `ownScopesOnly`: a tool-wide grant does not count (a site read after web content).
+	 */
 	async coveredByGrant(
 		owner: ApprovalOwner,
 		tool: string,
 		scopes: readonly string[],
+		ownScopesOnly = false,
 	): Promise<boolean> {
 		if (typeof owner !== "string" || scopes.length === 0) return false;
 		const grants = await this.read(owner);
 		if (!grants) return false;
 		return (
-			grants.ids.has(grantId(tool, SCOPE_ALL)) ||
+			(!ownScopesOnly && grants.ids.has(grantId(tool, SCOPE_ALL))) ||
 			scopes.every((scope) => grants.ids.has(grantId(tool, scope)))
 		);
 	}
@@ -232,7 +241,10 @@ export function resolveFrontendToolApprovalScope({
 	contextAppId,
 	asksAgain,
 }: FrontendToolApprovalScopeInput): FrontendToolApprovalScope {
-	if (requiresFreshToolApproval(toolName) || asksAgain) {
+	if (
+		requiresFreshToolApproval(toolName) ||
+		(asksAgain && !siteReadsOnly(grantScopes(toolName, args, contextAppId)))
+	) {
 		return {
 			sessionKey: `${toolName}:request:${scopePart(requestId)}`,
 			rememberable: false,

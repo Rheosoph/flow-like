@@ -31,7 +31,10 @@ import type {
 	IFlowScriptDiagnostic,
 	IScopedFlowScriptResponse,
 } from "./backend-state/board-state";
+import type { IBotDiscordState } from "./backend-state/bot-channels-state";
 import type { IBotState } from "./backend-state/bot-state";
+import type { IBotTeamState } from "./backend-state/bot-team-state";
+import type { IDataSourceState } from "./backend-state/data-source-state";
 import type { IDatabaseState } from "./backend-state/db-state";
 import {
 	EmptyAIState,
@@ -40,6 +43,7 @@ import {
 	EmptyAppState,
 	EmptyBitState,
 	EmptyBoardState,
+	EmptyDataSourceState,
 	EmptyDatabaseState,
 	EmptyEventState,
 	EmptyGraphState,
@@ -96,6 +100,7 @@ export * from "./backend-state/api-key-state";
 export * from "./backend-state/api-state";
 export * from "./backend-state/audio-state";
 export * from "./backend-state/bot-state";
+export * from "./backend-state/bot-team-state";
 export * from "./backend-state/empty-states/index";
 export * from "./backend-state/inbox-state";
 export * from "./backend-state/registry-state";
@@ -234,6 +239,7 @@ export type {
 	IPrerunEventResponse,
 	IUserLookup,
 } from "./backend-state/types";
+export * from "./backend-state/data-source-state";
 export * from "./backend-state/db-state";
 export * from "./backend-state/graph-state";
 export * from "./backend-state/query-state";
@@ -278,6 +284,8 @@ export interface IBackendState {
 	dbState: IDatabaseState;
 	graphState: IGraphState;
 	queryState: IQueryState;
+	/** External databases an app's queries read; online apps only. */
+	dataSourceState: IDataSourceState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	routeState: IAppRouteState;
@@ -296,6 +304,10 @@ export interface IBackendState {
 	offlineWritesState?: IOfflineWritesState;
 	/** The signed-in account's bots; absent without a hub account */
 	botState?: IBotState;
+	/** Discord relay of the bots on this device; desktop only */
+	botDiscordState?: IBotDiscordState;
+	/** Teams of bots and people on the account's hub; absent without a hub account */
+	botTeamState?: IBotTeamState;
 	/** Conversations between people and bots; absent without a hub account */
 	inboxState?: IInboxState;
 	/** Scheduled meetings with temporary participant access, separate from room membership. */
@@ -370,6 +382,7 @@ const serverBackend: IBackendState = {
 	dbState: new EmptyDatabaseState(),
 	graphState: new EmptyGraphState(),
 	queryState: new EmptyQueryState(),
+	dataSourceState: new EmptyDataSourceState(),
 	widgetState: new Proxy(
 		{},
 		{

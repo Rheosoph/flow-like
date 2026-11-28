@@ -702,7 +702,7 @@ export function TableViewer({
 		<div
 			className={cn(
 				"group/table relative",
-				isChat && "min-w-0 font-sans",
+				isChat && "@container/table min-w-0 font-sans",
 				className,
 			)}
 			data-fl-table-appearance={isChat ? "chat" : undefined}
@@ -730,7 +730,7 @@ export function TableViewer({
 						className={cn(
 							"h-7 w-40 pl-7 text-xs",
 							isChat &&
-								"w-32 border-transparent bg-muted/35 shadow-none focus-visible:border-input",
+								"w-32 border-transparent bg-muted/35 shadow-none focus-visible:border-input @max-[480px]/table:w-24",
 						)}
 					/>
 				</div>
@@ -743,8 +743,10 @@ export function TableViewer({
 							size="sm"
 							className="h-7 px-2 text-xs"
 						>
-							<FilterIcon className="h-3 w-3 mr-1" />
-							{t("filter", "Filter")}
+							<FilterIcon className="h-3 w-3 mr-1 @max-[480px]/table:mr-0" />
+							<span className="@max-[480px]/table:sr-only">
+								{t("filter", "Filter")}
+							</span>
 							{columnFilters.length > 0 && (
 								<span className="ml-1 bg-primary text-primary-foreground rounded-full px-1.5 text-[10px]">
 									{columnFilters.length}
@@ -790,8 +792,10 @@ export function TableViewer({
 							size="sm"
 							className="h-7 px-2 text-xs"
 						>
-							<ColumnsIcon className="h-3 w-3 mr-1" />
-							{t("columns", "Columns")}
+							<ColumnsIcon className="h-3 w-3 mr-1 @max-[480px]/table:mr-0" />
+							<span className="@max-[480px]/table:sr-only">
+								{t("columns", "Columns")}
+							</span>
 							{hiddenColumns.size > 0 && (
 								<span className="ml-1 bg-muted-foreground text-muted rounded-full px-1.5 text-[10px]">
 									{headers.length - hiddenColumns.size}/{headers.length}
@@ -850,8 +854,10 @@ export function TableViewer({
 							onClick={() => setWrapCells((prev) => !prev)}
 							aria-pressed={isChat ? wrapCells : undefined}
 						>
-							<WrapTextIcon className="h-3 w-3 mr-1" />
-							{t("wrap", "Wrap")}
+							<WrapTextIcon className="h-3 w-3 mr-1 @max-[480px]/table:mr-0" />
+							<span className="@max-[480px]/table:sr-only">
+								{t("wrap", "Wrap")}
+							</span>
 						</Button>
 					</TooltipTrigger>
 					<TooltipContent side="top">

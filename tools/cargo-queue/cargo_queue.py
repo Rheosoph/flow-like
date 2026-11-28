@@ -2,7 +2,7 @@
 """Machine-wide queue for cargo builds started by coding agents.
 
 bin/cargo forwards every cargo call here. Compiling subcommands (check, build, test,
-clippy, doc, bench, fix, clean and the check-*/test-*/clippy-*/build-* aliases) become
+clippy, doc, bench, fix, clean, install and the check-*/test-*/clippy-*/build-* aliases) become
 jobs in a FIFO queue under ~/.cache/cargo-queue, and one detached runner executes them
 one at a time. A request identical to a queued job, or to a running job whose workspace
 has no Rust source change since it started, joins that job instead of adding another.
@@ -44,6 +44,7 @@ QUEUED_SUBCOMMANDS = {
     "d",
     "doc",
     "fix",
+    "install",
     "llvm-cov",
     "miri",
     "nextest",
@@ -139,9 +140,13 @@ def subcommand(args):
 
 def should_queue(args):
     own_args = args[: args.index("--")] if "--" in args else args
-    if any(arg in PASSTHROUGH_FLAGS for arg in own_args):
-        return False
     name = subcommand(args)
+    # Install's --version selects a crate release and still compiles code.
+    if any(
+        arg in PASSTHROUGH_FLAGS and not (name == "install" and arg == "--version")
+        for arg in own_args
+    ):
+        return False
     return name is not None and (
         name in QUEUED_SUBCOMMANDS or name.startswith(QUEUED_ALIAS_PREFIXES)
     )

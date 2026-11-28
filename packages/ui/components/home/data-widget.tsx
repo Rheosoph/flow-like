@@ -59,11 +59,13 @@ import {
 	EXTENDED_HOME_DATA_VIEWS,
 	HomeDataExtendedView,
 } from "./data-widget-extended";
+import { HomeDataFilterBar } from "./data-widget-filter-bar";
 import {
 	HomeDataCalendar,
 	HomeDataLegend,
 	HomeDataMessage,
 } from "./data-widget-ui";
+import { interactiveParamNames } from "./home-data-params";
 import {
 	HOME_DATA_COLORS,
 	homeDataAxisValue,
@@ -80,6 +82,7 @@ import {
 	type HomeDataConfig,
 	formatHomeDataValue,
 	homeDataMeasureTitle,
+	homeDataSqlConfigError,
 	normalizeHomeDataConfig,
 } from "./home-data-query";
 import { homeDataFieldLabel, homeDataInlineFieldLabel } from "./home-data-text";
@@ -97,6 +100,7 @@ import {
 } from "./home-data-values";
 import type { IHomeWidget } from "./types";
 import { useHomeData } from "./use-home-data";
+import { useHomeParamOverrides } from "./use-home-param-overrides";
 
 const HeatMap = lazy(async () => ({
 	default: (await import("@nivo/heatmap")).ResponsiveHeatMap,
@@ -969,6 +973,38 @@ function HomeDataChart({
 	);
 }
 
+function HomeDataStaleNotice({
+	stale,
+	loading,
+	error,
+	updated,
+}: {
+	stale: boolean;
+	loading: boolean;
+	error: string | null;
+	updated: string | undefined;
+}) {
+	if (!stale || loading) return null;
+	if (error)
+		return (
+			<p
+				className="mt-0.5 truncate text-amber-600 dark:text-amber-400"
+				title={error}
+				data-home-data-stale="failed"
+			>
+				Couldn’t refresh{updated ? ` · showing data from ${updated}` : ""}
+			</p>
+		);
+	return (
+		<p
+			className="mt-0.5 text-amber-600 dark:text-amber-400"
+			data-home-data-stale="expired"
+		>
+			May be out of date · refresh to update
+		</p>
+	);
+}
+
 export function HomeDataWidget({
 	widget,
 	editing = false,
@@ -989,10 +1025,27 @@ export function HomeDataWidget({
 		[widget.config],
 	);
 	const requirement = homeDataPresentationRequirement(config);
-	const { result, loading, error, ready, refreshedAt, refresh } = useHomeData(
-		config,
-		!requirement,
-	);
+	const interactive = interactiveParamNames(config).length > 0;
+	const {
+		overrides,
+		loaded: overridesLoaded,
+		set: setOverride,
+		reset: resetOverrides,
+	} = useHomeParamOverrides(widget.id);
+	const filtersPending = interactive && !overridesLoaded;
+	const {
+		result,
+		loading,
+		error,
+		ready,
+		refreshedAt,
+		cached,
+		expiresAt,
+		stale,
+		refresh,
+		warnings,
+		serverStale,
+	} = useHomeData(config, !requirement && !filtersPending, overrides);
 	const records = ["table", "list", "cards", "kanban", "record"].includes(
 		config.visualization,
 	);
@@ -1041,13 +1094,15 @@ export function HomeDataWidget({
 	const state =
 		!ready || requirement
 			? "unconfigured"
-			: loading
-				? "loading"
-				: error
-					? "error"
-					: !result?.rows.length
-						? "empty"
-						: "ready";
+			: result
+				? result.rows.length
+					? "ready"
+					: "empty"
+				: loading || filtersPending
+					? "loading"
+					: error
+						? "error"
+						: "empty";
 	const filtered = config.filters.length > 0 || config.dateRange !== "all";
 	const summary = [
 		"stat",
@@ -1057,15 +1112,29 @@ export function HomeDataWidget({
 		"bullet",
 	].includes(config.visualization);
 	const source =
-		config.sourceKind === "query"
-			? "Saved query"
-			: config.sourceKind === "ontology"
-				? config.objectType
-				: config.table;
-	const updated = refreshedAt?.toLocaleTimeString([], {
-		hour: "2-digit",
-		minute: "2-digit",
-	});
+		config.sourceKind === "sql"
+			? `SQL across ${config.sources.map((item) => item.alias).join(", ")}`
+			: config.sourceKind === "query"
+				? "Saved query"
+				: config.sourceKind === "ontology"
+					? config.objectType
+					: config.table;
+	const clock = (date: Date | null) =>
+		date?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+	const updated = clock(refreshedAt);
+	const freshness = [
+		updated && `Updated ${updated}`,
+		cached && "shared cached result",
+		expiresAt && `reused until ${clock(expiresAt)} unless its tables change`,
+	]
+		.filter(Boolean)
+		.join(", ");
+	const scopeLabel =
+		config.sourceKind === "sql"
+			? `${config.sources.length} ${config.sources.length === 1 ? "app" : "apps"}`
+			: config.scope === "personal"
+				? "Personal data"
+				: "Project data";
 	return (
 		<div
 			ref={container}
@@ -1073,14 +1142,26 @@ export function HomeDataWidget({
 			style={{ containerType: "inline-size" }}
 			data-home-data-state={state}
 			data-home-data-presentation={config.visualization}
+			data-home-data-cached={cached || undefined}
+			aria-busy={loading || undefined}
 		>
+			{ready && interactive && (
+				<HomeDataFilterBar
+					config={config}
+					overrides={overrides}
+					onChange={setOverride}
+					onReset={resetOverrides}
+				/>
+			)}
 			{state === "unconfigured" ? (
 				<HomeDataMessage
 					title={!ready ? "Connect your data" : "Choose the chart fields"}
 					icon={Database}
 				>
 					{!ready
-						? "Choose an app and a table, ontology, or saved query in widget settings."
+						? config.sourceKind === "sql"
+							? `${homeDataSqlConfigError(config)} Open widget settings to finish the query.`
+							: "Choose an app and a table, ontology, or saved query in widget settings."
 						: requirement}
 				</HomeDataMessage>
 			) : state === "loading" ? (
@@ -1183,7 +1264,7 @@ export function HomeDataWidget({
 					<div className="min-w-0 flex-1">
 						<div
 							className="flex min-w-0 items-center gap-1.5"
-							title={`${source} · ${config.scope === "personal" ? "Personal data" : "Project data"}${updated ? ` · Updated ${updated}` : ""}`}
+							title={`${source} · ${scopeLabel}${freshness ? ` · ${freshness}` : ""}`}
 						>
 							<Database
 								className="size-3 shrink-0 opacity-60"
@@ -1191,29 +1272,61 @@ export function HomeDataWidget({
 							/>
 							<span className="truncate">{source}</span>
 							{width >= 340 && updated && (
-								<span className="shrink-0 opacity-70">· {updated}</span>
+								<span className="shrink-0 opacity-70">
+									· {updated}
+									{cached && " · cached"}
+								</span>
 							)}
 						</div>
+						{serverStale && (
+							<p
+								className="mt-0.5 text-amber-600 dark:text-amber-400"
+								data-home-data-stale="server"
+							>
+								Showing saved results · the latest refresh failed
+							</p>
+						)}
+						{warnings.map((warning) => (
+							<p
+								key={warning}
+								className="mt-0.5 text-amber-600 dark:text-amber-400"
+								data-home-data-warning=""
+							>
+								{warning}
+							</p>
+						))}
 						{result?.truncated && (
 							<p className="mt-0.5 text-amber-600 dark:text-amber-400">
 								Limited to {config.limit} results
 							</p>
 						)}
+						<HomeDataStaleNotice
+							stale={stale}
+							loading={loading}
+							error={error}
+							updated={updated}
+						/>
 					</div>
 					<div className="flex shrink-0 items-center gap-0.5">
 						<button
 							type="button"
 							aria-label="Refresh widget data"
 							title={
-								updated ? `Refresh · Updated ${updated}` : "Refresh widget data"
+								config.sourceKind === "sql"
+									? "Refresh now, skipping cached results"
+									: updated
+										? `Refresh · Updated ${updated}`
+										: "Refresh widget data"
 							}
 							onClick={refresh}
 							disabled={loading}
 							className="rounded-md p-1.5 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 						>
-							<RefreshCw className="size-3" />
+							<RefreshCw
+								className={`size-3 ${loading ? "animate-spin" : ""}`}
+							/>
 						</button>
-						{!editing && (
+						{!editing && config.sourceKind !== "sql" && (
 							<Link
 								href={`/library/config/explore?id=${encodeURIComponent(config.appId)}`}
 								aria-label="Open data source"

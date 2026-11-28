@@ -15,8 +15,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useAppPermissions } from "../../hooks/use-app-permissions";
 import { useInvoke } from "../../hooks/use-invoke";
-import { isPurchaseRequiredError } from "../../lib/api-error";
+import { apiErrorMessage, isPurchaseRequiredError } from "../../lib/api-error";
 import {
 	type PackageAccess,
 	groupPackageNodesByCategory,
@@ -31,6 +32,7 @@ import {
 	storePackageHref,
 } from "../../lib/package-license";
 import type { AppPackageWidget } from "../../lib/package-widgets";
+import { RolePermissions } from "../../lib/permission/role-permission";
 import { asArray } from "../../lib/response-shape";
 import type { INode } from "../../lib/schema/flow/node";
 import type {
@@ -42,6 +44,16 @@ import type {
 } from "../../lib/schema/wasm";
 import { useBackend } from "../../state/backend-state";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { EmptyState } from "../ui/empty-state";
@@ -117,7 +129,7 @@ const LICENSE_TICK_MS = 60_000;
 const OVERVIEW_WIDGET_LIMIT = 3;
 const SKELETON_KEYS = ["a", "b", "c", "d"] as const;
 const WARNING_ALERT_CLASS =
-	"border-amber-500/40 bg-amber-500/5 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400";
+	"border-warning-line bg-warning-bg [&>svg]:text-warning";
 
 function useNow(intervalMs: number, enabled: boolean): number {
 	const [now, setNow] = useState(() => Date.now());
@@ -128,6 +140,10 @@ function useNow(intervalMs: number, enabled: boolean): number {
 		return () => clearInterval(id);
 	}, [intervalMs, enabled]);
 	return now;
+}
+
+function packageDisplayName(pkg: AppPackage): string {
+	return pkg.metadata?.name || pkg.packageName || pkg.packageId;
 }
 
 /** Servers without licensing leave the decision to the reactivate endpoint. */
@@ -171,6 +187,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 	const queryClient = useQueryClient();
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [permissionsOpen, setPermissionsOpen] = useState(false);
+	const [removeTarget, setRemoveTarget] = useState<AppPackage | null>(null);
 	const [tab, setTab] = useState<PackagesTab>("overview");
 	const widgetConsents = useMicroWidgetConsentEntries({ appId });
 	const formatTimeLeft = useTimeLeftLabel();
@@ -180,6 +197,9 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		backend.userState,
 		[],
 	);
+
+	const appPermissions = useAppPermissions(appId);
+	const canManage = appPermissions.can(RolePermissions.Admin);
 
 	const isOffline = useQuery<boolean>({
 		queryKey: ["app-offline", appId],
@@ -451,7 +471,14 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 					}),
 				);
 			} else {
-				toast.error(`Failed to update ${failed} of ${total} packages`);
+				toast.error(
+					t("appPackagesUpdatePartlyFailed", {
+						defaultValue:
+							"{{failed}} of {{total}} packages could not be updated",
+						failed,
+						total,
+					}),
+				);
 			}
 			invalidatePackageQueries();
 		},
@@ -467,21 +494,8 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		[addPackage, isOffline.data],
 	);
 
-	// Updates that can actually be applied: package is not stale and has a
-	// newer version available. Stale packages must be reactivated first.
-	const applicableUpdates = useMemo(
-		() =>
-			packageRows
-				.filter((p) => !p.stale)
-				.flatMap((p) => updatesByPackage.get(p.packageId) ?? []),
-		[packageRows, updatesByPackage],
-	);
-
 	const packageNames = useMemo(
-		() =>
-			new Map(
-				packageRows.map((p) => [p.packageId, p.packageName ?? p.packageId]),
-			),
+		() => new Map(packageRows.map((p) => [p.packageId, packageDisplayName(p)])),
 		[packageRows],
 	);
 
@@ -494,6 +508,16 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		() =>
 			new Map(packageRows.map((p) => [p.packageId, pinLicenseView(p, now)])),
 		[packageRows, now],
+	);
+	// The tile's own rule: only an active, non-stale pin can move to a newer version.
+	const applicableUpdates = useMemo(
+		() =>
+			packageRows
+				.filter(
+					(p) => !p.stale && licenseViews.get(p.packageId)?.state === "active",
+				)
+				.flatMap((p) => updatesByPackage.get(p.packageId) ?? []),
+		[packageRows, licenseViews, updatesByPackage],
 	);
 	const licenseAlerts = useMemo(
 		() =>
@@ -525,7 +549,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 					licenseViews.get(pkg.packageId) ?? pinLicenseView(pkg, now);
 				return {
 					pkg,
-					name: pkg.metadata?.name || pkg.packageName || pkg.packageId,
+					name: packageDisplayName(pkg),
 					description:
 						pkg.metadata?.description || manifest?.access?.description,
 					nodes,
@@ -625,15 +649,43 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				widgets: view.manifest?.widgets ?? [],
 				pinState: view.license.state,
 				timeLeftLabel: view.timeLeftLabel,
+				loading: !view.manifest && (manifests.loading || catalog.isLoading),
 			})),
-		[views],
+		[views, manifests.loading, catalog.isLoading],
 	);
 
 	const openGrants = useCallback(() => setPermissionsOpen(true), []);
 	const showTab = useCallback((next: PackagesTab) => () => setTab(next), []);
 
-	if (packages.isLoading || isOffline.isLoading)
-		return <PackagesPageSkeleton />;
+	const loadError = packages.data
+		? null
+		: (packages.error ??
+			isOffline.error ??
+			(isOffline.data === false ? profile.error : null));
+	if (loadError)
+		return (
+			<EmptyState
+				className="w-full max-w-none grow"
+				icons={[TriangleAlert]}
+				title={t("appPackagesLoadFailed", "Couldn't load this app's packages")}
+				description={apiErrorMessage(
+					loadError,
+					t(
+						"appPackagesLoadFailedHint",
+						"Check your connection and try again.",
+					),
+				)}
+				action={{
+					label: t("retry", "Retry"),
+					onClick: () => {
+						void isOffline.refetch();
+						void profile.refetch();
+						void packages.refetch();
+					},
+				}}
+			/>
+		);
+	if (packages.isPending) return <PackagesPageSkeleton />;
 
 	const summary =
 		packageRows.length > 0 && !countsLoading
@@ -678,14 +730,16 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 						count={widgetConsents.length}
 						onClick={openGrants}
 					/>
-					<Button
-						size="sm"
-						onClick={() => setSearchOpen(true)}
-						disabled={widgetUpdates.isUpdating}
-					>
-						<Plus className="size-4" />
-						{t("addPackage", "Add Package")}
-					</Button>
+					{canManage && (
+						<Button
+							size="sm"
+							onClick={() => setSearchOpen(true)}
+							disabled={widgetUpdates.isUpdating}
+						>
+							<Plus className="size-4" />
+							{t("addPackage", "Add Package")}
+						</Button>
+					)}
 				</div>
 			</header>
 
@@ -696,9 +750,10 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 						pkg={pkg}
 						view={view}
 						onReactivate={() => reactivatePackage.mutate(pkg.packageId)}
-						onRemove={() => removePackage.mutate(pkg.packageId)}
+						onRemove={() => setRemoveTarget(pkg)}
 						isReactivating={reactivatePackage.isPending}
 						isRemoving={removePackage.isPending}
+						canManage={canManage}
 					/>
 				))}
 
@@ -711,6 +766,14 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 						"addAWasmPackageToGetStarted",
 						"Add a WASM package to get started.",
 					)}
+					action={
+						canManage
+							? {
+									label: t("addPackage", "Add Package"),
+									onClick: () => setSearchOpen(true),
+								}
+							: undefined
+					}
 				/>
 			) : (
 				<Tabs
@@ -736,7 +799,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 					</TabsList>
 
 					<TabsContent value="overview" className="flex flex-col gap-8">
-						{!offline && (
+						{!offline && canManage && (
 							<PackageUpdatesBanner
 								updates={applicableUpdates}
 								packageNames={displayNames}
@@ -773,6 +836,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 									update={updatesByPackage.get(view.pkg.packageId)}
 									offline={offline}
 									canReactivate={canReactivate(view.pkg)}
+									canManage={canManage}
 									pending={{
 										autoUpdate: toggleAutoUpdate.isPending,
 										update:
@@ -838,7 +902,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 										},
 										onReactivate: () =>
 											reactivatePackage.mutate(view.pkg.packageId),
-										onRemove: () => removePackage.mutate(view.pkg.packageId),
+										onRemove: () => setRemoveTarget(view.pkg),
 									}}
 								/>
 							))}
@@ -889,6 +953,21 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				excludePackageIds={excludeIds}
 				appId={appId}
 			/>
+			<RemovePackageDialog
+				pkg={removeTarget}
+				nodeCount={
+					removeTarget
+						? (nodesByPackage.get(removeTarget.packageId)?.length ?? 0)
+						: 0
+				}
+				busy={removePackage.isPending}
+				onCancel={() => setRemoveTarget(null)}
+				onConfirm={(pkg) =>
+					removePackage.mutate(pkg.packageId, {
+						onSettled: () => setRemoveTarget(null),
+					})
+				}
+			/>
 			<WidgetPermissionsSheet
 				appId={appId}
 				entries={widgetConsents}
@@ -897,6 +976,67 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				onOpenChange={setPermissionsOpen}
 			/>
 		</div>
+	);
+}
+
+function RemovePackageDialog({
+	pkg,
+	nodeCount,
+	busy,
+	onCancel,
+	onConfirm,
+}: Readonly<{
+	pkg: AppPackage | null;
+	nodeCount: number;
+	busy: boolean;
+	onCancel: () => void;
+	onConfirm: (pkg: AppPackage) => void;
+}>) {
+	const { t } = useTranslation("store");
+	if (!pkg) return null;
+	const name = packageDisplayName(pkg);
+	return (
+		<AlertDialog open onOpenChange={(open) => !open && !busy && onCancel()}>
+			<AlertDialogContent>
+				<AlertDialogHeader>
+					<AlertDialogTitle>
+						{t("appPackageRemoveTitle", "Remove {{name}} from this app?", {
+							name,
+						})}
+					</AlertDialogTitle>
+					<AlertDialogDescription>
+						{nodeCount > 0
+							? t("appPackageRemoveDescriptionNodes", {
+									defaultValue_one:
+										"Boards that use its node stop working, and its widgets disappear from pages, until the package is added again.",
+									defaultValue_other:
+										"Boards that use any of its {{count}} nodes stop working, and its widgets disappear from pages, until the package is added again.",
+									count: nodeCount,
+								})
+							: t(
+									"appPackageRemoveDescription",
+									"Its nodes and widgets stop working in this app until the package is added again.",
+								)}
+					</AlertDialogDescription>
+				</AlertDialogHeader>
+				<AlertDialogFooter>
+					<AlertDialogCancel disabled={busy}>
+						{t("cancel", "Cancel")}
+					</AlertDialogCancel>
+					<AlertDialogAction
+						disabled={busy}
+						className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+						onClick={(event) => {
+							event.preventDefault();
+							onConfirm(pkg);
+						}}
+					>
+						{busy && <RefreshCw className="size-4 animate-spin" />}
+						{t("removePackage", "Remove package")}
+					</AlertDialogAction>
+				</AlertDialogFooter>
+			</AlertDialogContent>
+		</AlertDialog>
 	);
 }
 
@@ -915,6 +1055,7 @@ function PackageLicenseAlert({
 	onRemove,
 	isReactivating,
 	isRemoving,
+	canManage,
 }: Readonly<{
 	pkg: AppPackage;
 	view: PinLicenseView;
@@ -922,6 +1063,7 @@ function PackageLicenseAlert({
 	onRemove: () => void;
 	isReactivating: boolean;
 	isRemoving: boolean;
+	canManage: boolean;
 }>) {
 	const { t, i18n } = useTranslation("store");
 	const formatTimeLeft = useTimeLeftLabel();
@@ -936,7 +1078,7 @@ function PackageLicenseAlert({
 					}).format(view.expiresAt),
 		[view.expiresAt, language],
 	);
-	const name = pkg.packageName ?? pkg.packageId;
+	const name = packageDisplayName(pkg);
 	const expired = view.state === "expired";
 
 	return (
@@ -995,16 +1137,18 @@ function PackageLicenseAlert({
 							{t("getPackage", "Get package")}
 						</Link>
 					</Button>
-					<Button
-						size="sm"
-						variant="outline"
-						onClick={onReactivate}
-						disabled={isReactivating || !canReactivate(pkg)}
-					>
-						<RefreshCw className="mr-1 h-3.5 w-3.5" />
-						{t("reactivate", "Reactivate")}
-					</Button>
-					{expired && (
+					{canManage && (
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={onReactivate}
+							disabled={isReactivating || !canReactivate(pkg)}
+						>
+							<RefreshCw className="mr-1 h-3.5 w-3.5" />
+							{t("reactivate", "Reactivate")}
+						</Button>
+					)}
+					{expired && canManage && (
 						<Button
 							size="sm"
 							variant="ghost"
@@ -1015,7 +1159,7 @@ function PackageLicenseAlert({
 							{t("removePackage", "Remove package")}
 						</Button>
 					)}
-					{!canReactivate(pkg) && (
+					{canManage && !canReactivate(pkg) && (
 						<span className="text-xs text-muted-foreground">
 							{t(
 								"getPackageToReactivate",

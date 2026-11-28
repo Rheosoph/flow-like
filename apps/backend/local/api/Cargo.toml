@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+aws-config = { workspace = true, optional = true }
 flow-like = { workspace = true, features = ["app-runtime"] }
-flow-like-api = { workspace = true, features = ["kubernetes", "redis", "cosmos", "azure", "smtp", "sendgrid", "forecasting"] }
+flow-like-api = { workspace = true, features = ["kubernetes", "redis", "cosmos", "azure", "smtp", "sendgrid", "query-in-process"] }
+# Local runs the query service in-process, forecasts included; the API itself never runs the engine.
+flow-like-query = { workspace = true, features = ["forecast"] }
 flow-like-secrets.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
@@ -19,7 +22,8 @@ dotenv.workspace = true
 oasgen = {version="0.25.0", features = ["axum"]}
 
 [features]
-default = ["dsql"]
+default = ["dsql", "aws-developer-auth"]
+aws-developer-auth = ["dep:aws-config", "aws-config/sso", "aws-config/credentials-login", "aws-config/credentials-process", "flow-like-aws-data?/developer-auth"]
 # Aurora DSQL connectivity through IAM tokens, selected at runtime by
 # `DSQL_CLUSTER_ENDPOINT`. Gated so a build that will never talk to DSQL can
 # drop the connector; the AWS SDK core itself is already in this binary via

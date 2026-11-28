@@ -1,7 +1,7 @@
 {
 	"repository": "https://github.com/storytold/soundcraft.git",
-	"revision": "db51dd17398852ba70919c5a560d1c8ed9e3e6c6",
-	"version": "0.16.0",
+	"revision": "0c9c1b8ef61ae60481ead295122f3962343e1f66",
+	"version": "0.20.1",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "soundcraft-web",
 	"label": "Flows Audio",

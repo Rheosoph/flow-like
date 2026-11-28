@@ -60,6 +60,31 @@ pub fn stacked_windows() -> Result<Vec<StackedWindow>> {
     macos::stacked_windows()
 }
 
+/// What xcap reports for a window: on Windows that is the client area, below a title bar.
+#[cfg(not(target_os = "macos"))]
+fn reported_frame(window: &NativeWindow) -> Option<(f64, f64, f64, f64)> {
+    Some((
+        window.x().ok()? as f64,
+        window.y().ok()? as f64,
+        window.width().ok()? as f64,
+        window.height().ok()? as f64,
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn stacked_frame(window: &NativeWindow) -> Option<(f64, f64, f64, f64)> {
+    window
+        .id()
+        .ok()
+        .and_then(windows::frame_bounds)
+        .or_else(|| reported_frame(window))
+}
+
+#[cfg(target_os = "linux")]
+fn stacked_frame(window: &NativeWindow) -> Option<(f64, f64, f64, f64)> {
+    reported_frame(window)
+}
+
 /// xcap enumerates top-level windows in stacking order (the order `Window::z` is derived from).
 #[cfg(not(target_os = "macos"))]
 pub fn stacked_windows() -> Result<Vec<StackedWindow>> {
@@ -67,7 +92,7 @@ pub fn stacked_windows() -> Result<Vec<StackedWindow>> {
         .iter()
         .filter(|w| !w.is_minimized().unwrap_or(false))
         .filter_map(|w| {
-            let (width, height) = (w.width().ok()? as f64, w.height().ok()? as f64);
+            let (x, y, width, height) = stacked_frame(w)?;
             if !usable_size(width, height) {
                 return None;
             }
@@ -76,13 +101,25 @@ pub fn stacked_windows() -> Result<Vec<StackedWindow>> {
                 pid: w.pid().unwrap_or_default(),
                 app_name: w.app_name().unwrap_or_default(),
                 title: w.title().ok().filter(|title| !title.is_empty()),
-                x: w.x().ok()? as f64,
-                y: w.y().ok()? as f64,
+                x,
+                y,
                 width,
                 height,
             })
         })
         .collect())
+}
+
+/// Puts a window back on top of the other always-on-top windows without activating it.
+#[cfg(target_os = "windows")]
+pub fn raise_topmost(window: isize) -> bool {
+    windows::raise_topmost(window)
+}
+
+/// The handle of the window the user works in; it changes when another window comes to the front.
+#[cfg(target_os = "windows")]
+pub fn foreground_window() -> isize {
+    windows::foreground_window()
 }
 
 /// The window still exists, though maybe minimized or on another desktop and so not stacked.

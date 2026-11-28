@@ -4,7 +4,7 @@ import puppeteer from "puppeteer";
 
 const browser = await chromium.launch({
 	headless: true,
-	executablePath: puppeteer.executablePath(),
+	executablePath: await puppeteer.executablePath(),
 	args: ["--enable-webgl", "--enable-unsafe-swiftshader"],
 });
 const page = await browser.newPage({

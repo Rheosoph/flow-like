@@ -1,15 +1,18 @@
-//! A bot's connectors: the MCP servers and OAuth accounts its owner attached. Owner only; the
-//! bot row is checked in SQL on every call. The account grant is stored sealed and never
-//! returned. Refreshing a server's tool list is network work, so it runs as a job on the
-//! executor like a bot turn's connector calls.
+//! A bot's connectors: the MCP servers, OAuth accounts and CalDAV calendars its owner attached.
+//! Owner only; the bot row is checked in SQL on every call. The account grant and the CalDAV
+//! password are stored sealed and never returned. Refreshing a server's tool list and a CalDAV
+//! discovery are network work on untrusted answers, so both run as jobs on the executor like a
+//! bot turn's connector calls; the password travels in that one job only.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use super::{lock_bot, owned_bot, workspace};
 use crate::{
+    bot_tools::calendar_jobs::ExecutorCalendars,
     bot_tools::connectors::{
-        AUTH_NONE, AUTH_OAUTH, AUTH_SECRET, authorization_of, entry_of, seal_grant, to_contract,
+        AUTH_BASIC, AUTH_NONE, AUTH_OAUTH, AUTH_SECRET, authorization_of, calendars_of, entry_of,
+        open_password, seal_grant, seal_password, to_contract,
     },
     entity::{bot_connector, bot_secret},
     error::ApiError,
@@ -22,12 +25,15 @@ use axum::{
     http::StatusCode,
 };
 use chrono::Utc;
+use flow_like_bot_tools::calendar::caldav::basic_credential;
+use flow_like_bot_tools::calendar::{CalendarJobs, discover_with};
 use flow_like_bot_tools::services::ConnectorEntry;
 use flow_like_bot_tools_host::{JobConnector, JobScope, ToolJob};
 use flow_like_types::bot_connector::{
-    BotConnector, BotConnectorList, CallPolicy, ConnectorAuth, ConnectorKind, ConnectorPolicy,
-    ConnectorToolInfo, CreateBotConnector, MAX_CONNECTORS_PER_BOT, MAX_SCOPES, MAX_TOOLS_SNAPSHOT,
-    MAX_URL_CHARS, UpdateBotConnector, validate_label, validate_tool_policies,
+    BotConnector, BotConnectorList, CALDAV_PROVIDER, CalDavCalendarInfo, CallPolicy, ConnectorAuth,
+    ConnectorKind, ConnectorPolicy, ConnectorToolInfo, CreateBotConnector, MAX_CONNECTORS_PER_BOT,
+    MAX_SCOPES, MAX_TOOLS_SNAPSHOT, MAX_URL_CHARS, UpdateBotConnector, choose_calendar,
+    validate_label, validate_tool_policies, validate_username,
 };
 use flow_like_types::data_classification::DataClassification;
 use sea_orm::{
@@ -40,6 +46,7 @@ use utoipa::ToSchema;
 const LIMIT_REACHED: &str = "BOT_CONNECTOR_LIMIT_REACHED";
 const SWITCHED_OFF: &str = "BOT_CONNECTOR_SWITCHED_OFF";
 const HANDLE_PREFIX: &str = "fl_oauth_";
+const MAX_PASSWORD_CHARS: usize = 1024;
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Documentation shape of [`BotConnector`]; the wire format is the contract type's.
@@ -47,7 +54,7 @@ const REFRESH_TIMEOUT: Duration = Duration::from_secs(90);
 pub struct BotConnectorSchema {
     pub id: String,
     pub bot_id: String,
-    /// `oauth` or `mcp`.
+    /// `oauth`, `mcp` or `caldav`.
     pub kind: String,
     pub label: String,
     pub provider_id: Option<String>,
@@ -63,6 +70,11 @@ pub struct BotConnectorSchema {
     pub tool_policies: serde_json::Value,
     #[schema(value_type = Vec<Object>)]
     pub tools_snapshot: serde_json::Value,
+    /// CalDAV: the calendar the bot reads and writes.
+    pub calendar_url: Option<String>,
+    /// CalDAV: the account's calendars, `{url, name, color, writable, zone}`, from the last discovery.
+    #[schema(value_type = Vec<Object>)]
+    pub calendars: serde_json::Value,
     pub updated_at: String,
 }
 
@@ -308,7 +320,7 @@ pub(crate) fn refuse_switched_off(row: &bot_connector::Model) -> Result<(), ApiE
                     .chain(rule.tool_policies.keys().map(String::as_str))
                     .all(|name| rule.call_policy(name) == CallPolicy::Never)
         }
-        ConnectorKind::Oauth => ["GET", "POST"]
+        ConnectorKind::Oauth | ConnectorKind::Caldav => ["GET", "POST"]
             .into_iter()
             .all(|method| rule.request_call_policy(method) == CallPolicy::Never),
     };
@@ -336,6 +348,8 @@ pub(crate) struct NewConnector {
     pub(super) grant_encrypted: Option<String>,
     pub(super) scopes: Vec<String>,
     pub(super) policy: ConnectorPolicy,
+    pub(super) calendar_url: Option<String>,
+    pub(super) calendars: Option<serde_json::Value>,
 }
 
 /// Inserts the connector once the bot is the caller's and has room.
@@ -381,6 +395,8 @@ pub(crate) async fn create_in<C: ConnectionTrait>(
         tool_policies: Set(serde_json::json!({})),
         tools_snapshot: Set(serde_json::json!([])),
         confirmed_hashes: Set(serde_json::json!({})),
+        calendar_url: Set(new.calendar_url),
+        calendars: Set(new.calendars),
         created_at: Set(now),
         updated_at: Set(now),
     }
@@ -388,12 +404,61 @@ pub(crate) async fn create_in<C: ConnectionTrait>(
     .await?)
 }
 
+/// A CalDAV password as the owner typed it; never trimmed, never echoed.
+fn password_of(grant: Option<&str>) -> Result<String, ApiError> {
+    let password = grant
+        .filter(|password| !password.trim().is_empty())
+        .ok_or_else(|| {
+            invalid("A CalDAV calendar needs its password (for iCloud an app-specific password)")
+        })?;
+    if password.chars().count() > MAX_PASSWORD_CHARS || password.chars().any(char::is_control) {
+        return Err(invalid(format!(
+            "The password has at most {MAX_PASSWORD_CHARS} characters and no control characters"
+        )));
+    }
+    Ok(password.to_string())
+}
+
+/// The calendars a CalDAV account offers, found by a job on the executor with the server's egress
+/// rules (public https hosts only). 503 without an executor; 400 with a message for the owner
+/// otherwise (a wrong password says HTTP 401 and "password").
+async fn calendars_at(
+    state: &AppState,
+    owner: &str,
+    bot_id: &str,
+    account: (&str, &str),
+    username: &str,
+    password: &str,
+) -> Result<Vec<CalDavCalendarInfo>, ApiError> {
+    let (label, url) = account;
+    let jobs = ExecutorCalendars::unbound(state, owner, bot_id);
+    if jobs.ready().is_err() {
+        return Err(ApiError::service_unavailable(
+            "This server has no executor, so it cannot reach CalDAV servers",
+        ));
+    }
+    discover_with(&jobs, label, url, basic_credential(username, password))
+        .await
+        .map_err(invalid)
+}
+
 fn checked_new(state: &AppState, body: CreateBotConnector) -> Result<NewConnector, ApiError> {
     let label = validate_label(&body.label).map_err(invalid)?;
-    let grant = grant_of(body.grant.as_deref())?;
     let scopes = scopes_of(body.scopes)?;
     let policy = body.default_policy.unwrap_or(ConnectorPolicy::Ask);
     let (auth_kind, auth_ref, provider_id) = match &body.auth {
+        ConnectorAuth::Basic { username } => {
+            if body.kind != ConnectorKind::Caldav {
+                return Err(invalid(
+                    "Only a CalDAV calendar signs in with a user name and password",
+                ));
+            }
+            (
+                AUTH_BASIC,
+                Some(validate_username(username).map_err(invalid)?),
+                Some(CALDAV_PROVIDER.to_string()),
+            )
+        }
         ConnectorAuth::None => (AUTH_NONE, None, None),
         ConnectorAuth::Secret { name } => {
             if !flow_like_types::bot_message::is_secret_name(name) {
@@ -440,10 +505,26 @@ fn checked_new(state: &AppState, body: CreateBotConnector) -> Result<NewConnecto
             }
             None
         }
+        ConnectorKind::Caldav => {
+            if auth_kind != AUTH_BASIC {
+                return Err(invalid(
+                    "A CalDAV calendar signs in with a user name and password: use auth type basic",
+                ));
+            }
+            Some(url_of(body.url.as_deref().ok_or_else(|| {
+                invalid("A CalDAV calendar needs the address of its server")
+            })?)?)
+        }
     };
-    if auth_kind == AUTH_OAUTH && grant.is_none() {
-        return Err(invalid("Connect the account first, then attach it"));
-    }
+    let grant_encrypted = if auth_kind == AUTH_BASIC {
+        Some(seal_password(state, &password_of(body.grant.as_deref())?))
+    } else {
+        let grant = grant_of(body.grant.as_deref())?;
+        if auth_kind == AUTH_OAUTH && grant.is_none() {
+            return Err(invalid("Connect the account first, then attach it"));
+        }
+        grant.map(|handle| seal_grant(state, &handle))
+    };
     Ok(NewConnector {
         kind: body.kind,
         label,
@@ -451,9 +532,11 @@ fn checked_new(state: &AppState, body: CreateBotConnector) -> Result<NewConnecto
         provider_id,
         auth_kind,
         auth_ref,
-        grant_encrypted: grant.map(|handle| seal_grant(state, &handle)),
+        grant_encrypted,
         scopes,
         policy,
+        calendar_url: None,
+        calendars: None,
     })
 }
 
@@ -462,13 +545,14 @@ fn checked_new(state: &AppState, body: CreateBotConnector) -> Result<NewConnecto
     path = "/bots/{bot_id}/connectors",
     tag = "Bots",
     params(("bot_id" = String, Path, description = "Your bot's id")),
-    request_body(content = Object, description = "kind (mcp or oauth), label, url (https, for MCP), auth ({type: none | secret | oauth}), grant (the stored sign-in handle of an account), scopes, default_policy"),
+    request_body(content = Object, description = "kind (mcp, oauth or caldav), label, url (https, for MCP and CalDAV), auth ({type: none | secret | oauth | basic}; basic carries the CalDAV username), grant (the stored sign-in handle of an account, or the CalDAV password), scopes, default_policy, calendar_url (CalDAV: the calendar to use; the first writable one when omitted)"),
     responses(
-        (status = 201, description = "The connector was attached; its tool list is fetched with a refresh", body = BotConnectorSchema),
-        (status = 400, description = "The label, URL, secret name, provider or sign-in is invalid"),
+        (status = 201, description = "The connector was attached. An MCP server's tool list is fetched with a refresh; a CalDAV calendar comes back with the calendars its server offers and the one in use", body = BotConnectorSchema),
+        (status = 400, description = "The label, URL, secret name, provider or sign-in is invalid, or the CalDAV server refused the sign-in or could not be reached (the message says why)"),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no bot with this id"),
-        (status = 409, description = "BOT_CONNECTOR_LIMIT_REACHED: a bot has at most 20 connectors; or the label is taken")
+        (status = 409, description = "BOT_CONNECTOR_LIMIT_REACHED: a bot has at most 20 connectors; or the label is taken"),
+        (status = 503, description = "This server has no executor, so it cannot reach a CalDAV server")
     ),
     security(("bearer_auth" = []))
 )]
@@ -480,7 +564,23 @@ pub async fn create_bot_connector(
     Json(body): Json<CreateBotConnector>,
 ) -> Result<(StatusCode, Json<BotConnector>), ApiError> {
     let sub = user.sub()?;
-    let new = checked_new(&state, body)?;
+    let password = body.grant.clone();
+    let wanted = body.calendar_url.clone();
+    let mut new = checked_new(&state, body)?;
+    if new.kind == ConnectorKind::Caldav {
+        owned_bot(&state.db, &sub, &bot_id).await?;
+        let calendars = calendars_at(
+            &state,
+            &sub,
+            &bot_id,
+            (&new.label, new.url.as_deref().unwrap_or_default()),
+            new.auth_ref.as_deref().unwrap_or_default(),
+            password.as_deref().unwrap_or_default(),
+        )
+        .await?;
+        new.calendar_url = Some(choose_calendar(&calendars, wanted.as_deref()).map_err(invalid)?);
+        new.calendars = Some(serde_json::json!(calendars));
+    }
     let row = state
         .transaction(|txn| {
             let (sub, bot_id, new) = (sub.clone(), bot_id.clone(), new.clone());
@@ -530,7 +630,7 @@ fn confirmed_after(current: &BotConnector, body: &UpdateBotConnector) -> BTreeMa
         ("bot_id" = String, Path, description = "Your bot's id"),
         ("connector_id" = String, Path, description = "The connector's id")
     ),
-    request_body(content = Object, description = "Any of label, default_policy, tool_policies (tool name, or read / write for accounts, to read | ask | never), grant, scopes"),
+    request_body(content = Object, description = "Any of label, default_policy, tool_policies (tool name, or read / write for accounts and CalDAV calendars, to read | ask | never), grant (a new sign-in handle, or a new CalDAV password), scopes, calendar_url (CalDAV: another calendar of the connector's calendars)"),
     responses(
         (status = 200, description = "The updated connector", body = BotConnectorSchema),
         (status = 400, description = "A field is invalid"),
@@ -575,11 +675,28 @@ pub async fn update_bot_connector(
         let hashes = confirmed_after(&current, &body);
         active.confirmed_hashes = Set(serde_json::json!(hashes));
     }
-    if let Some(grant) = grant_of(body.grant.as_deref())? {
+    if row.auth_kind == AUTH_BASIC {
+        if let Some(grant) = body
+            .grant
+            .as_deref()
+            .filter(|grant| !grant.trim().is_empty())
+        {
+            active.grant_encrypted = Set(Some(seal_password(&state, &password_of(Some(grant))?)));
+        }
+    } else if let Some(grant) = grant_of(body.grant.as_deref())? {
         if row.auth_kind != AUTH_OAUTH {
-            return Err(invalid("Only an account takes a sign-in"));
+            return Err(invalid(
+                "Only an account or a CalDAV calendar takes a sign-in",
+            ));
         }
         active.grant_encrypted = Set(Some(seal_grant(&state, &grant)));
+    }
+    if let Some(wanted) = body.calendar_url.as_deref() {
+        if row.kind != ConnectorKind::Caldav.column() {
+            return Err(invalid("Only a CalDAV connector has a calendar to choose"));
+        }
+        let chosen = choose_calendar(&calendars_of(&row), Some(wanted)).map_err(invalid)?;
+        active.calendar_url = Set(Some(chosen));
     }
     if let Some(scopes) = body.scopes {
         active.scopes = Set(serde_json::json!(scopes_of(scopes)?));
@@ -622,6 +739,37 @@ pub async fn delete_bot_connector(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Asks a CalDAV server for its calendars again with the stored password. The chosen calendar
+/// stays while the server still offers it.
+async fn refresh_calendars(
+    state: &AppState,
+    owner: &str,
+    row: bot_connector::Model,
+) -> Result<Json<BotConnector>, ApiError> {
+    let password = open_password(state, &row).map_err(|message| {
+        ApiError::coded(StatusCode::CONFLICT, "BOT_CONNECTOR_NO_SIGN_IN", message)
+    })?;
+    let calendars = calendars_at(
+        state,
+        owner,
+        &row.bot_id,
+        (&row.label, row.url.as_deref().unwrap_or_default()),
+        row.auth_ref.as_deref().unwrap_or_default(),
+        &password,
+    )
+    .await?;
+    let kept = row
+        .calendar_url
+        .clone()
+        .filter(|url| calendars.iter().any(|calendar| &calendar.url == url));
+    let chosen = kept.or_else(|| choose_calendar(&calendars, None).ok());
+    let mut active: bot_connector::ActiveModel = row.into();
+    active.calendars = Set(Some(serde_json::json!(calendars)));
+    active.calendar_url = Set(chosen);
+    active.updated_at = Set(Utc::now().fixed_offset());
+    Ok(Json(info(active.update(&state.db).await?)?))
+}
+
 fn tools_from(output: &str) -> Result<Vec<ConnectorToolInfo>, ApiError> {
     let envelope: serde_json::Value = serde_json::from_str(output).map_err(|_| {
         ApiError::service_unavailable("The executor answered with something unreadable")
@@ -650,13 +798,13 @@ fn tools_from(output: &str) -> Result<Vec<ConnectorToolInfo>, ApiError> {
         ("connector_id" = String, Path, description = "The connector's id")
     ),
     responses(
-        (status = 200, description = "The MCP server was asked for its tools; the connector holds the new list", body = BotConnectorSchema),
-        (status = 400, description = "Only MCP servers have a tool list"),
+        (status = 200, description = "The MCP server was asked for its tools, or the CalDAV server for its calendars; the connector holds the new list", body = BotConnectorSchema),
+        (status = 400, description = "Only MCP servers and CalDAV calendars can be refreshed; or the CalDAV server refused the sign-in or could not be reached (the message says why)"),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no such bot or connector"),
         (status = 409, description = "The bot cannot have a workspace (Flux), or its workspace is being deleted"),
         (status = 502, description = "BOT_CONNECTOR_UNREACHABLE: the server did not answer"),
-        (status = 503, description = "This server has no executor for connector calls")
+        (status = 503, description = "This server has no executor to reach MCP or CalDAV servers")
     ),
     security(("bearer_auth" = []))
 )]
@@ -671,8 +819,13 @@ pub async fn refresh_bot_connector(
 ) -> Result<Json<BotConnector>, ApiError> {
     let sub = user.sub()?;
     let row = owned_connector(&state.db, &sub, &bot_id, &connector_id).await?;
+    if row.kind == ConnectorKind::Caldav.column() {
+        return refresh_calendars(&state, &sub, row).await;
+    }
     if row.kind != ConnectorKind::Mcp.column() {
-        return Err(invalid("Only an MCP server has a tool list to refresh"));
+        return Err(invalid(
+            "Only an MCP server or a CalDAV calendar can be refreshed",
+        ));
     }
     let executor = crate::bot_tools::executor_for(&state).ok_or_else(|| {
         ApiError::service_unavailable("This server has no executor, so it cannot reach MCP servers")

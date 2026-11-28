@@ -14,7 +14,7 @@ use flow_like_local_bots::{
     SegmentsQuery, SendEntryRequest, WriteSegmentRequest,
 };
 use flow_like_types::{
-    bot_turn::{TurnStatus, failure_message_id, reply_message_id, turn_id},
+    bot_turn::{MAX_DISCUSSION_HOPS, TurnStatus, failure_message_id, reply_message_id, turn_id},
     inbox::{ConversationKind, InboxEntryKind},
 };
 use serde_json::{Value, json};
@@ -839,6 +839,27 @@ fn a_bot_never_waits_for_its_own_message_and_hops_are_capped() {
         json!({ "text": "pong" }),
     );
     f.send(&group.id, &ada.id, "a2", "message", mention(Some(4)));
+    let waiting = f.waiting(&group, &bob.id).unwrap();
+    assert_eq!(
+        (waiting.message_id.as_str(), waiting.hops),
+        ("a2", 4),
+        "a hand-over by mention runs on within the discussion budget"
+    );
+
+    f.send(
+        &group.id,
+        &bob.id,
+        "b2",
+        "message",
+        json!({ "text": "pong again" }),
+    );
+    f.send(
+        &group.id,
+        &ada.id,
+        "a2x",
+        "message",
+        mention(Some(MAX_DISCUSSION_HOPS + 1)),
+    );
     assert_eq!(f.waiting(&group, &bob.id), None);
 
     f.send(&group.id, &ada.id, "a3", "message", mention(None));
@@ -1861,6 +1882,7 @@ mod grants {
             after_web_content: false,
             secret: None,
             invite: None,
+            picture: None,
         }
     }
 
@@ -1891,6 +1913,7 @@ mod grants {
             room: None,
             secret: None,
             invite: None,
+            picture: None,
             configuration_changes: None,
             items,
         };
@@ -2175,7 +2198,7 @@ mod interactive {
     use crate::bot_host::{
         hub::{HubFailure, TurnHub},
         interactive::{self, InteractiveArgs, InteractiveRun},
-        rule::{Hold, waiting_held},
+        rule::{Hold, ReadAlong, waiting_held},
     };
 
     fn marked(f: &Fixture, conversation: &str, id: &str, text: &str) -> InboxEntry {
@@ -2208,7 +2231,7 @@ mod interactive {
             &f.newest(&conversation.id),
             far_past(),
             Some(hold),
-            false,
+            ReadAlong::Every,
             false,
         )
     }
@@ -2378,7 +2401,14 @@ mod interactive {
                 cursor: String::new(),
             }])
         }
-        async fn send(&self, _: &str, _: &str, _: Value, _: &str, _: &str) -> Result<(), HubFailure> {
+        async fn send(
+            &self,
+            _: &str,
+            _: &str,
+            _: Value,
+            _: &str,
+            _: &str,
+        ) -> Result<(), HubFailure> {
             Ok(())
         }
         async fn desktop_bots(&self) -> Result<Vec<String>, HubFailure> {
@@ -2405,7 +2435,11 @@ mod interactive {
             if path == turn_path {
                 Ok(serde_json::to_value(&self.turn).unwrap())
             } else {
-                Err(HubFailure::answered(404, None, format!("unexpected read {path}")))
+                Err(HubFailure::answered(
+                    404,
+                    None,
+                    format!("unexpected read {path}"),
+                ))
             }
         }
         async fn write(
@@ -2435,6 +2469,7 @@ mod interactive {
             reply_message_id: None,
             error_code: None,
             hops: 0,
+            discussion_hops: None,
             owner_id: "owner".into(),
             requester_id: Some("owner".into()),
             requester_name: None,

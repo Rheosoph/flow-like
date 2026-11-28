@@ -210,6 +210,8 @@ fn deleting_a_bot_deletes_its_notes() {
             None,
         )
         .unwrap();
-    f.store.delete_bot(&bot.id).unwrap();
+    f.store
+        .delete_bot(&bot.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     assert!(f.store.list_notes(&bot.id, &chat.id).unwrap().is_empty());
 }

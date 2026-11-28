@@ -1,0 +1,235 @@
+{
+	"card": {
+		"doIt": "Mach das für mich",
+		"done": "Fertig",
+		"end": "Tour beenden",
+		"expand": "Guide anzeigen",
+		"label": "Guide",
+		"minimize": "Guide minimieren",
+		"next": "Weiter",
+		"progress": "{{index}} von {{total}}",
+		"skipStep": "Schritt überspringen",
+		"takeMe": "Bring mich hin"
+	},
+	"finished": {
+		"build": {
+			"body": "Als Nächstes kannst du deiner App eine Seite oder einen Chat geben oder FlowPilot weitere Schritte hinzufügen lassen.",
+			"title": "Du hast einen Flow gebaut und ausgeführt."
+		},
+		"close": "Schließen",
+		"toBuild": "Builder-Tour starten",
+		"toUse": "Tour zu Bots und Apps starten",
+		"use": {
+			"body": "Du hast einem Bot eine Aufgabe gegeben und eine App gefunden. Neugierig, wie Apps gebaut werden?",
+			"title": "Du bist startklar."
+		}
+	},
+	"intro": {
+		"app": {
+			"amount": "Betrag",
+			"body": "Eine App ist ein fertiges Werkzeug, hier eine Tabelle mit Rechnungen und einer Zusammenfassung. Nutz die Apps deines Teams, hol dir weitere aus Erkunden oder bau deine eigenen.",
+			"due": "Fällig",
+			"dueSoon": "Diese Woche fällig",
+			"kicker": "Der Bot nutzt eine App",
+			"lookInside": "In die App hineinschauen",
+			"name": "Rechnungseingang",
+			"new": "Neu",
+			"title": "Post hat es mit einer App erledigt.",
+			"total": "Summe",
+			"updatedBy": "Von Post aktualisiert",
+			"vendor": "Lieferant"
+		},
+		"ask": {
+			"body": "Sag einem Bot, was du brauchst, so wie du es einer Kollegin sagen würdest. Bots sind Teammitglieder mit Namen, Gesicht und Aufgabe, und sie fragen, bevor sie etwas Wichtiges tun.",
+			"hint": "Probier es aus: Drück auf Senden und antworte Post.",
+			"kicker": "Du fragst",
+			"title": "Es beginnt mit einem Satz."
+		},
+		"back": "Zurück",
+		"chat": {
+			"allow": "Erlauben",
+			"allowed": "Für diese Aufgabe erlaubt",
+			"approvalBody": "Nur lesen, nur für diese Aufgabe. Du kannst es jederzeit zurücknehmen.",
+			"approvalTitle": "Darf Post das Finance-Postfach lesen?",
+			"decline": "Jetzt nicht",
+			"declined": "Nicht erlaubt",
+			"found": "4 neue Rechnungen gefunden. Ich habe sie für dich in den Rechnungseingang gelegt.",
+			"placeholder": "Nachricht an Post",
+			"reading": "Lese das Finance-Postfach",
+			"reply": "Gern. Zuerst muss ich dein Finance-Postfach lesen.",
+			"request": "Schick mir jeden Montag eine Zusammenfassung der neuen Rechnungen.",
+			"role": "Kümmert sich um deine Mails",
+			"sample": "Okay, ich lasse dein Postfach in Ruhe. Hier ist stattdessen ein Beispiel im Rechnungseingang.",
+			"send": "Senden",
+			"typing": "Post schreibt"
+		},
+		"choose": {
+			"body": "Du hast es von oben und von innen gesehen. Such dir eine Seite aus, der Guide begleitet dich in der echten App.",
+			"inside": "Nach innen · Flows",
+			"kicker": "Du bist dran",
+			"or": "oder nach innen",
+			"stay": "Hier oben bleiben · Du, Bots, Apps",
+			"title": "Wo möchtest du anfangen?"
+		},
+		"flow": {
+			"boardLabel": "Der Flow von Rechnungseingang: Jeden Montag liest er das Finance-Postfach, liest jede Rechnung aus, fügt sie zur Tabelle hinzu und schickt eine Zusammenfassung.",
+			"body": "Die Schritte, auf ein Board gezeichnet. Du musst es nie öffnen, aber du kannst es jederzeit nachlesen. Und es läuft, wo du willst: auf diesem Gerät, auf deinen eigenen Servern oder in der Cloud.",
+			"kicker": "In der App",
+			"kind": {
+				"ai": "KI",
+				"data": "Daten",
+				"event": "Event",
+				"mail": "Mail"
+			},
+			"node": {
+				"extract": "Rechnung auslesen",
+				"read": "Finance-Postfach lesen",
+				"schedule": "Jeden Montag 8:00",
+				"store": "Zur Tabelle hinzufügen",
+				"summary": "Zusammenfassung senden"
+			},
+			"ran": {
+				"cloud": "Lief in der Cloud · 3,8 s · 5 Schritte",
+				"device": "Lief auf diesem Gerät · 3,8 s · 5 Schritte",
+				"server": "Lief auf deinen Servern · 3,8 s · 5 Schritte"
+			},
+			"title": "In jeder App steckt ein Flow."
+		},
+		"next": "Weiter",
+		"progress": "{{current}} von {{total}} · {{kicker}}",
+		"rail": {
+			"app": "Eine App",
+			"appHint": "erledigt die Routine",
+			"bot": "Ein Bot",
+			"botHint": "macht es, fragt vorher",
+			"flow": "Ein Flow",
+			"flowHint": "woraus die App besteht",
+			"you": "Du",
+			"youHint": "sagst, was du brauchst"
+		},
+		"replay": "Intro noch mal ansehen",
+		"sample": "Ein Beispiel. Nichts davon berührt dein echtes Postfach.",
+		"skip": "Direkt zur Frage",
+		"stageLabel": "Das Beispiel",
+		"where": {
+			"cloud": "Cloud",
+			"device": "Dieses Gerät",
+			"label": "Wo es läuft",
+			"server": "Deine Server"
+		}
+	},
+	"menu": {
+		"tour": "Rundgang starten"
+	},
+	"tag": {
+		"click": "Klicken",
+		"drag": "Verbindung ziehen",
+		"open": "Öffnen",
+		"pick": "Wähl eins",
+		"rightClick": "Rechtsklick",
+		"type": "Hier tippen"
+	},
+	"tours": {
+		"build": {
+			"addEvent": {
+				"body": "Jeder Flow beginnt mit einem Event: dem Moment, in dem er läuft. Wähl in der Palette Event. Auf Touchscreens hältst du gedrückt.",
+				"title": "Rechtsklick aufs Board, dann ein Event hinzufügen."
+			},
+			"confirmFlow": {
+				"body": "Etwas wie „Haupt-Flow“ reicht.",
+				"title": "Gib ihm einen Namen und bestätige."
+			},
+			"connect": {
+				"body": "Die Palette zeigt dann nur Nodes, die passen. Wähl einen, zum Beispiel Log. Er wird automatisch verbunden.",
+				"title": "Zieh vom weißen Pin des Events ins Leere."
+			},
+			"createApp": {
+				"body": "Jeder Name passt. Du kannst ihn später ändern.",
+				"title": "Gib ihr einen Namen und leg sie an."
+			},
+			"createFlow": {
+				"body": "Es öffnet sich ein kurzes Formular für den Namen des Flows.",
+				"title": "Leg den Flow an."
+			},
+			"library": {
+				"body": "Apps enthalten deine Flows, Daten, Seiten und Chats.",
+				"title": "Öffne Meine Apps."
+			},
+			"logs": {
+				"body": "Die Logs zeigen Schritt für Schritt, was jeder Node gemacht hat. Du öffnest sie jederzeit über die Seitenleiste des Boards.",
+				"title": "Das war dein erster Lauf."
+			},
+			"newApp": {
+				"body": "In wenigen Minuten baust du eine kleine.",
+				"title": "Leg eine neue App an."
+			},
+			"newFlow": {
+				"body": "Ein Flow ist die Logik: Nodes, die die Arbeit machen. Klick auf Neuer Flow.",
+				"title": "Füg den ersten Flow der App hinzu."
+			},
+			"openFlow": {
+				"body": "Auf dem Board baust du. Klick auf deinen neuen Flow.",
+				"title": "Öffne den Flow."
+			},
+			"run": {
+				"body": "Damit läuft dein Flow einmal, direkt hier auf dem Board.",
+				"title": "Drück beim Event auf Play."
+			},
+			"wait": {
+				"body": "Jeder Node leuchtet auf, während er arbeitet.",
+				"title": "Schau zu, wie er läuft."
+			}
+		},
+		"use": {
+			"app": {
+				"body": "Füg sie hinzu, dann wartet sie einsatzbereit in Meine Apps. Ganz ohne Bauen.",
+				"title": "Öffne eine App, die nützlich aussieht."
+			},
+			"approve": {
+				"body": "Bots fragen, bevor sie deinen Standort nutzen, Nachrichten senden oder Geld ausgeben. Erlaube es einmal, immer oder sag Nein.",
+				"title": "Er fragt zuerst. Beantworte die Anfrage."
+			},
+			"bots": {
+				"body": "Bots sind Helfer, die Aufgaben für dich erledigen. Dafür gibt es einen eigenen Tab.",
+				"title": "Klick in der Seitenleiste auf Bots."
+			},
+			"crew": {
+				"body": "Assistant hilft bei allem, Flux baut Flows mit dir. Der Chat öffnet sich neben deiner Crew.",
+				"title": "Wähl einen Bot aus deiner Crew."
+			},
+			"details": {
+				"body": "Dort siehst du die Details: was der Bot kann und wobei er dich vorher fragen muss.",
+				"title": "Klick über dem Chat auf den Namen des Bots."
+			},
+			"explore": {
+				"body": "In Erkunden findest du fertige Apps von Flow-Like und der Community.",
+				"title": "Jetzt die Apps: Öffne Erkunden."
+			},
+			"send": {
+				"body": "Frag nach etwas Echtem, zum Beispiel „Was kannst du für mich tun?“ oder „Plane eine dreitägige Reise nach Lissabon.“",
+				"title": "Schick ihm eine Nachricht."
+			},
+			"watch": {
+				"body": "Jeder Schritt erscheint, sobald er passiert. Braucht er etwas Heikles, fragt er dich vorher.",
+				"title": "Schau ihm bei der Arbeit zu."
+			}
+		}
+	},
+	"welcome": {
+		"body": "Wir zeigen dir direkt in der App die Teile, die du wirklich brauchst. Das dauert etwa zwei Minuten, und du kannst jederzeit aufhören.",
+		"build": {
+			"body": "Bau Apps und Automationen auf dem Board. Schaltet den Entwicklermodus ein.",
+			"cta": "Zeig mir das Board",
+			"title": "Selbst bauen"
+		},
+		"eyebrow": "Willkommen bei Flow-Like",
+		"invite": "Über eine Einladung gekommen? Die Apps deines Teams sind schon in Meine Apps.",
+		"skip": "Ich schau mich selbst um",
+		"title": "Was führt dich her?",
+		"use": {
+			"body": "Gib Aufgaben an Bots ab und nutze fertige Apps. Ganz ohne Bauen.",
+			"cta": "Zeig mir Bots und Apps",
+			"title": "Dinge erledigen"
+		}
+	}
+}

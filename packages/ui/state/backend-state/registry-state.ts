@@ -25,6 +25,11 @@ import type {
 } from "../../lib/schema/wasm";
 
 export interface IRegistryState {
+	/**
+	 * Packages install into this device's own cache (desktop). Without it there is
+	 * no device install store (web): a package is used by adding it to a project.
+	 */
+	readonly installsOnDevice?: boolean;
 	init(registryUrl?: string): Promise<void>;
 	searchPackages(filters?: SearchFilters): Promise<SearchResults>;
 	getOwnedPackages(filters?: SearchFilters): Promise<SearchResults>;

@@ -149,6 +149,30 @@ fn reads_and_writes_of_a_site_are_granted_apart_and_secrets_per_site() {
 }
 
 #[test]
+fn only_a_plain_read_of_a_site_is_a_site_read_scope() {
+    for scope in [
+        "web:api.example.com:read",
+        "web:localhost:8123:read",
+        "web:[::1]:8080:read",
+        "web:secret:read",
+        "web:private:read",
+    ] {
+        assert!(is_site_read_scope(scope), "{scope}");
+    }
+    for scope in [
+        "web:api.example.com:write",
+        "web:nas.example.com:private:read",
+        "web:api.example.com:secret:API_TOKEN",
+        "web:api.example.com:secret:read",
+        "web::read",
+        "browser:example.com",
+        "*",
+    ] {
+        assert!(!is_site_read_scope(scope), "{scope}");
+    }
+}
+
+#[test]
 fn the_owner_reads_method_site_path_secrets_and_the_start_of_a_write() {
     let read = ask_summary(&json!({
         "url": "https://api.github.com/repos/a/b/issues?state=open",

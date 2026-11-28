@@ -217,6 +217,36 @@ export function readManifestAccess(
 	};
 }
 
+export interface ManifestOAuthScope {
+	provider: string;
+	scopes: string[];
+	reason?: string;
+	required: boolean;
+}
+
+/** The manifest's declared OAuth scopes, read in either casing. */
+export function readManifestOAuthScopes(
+	manifest: unknown,
+): ManifestOAuthScope[] {
+	if (!isRecord(manifest)) return [];
+	const permissions = readRecord(manifest, "permissions");
+	const declared = field(permissions, "oauth_scopes", "oauthScopes");
+	if (!Array.isArray(declared)) return [];
+	return declared.flatMap((scope) => {
+		if (!isRecord(scope)) return [];
+		const provider = readText(scope.provider);
+		if (!provider) return [];
+		return [
+			{
+				provider,
+				scopes: readStrings(scope.scopes),
+				reason: readText(scope.reason),
+				required: scope.required === true,
+			},
+		];
+	});
+}
+
 /**
  * Node permissions are what the sandbox enforces, so they decide the tags
  * whenever the catalog lists the package's nodes; the manifest supplies the

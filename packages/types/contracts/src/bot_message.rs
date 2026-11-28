@@ -92,6 +92,62 @@ pub struct MessageBody {
     /// Numeric model usage and bounded call/compaction detail, grouped by step name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub usage_stats: Vec<Value>,
+    /// On a person's message in a room: how long a discussion the bots it wakes may hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion: Option<DiscussionGrant>,
+    /// On a bot's message: a longer discussion it asks a person in the room to allow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_proposal: Option<DiscussionProposal>,
+    /// On a bot's message: it ends its discussion with this outcome, and hands the word to no one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_outcome: Option<DiscussionOutcome>,
+    /// On a bot's message in a room: the bot turns its discussion may reach, carried forward by
+    /// hosts that keep no turn rows ([`crate::bot_turn::hop_limit`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_hops: Option<u32>,
+    /// On a person's message that starts with `#Team` tags: the ids of the teams it went to. The
+    /// server sets it from the text ([`crate::bot_team::leading_team_tags`]); such a message
+    /// wakes no bot of its own conversation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub teams: Vec<String>,
+    /// On the copy of a team request in the person's thread with the team: the message it copies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_request: Option<crate::bot_team::TeamRequestRef>,
+}
+
+/// A person's permission for a discussion between bots: `rounds` rounds, one message from each
+/// of two bots per round, instead of [`crate::bot_turn::MAX_DISCUSSION_ROUNDS`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiscussionGrant {
+    pub rounds: u32,
+}
+
+impl DiscussionGrant {
+    /// The bot turns the discussion may reach; `None` outside 1 to
+    /// [`crate::bot_turn::MAX_LONG_DISCUSSION_ROUNDS`] rounds.
+    pub fn hops(&self) -> Option<u32> {
+        (1..=crate::bot_turn::MAX_LONG_DISCUSSION_ROUNDS)
+            .contains(&self.rounds)
+            .then(|| crate::bot_turn::discussion_hops(self.rounds))
+    }
+}
+
+/// A longer discussion a bot asks the room to allow: `rounds` rounds and why the topic needs them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiscussionProposal {
+    pub rounds: u32,
+    pub reason: String,
+}
+
+/// A discussion outcome's summary has at most this many characters.
+pub const MAX_DISCUSSION_SUMMARY_CHARS: usize = 280;
+
+/// How a bot ended a discussion: whether the bots agreed, and in one sentence on what, or what
+/// stays open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiscussionOutcome {
+    pub agreed: bool,
+    pub summary: String,
 }
 
 /// Names the interactive chat run that answers a message.
@@ -233,6 +289,9 @@ pub struct ApprovalRequest {
     /// Set on a `room_invite` card: who the bot wants to bring into the room, and why.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invite: Option<RoomInviteAsk>,
+    /// Set on a card that asks to show a picture in a room: the picture, in the bot's workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<WorkspaceHandle>,
     /// The full proposed settings patch, shown before approving a bot configuration change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configuration_changes: Option<Value>,
@@ -271,13 +330,33 @@ pub struct ApprovalItem {
     #[serde(default = "one_call", skip_serializing_if = "is_one_call")]
     pub calls: u32,
     /// The turn read web content before this call, so the owner's standing grants for it were set
-    /// aside and it asks again; "always" is not offered.
+    /// aside and it asks again; "always" is offered only when every scope is a plain site read.
     #[serde(default, skip_serializing_if = "is_false")]
     pub after_web_content: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<SecretAsk>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invite: Option<RoomInviteAsk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<WorkspaceHandle>,
+}
+
+/// A card's picture is an image file of a bot workspace, never a conversation file.
+fn check_picture(field: &str, picture: Option<&WorkspaceHandle>) -> Result<(), BodyError> {
+    let Some(picture) = picture else {
+        return Ok(());
+    };
+    if picture.is_conversation_file() {
+        return refuse(format!("{field} must be a file of the bot's workspace"));
+    }
+    picture.check(field)?;
+    if !picture.mime.starts_with("image/") {
+        return refuse(format!(
+            "{field}.mime '{}' must be an image type",
+            clipped(&picture.mime)
+        ));
+    }
+    Ok(())
 }
 
 impl ApprovalItem {
@@ -302,7 +381,8 @@ impl ApprovalItem {
             return refuse(format!("{field}.calls must be at least 1"));
         }
         self.secret.as_ref().map_or(Ok(()), SecretAsk::check)?;
-        self.invite.as_ref().map_or(Ok(()), RoomInviteAsk::check)
+        self.invite.as_ref().map_or(Ok(()), RoomInviteAsk::check)?;
+        check_picture(&format!("{field}.picture"), self.picture.as_ref())
     }
 }
 
@@ -437,6 +517,7 @@ impl ApprovalRequest {
             after_web_content: false,
             secret: self.secret.clone(),
             invite: self.invite.clone(),
+            picture: self.picture.clone(),
         }]
     }
 
@@ -531,6 +612,7 @@ impl ApprovalRequest {
         }
         self.secret.as_ref().map_or(Ok(()), SecretAsk::check)?;
         self.invite.as_ref().map_or(Ok(()), RoomInviteAsk::check)?;
+        check_picture("body.approval.picture", self.picture.as_ref())?;
         check_item_hashes(
             "body.approval.items",
             self.items.len(),
@@ -947,7 +1029,21 @@ impl MessageBody {
             note.check()
                 .map_err(|error| BodyError(format!("body.note: {error}")))?;
         }
+        if let Some(outcome) = &self.discussion_outcome
+            && outcome.summary.chars().count() > MAX_DISCUSSION_SUMMARY_CHARS
+        {
+            return refuse(format!(
+                "body.discussion_outcome.summary has {} characters; at most {MAX_DISCUSSION_SUMMARY_CHARS}",
+                outcome.summary.chars().count()
+            ));
+        }
         Ok(())
+    }
+
+    /// A bot's message that pauses its discussion for a person's answer or ends it: the bot it
+    /// replies to doesn't get the word back.
+    pub fn rests_discussion(&self) -> bool {
+        self.discussion_proposal.is_some() || self.discussion_outcome.is_some()
     }
 
     fn check_mentions(&self) -> Result<(), BodyError> {
@@ -1821,6 +1917,40 @@ mod conversation_file_tests {
         }
     }
 
+    #[test]
+    fn a_card_picture_is_an_image_of_a_bot_workspace() {
+        let card = |picture: Value| {
+            json!({ "approval": {
+                "id": "ap-1", "turn_id": "bt_1", "tool": "computer_screenshot",
+                "summary": "Show a screenshot", "scope": "", "args_hash": "h", "picture": picture,
+            } })
+        };
+        let picture = |app_id: &str, mime: &str| {
+            json!({
+                "app_id": app_id, "path": "bot/screenshots/a.png", "bytes": 4,
+                "sha256": "a".repeat(64), "mime": mime,
+            })
+        };
+        let body = MessageBody::parse(&card(picture("ws-1", "image/png"))).unwrap();
+        let approval = body.approval.unwrap();
+        assert_eq!(
+            approval
+                .picture
+                .as_ref()
+                .map(|picture| picture.path.as_str()),
+            Some("bot/screenshots/a.png")
+        );
+        assert_eq!(approval.batch()[0].picture, approval.picture);
+        for picture in [
+            picture("ws-1", "application/pdf"),
+            picture("conversation_c1", "image/png"),
+            json!({ "app_id": "ws-1", "path": "../a.png", "bytes": 4, "sha256": "a".repeat(64), "mime": "image/png" }),
+        ] {
+            let error = MessageBody::parse(&card(picture)).unwrap_err().to_string();
+            assert!(error.contains("approval.picture"), "{error}");
+        }
+    }
+
     fn plain_card() -> ApprovalRequest {
         ApprovalRequest {
             id: "ap-1".into(),
@@ -1834,6 +1964,7 @@ mod conversation_file_tests {
             room: None,
             secret: None,
             invite: None,
+            picture: None,
             configuration_changes: None,
             items: Vec::new(),
         }
@@ -1849,6 +1980,7 @@ mod conversation_file_tests {
             after_web_content: false,
             secret: None,
             invite: None,
+            picture: None,
         }
     }
 
@@ -1916,6 +2048,7 @@ mod conversation_file_tests {
                 after_web_content: false,
                 secret: card.secret.clone(),
                 invite: None,
+                picture: None,
             }
         );
         let parsed: ApprovalResponse =

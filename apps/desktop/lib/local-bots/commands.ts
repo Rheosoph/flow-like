@@ -10,6 +10,8 @@ import type {
 	IBotTask,
 	IBotToolGrant,
 	IBotWorkspace,
+	ICalendarRange,
+	ICalendarWake,
 	IConversation,
 	IConversationFileDownload,
 	IConversationFileReady,
@@ -31,7 +33,12 @@ import type {
 	IStarredMessagesQuery,
 	IUpdateBotRequest,
 	IUpdateBotTaskRequest,
+	IUpdateCalendarWake,
 } from "@flow-like/flow-like-ui";
+import {
+	expectCalendarRange,
+	expectCalendarWake,
+} from "@flow-like/flow-like-ui/lib/bot-calendar-shape";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { type InvokeArgs, invoke } from "@tauri-apps/api/core";
 
@@ -144,9 +151,18 @@ export const localBots = {
 		);
 	},
 
-	/** Deletes the bot with its workspace and memory. */
-	async delete(botId: string): Promise<void> {
-		await run(`delete local bot ${botId}`, "local_bots_delete", { botId });
+	/**
+	 * Deletes the bot with its workspace and memory. Assistant or Flux goes only when
+	 * `accountBuiltIns`, the built-ins the signed-in account holds, has its kind.
+	 */
+	async delete(
+		botId: string,
+		accountBuiltIns: readonly NonNullable<IBot["system"]>[] = [],
+	): Promise<void> {
+		await run(`delete local bot ${botId}`, "local_bots_delete", {
+			botId,
+			...(accountBuiltIns.length ? { accountBuiltIns } : {}),
+		});
 	},
 
 	/** The app holding the bot's files and databases, made on first use; refused for Flux. */
@@ -293,6 +309,40 @@ export const localTasks = {
 			`delete task ${taskId} of local bot ${botId}`,
 			"local_bot_delete_task",
 			{ botId, taskId },
+		);
+	},
+};
+
+export const localCalendar = {
+	async wake(botId: string): Promise<ICalendarWake> {
+		const operation = `read the calendar wake-ups of local bot ${botId}`;
+		return expectCalendarWake(
+			await run(operation, "local_bot_calendar_wake", { botId }),
+			operation,
+		);
+	},
+
+	async setWake(
+		botId: string,
+		update: IUpdateCalendarWake,
+	): Promise<ICalendarWake> {
+		const operation = `change the calendar wake-ups of local bot ${botId}`;
+		return expectCalendarWake(
+			await run(operation, "local_bot_set_calendar_wake", { botId, update }),
+			operation,
+		);
+	},
+
+	/** Local bots from this computer's store; a bot this desktop hosts for an account by its account id. */
+	async events(
+		botId: string,
+		from: string,
+		to: string,
+	): Promise<ICalendarRange> {
+		const operation = `list the calendar of bot ${botId}`;
+		return expectCalendarRange(
+			await run(operation, "bot_calendar_events", { botId, from, to }),
+			operation,
 		);
 	},
 };

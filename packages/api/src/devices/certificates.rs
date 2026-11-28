@@ -890,16 +890,16 @@ impl NativeDelivery<'_> {
             .email
             .filter(|email| !email.trim().is_empty())
             .ok_or(Undelivered::NoEmail)?;
+        let (html, text) = crate::mail::templates::device_notice(
+            &delivery.title,
+            &delivery.description,
+            &format!("{}{}", self.origin(), delivery.link),
+        );
         mail.send(EmailMessage {
             to: email,
             subject: delivery.title,
-            body_html: None,
-            body_text: Some(format!(
-                "{}\n\n{}{}\n",
-                delivery.description,
-                self.origin(),
-                delivery.link
-            )),
+            body_html: Some(html),
+            body_text: Some(text),
         })
         .await
         .map_err(|_| {

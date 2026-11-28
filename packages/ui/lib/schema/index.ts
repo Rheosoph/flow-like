@@ -151,6 +151,7 @@ export type {
 export * from "./profile/profile";
 export * from "./app/app";
 export * from "./app/fork";
+export * from "./app/showcase";
 export * from "./app/template-search";
 export * from "./solution/solution";
 export * from "./sink";

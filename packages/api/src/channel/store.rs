@@ -27,8 +27,16 @@ pub const MAX_PENDING_INBOUND_PER_CHANNEL: u64 = 8;
 /// the next round.
 pub const MAX_INBOUND_PER_DRAIN: u64 = 64;
 
+const CANCEL_ROW_PREFIX: &str = "cancel:";
+
 pub fn cancel_row_id(channel_id: &str) -> String {
-    format!("cancel:{channel_id}")
+    format!("{CANCEL_ROW_PREFIX}{channel_id}")
+}
+
+/// Request rows and cancel tombstones share one id space. A request registered under a
+/// tombstone's id would keep that channel's cancel from ever being written.
+pub fn is_reserved_request_id(request_id: &str) -> bool {
+    request_id.starts_with(CANCEL_ROW_PREFIX)
 }
 
 /// A registration may not outlive [`MAX_TTL`] and must lie in the future.
@@ -101,6 +109,11 @@ pub async fn register_request(
     app_id: Option<&str>,
     expires_at: i64,
 ) -> Result<i64, DbErr> {
+    if is_reserved_request_id(request_id) {
+        return Err(DbErr::Custom(format!(
+            "request id '{request_id}' on channel {channel_id} uses the reserved cancel prefix"
+        )));
+    }
     let now = now_unix();
     let expires_at = clamp_expires_at(expires_at, now);
 
@@ -403,6 +416,31 @@ mod tests {
         assert!(inbound_is_full(MAX_PENDING_INBOUND_PER_CHANNEL));
         assert!(MAX_INBOUND_PER_DRAIN >= MAX_PENDING_INBOUND_PER_CHANNEL);
         assert_eq!(cancel_row_id("run-1"), "cancel:run-1");
+    }
+
+    #[test]
+    fn a_request_cannot_take_the_id_of_a_cancel_tombstone() {
+        assert!(is_reserved_request_id(&cancel_row_id("run-1")));
+        assert!(!is_reserved_request_id(
+            &flow_like_types::channel::new_request_id()
+        ));
+        let register = include_str!("store.rs")
+            .split_once("pub async fn register_request(")
+            .expect("register_request exists")
+            .1;
+        let refused = register
+            .find("is_reserved_request_id(request_id)")
+            .expect("register_request refuses reserved ids");
+        assert!(
+            refused
+                < register
+                    .find("new_row(")
+                    .expect("register_request inserts a row")
+        );
+        assert!(
+            include_str!("../routes/channel.rs")
+                .contains("store::is_reserved_request_id(&body.request_id)")
+        );
     }
 
     #[test]

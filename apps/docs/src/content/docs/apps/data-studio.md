@@ -59,6 +59,20 @@ The **Sources** tab lists project and personal relational tables. Tables may be 
 Use [Choosing a Lance index](/topics/datascience/lance-indexes/) before adding an index. It maps the repeated query to the appropriate index and explains which algorithms work on native Lance tables and which are supported
 by a remote LanceDB connection.
 
+## External databases
+
+**Sources → External databases** connects a database outside Flow-Like to the App. SQL in the **Queries** tab and in [Home data widgets](/start/home/#query-several-apps-with-sql) can then join its tables with the App's own tables. You can connect PostgreSQL (including CockroachDB), MySQL (including MariaDB), ClickHouse, BigQuery, and Amazon Athena. BigQuery reads with a service account key, and its tokens are limited to read-only access. Athena reads with an access key, which needs Athena and Glue access, read access to the data in S3, and write access to the query result location unless the workgroup manages query results. ClickHouse is reached over plain HTTP, which would send its credentials unencrypted, so only self-hosted hubs that allow private networks connect to it.
+
+1. Choose **Connect database**, pick the database, and enter its connection settings and credentials.
+2. Choose its **Schema name in SQL**. Queries address its tables as `<schema name>.<table>`, for example `warehouse.orders`.
+3. Use **Check connection** to connect with the stored settings and list the tables queries can use.
+
+Only App admins can connect, edit, or remove external databases. Credentials are encrypted before they are stored and are never shown again; to change them, enter new ones. People whose role can read the App's database can query an external database and check its connection, but never see its credentials.
+
+Every query is read-only and runs on the hub's [query service](/self-hosting/query-service/), which connects with the stored credentials for that query only. Still, give Flow-Like a database account that can only read. The hosted service reaches databases on public addresses only.
+
+Results that read an external database are cached by time alone, because its tables carry no versions Flow-Like could compare.
+
 ## The ontology layer
 
 On top of those tables you can define an **ontology**: object types, link types, object views, and governed actions — a knowledge graph you can search, traverse, visualize, and act on without moving any data.

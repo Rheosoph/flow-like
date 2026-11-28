@@ -42,22 +42,28 @@ const MAX_USES = [0, 1, 5, 10, 25, 100] as const;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-function formatUnit(value: number, unit: "day" | "hour" | "minute"): string {
-	return new Intl.NumberFormat(undefined, {
+function formatUnit(
+	value: number,
+	unit: "day" | "hour" | "minute",
+	locale: string,
+): string {
+	return new Intl.NumberFormat(locale, {
 		style: "unit",
 		unit,
 		unitDisplay: "long",
 	}).format(value);
 }
 
-function formatRemaining(ms: number): string {
-	if (ms >= DAY_MS) return formatUnit(Math.floor(ms / DAY_MS), "day");
-	if (ms >= HOUR_MS) return formatUnit(Math.floor(ms / HOUR_MS), "hour");
-	return formatUnit(Math.max(1, Math.ceil(ms / 60_000)), "minute");
+function formatRemaining(ms: number, locale: string): string {
+	if (ms >= DAY_MS) return formatUnit(Math.floor(ms / DAY_MS), "day", locale);
+	if (ms >= HOUR_MS)
+		return formatUnit(Math.floor(ms / HOUR_MS), "hour", locale);
+	return formatUnit(Math.max(1, Math.ceil(ms / 60_000)), "minute", locale);
 }
 
 function useLinkMeta() {
-	const { t } = useTranslation("bots");
+	const { t, i18n } = useTranslation("bots");
+	const locale = i18n.resolvedLanguage ?? i18n.language;
 	return (link: IConversationLink, now = Date.now()): string => {
 		const parts: string[] = [];
 		const usedUp = link.max_uses > 0 && link.count_joined >= link.max_uses;
@@ -76,7 +82,7 @@ function useLinkMeta() {
 				left <= 0
 					? t("roomLinks.expired", "Expired")
 					: t("roomLinks.expiresIn", "Expires in {{time}}", {
-							time: formatRemaining(left),
+							time: formatRemaining(left, locale),
 						}),
 			);
 		}
@@ -98,7 +104,8 @@ function useCopyLink() {
 }
 
 function CreateLink({ conversationId }: Readonly<{ conversationId: string }>) {
-	const { t } = useTranslation("bots");
+	const { t, i18n } = useTranslation("bots");
+	const locale = i18n.resolvedLanguage ?? i18n.language;
 	const create = useCreateConversationLink();
 	const copy = useCopyLink();
 	const [expiry, setExpiry] = useState<number>(0);
@@ -109,6 +116,7 @@ function CreateLink({ conversationId }: Readonly<{ conversationId: string }>) {
 			: formatUnit(
 					hours % 24 === 0 ? hours / 24 : hours,
 					hours % 24 === 0 ? "day" : "hour",
+					locale,
 				);
 	const submit = () =>
 		create

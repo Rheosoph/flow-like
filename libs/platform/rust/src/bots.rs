@@ -274,6 +274,120 @@ impl fmt::Debug for SetBotSecret {
     }
 }
 
+wire_enum!(
+    /// What kind of thing an entity of the bot's memory is.
+    BotMemoryEntityKind {
+        Person => "person",
+        Place => "place",
+        Organization => "organization",
+        Project => "project",
+        Thing => "thing",
+    }
+);
+
+/// Where in a chat a fact was said.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BotMemoryEvidence {
+    pub seq: u64,
+    pub message_id: String,
+    pub quote: String,
+    pub at: String,
+    pub speaker: Option<BotMemorySpeaker>,
+}
+
+/// The account that wrote a message. The id is the identity, the name a display hint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BotMemorySpeaker {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// One thing the bot remembers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BotMemoryFact {
+    pub id: String,
+    pub text: String,
+    pub kind: String,
+    pub subject: String,
+    #[serde(default)]
+    pub subject_id: Option<String>,
+    #[serde(default)]
+    pub object_id: Option<String>,
+    #[serde(default)]
+    pub relation: Option<String>,
+    pub source: String,
+    pub confidence: f32,
+    pub recorded_at: String,
+    pub valid_from: Option<String>,
+    pub valid_to: Option<String>,
+    #[serde(default)]
+    pub geojson: Option<Value>,
+    #[serde(default)]
+    pub time: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    /// The id of the fact that replaced this one; `None` while it still holds.
+    pub superseded_by: Option<String>,
+    #[serde(default)]
+    pub evidence: Vec<BotMemoryEvidence>,
+    /// The conversation the fact was learned in; `None` in the owner's direct chat.
+    #[serde(default)]
+    pub conversation_scope: Option<String>,
+}
+
+/// A person, place, organization, project or thing the bot knows about.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BotMemoryEntity {
+    /// Unique only within its `conversation_scope`.
+    pub id: String,
+    pub name: String,
+    pub kind: BotMemoryEntityKind,
+    /// True for the entity standing for the bot's owner (`e_user`).
+    #[serde(default)]
+    pub owner: bool,
+    #[serde(default)]
+    pub participant: Option<String>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    pub fact_count: usize,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub conversation_scope: Option<String>,
+}
+
+/// Changes to an entity; `None` leaves a field as it is.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct UpdateBotMemoryEntity {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<BotMemoryEntityKind>,
+}
+
+#[derive(Deserialize)]
+struct BotMemoryFacts {
+    facts: Vec<BotMemoryFact>,
+}
+
+#[derive(Deserialize)]
+struct BotMemoryEntities {
+    entities: Vec<BotMemoryEntity>,
+}
+
+#[derive(Deserialize)]
+struct BotMemoryForgotten {
+    forgotten: Vec<BotMemoryFact>,
+}
+
+fn scoped(scope: Option<&str>) -> RequestOptions {
+    match scope {
+        Some(scope) => RequestOptions::new().query("scope", scope),
+        None => RequestOptions::new(),
+    }
+}
+
 #[derive(Deserialize)]
 struct Bots {
     bots: Vec<Bot>,
@@ -393,5 +507,110 @@ impl Client {
             &RequestOptions::new(),
         )
         .await
+    }
+
+    /// What the bot remembers, newest first. `include_superseded` adds facts newer ones replaced.
+    pub async fn list_bot_memory_facts(
+        &self,
+        bot_id: &str,
+        include_superseded: bool,
+    ) -> Result<Vec<BotMemoryFact>> {
+        let options = if include_superseded {
+            RequestOptions::new().query("include_superseded", true)
+        } else {
+            RequestOptions::new()
+        };
+        let list: BotMemoryFacts = self
+            .request(Method::GET, &["bots", bot_id, "memory", "facts"], &options)
+            .await?;
+        Ok(list.facts)
+    }
+
+    /// Makes the bot forget one fact and returns it.
+    pub async fn forget_bot_memory_fact(
+        &self,
+        bot_id: &str,
+        fact_id: &str,
+    ) -> Result<BotMemoryFact> {
+        self.request(
+            Method::DELETE,
+            &["bots", bot_id, "memory", "facts", fact_id],
+            &RequestOptions::new(),
+        )
+        .await
+    }
+
+    /// Forgets everything the bot remembered. Answers 409 while another process works on the
+    /// memory: retry later.
+    pub async fn reset_bot_memory(&self, bot_id: &str) -> Result<()> {
+        let _: Value = self
+            .request(
+                Method::DELETE,
+                &["bots", bot_id, "memory"],
+                &RequestOptions::new(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_bot_memory_entities(&self, bot_id: &str) -> Result<Vec<BotMemoryEntity>> {
+        let list: BotMemoryEntities = self
+            .request(
+                Method::GET,
+                &["bots", bot_id, "memory", "entities"],
+                &RequestOptions::new(),
+            )
+            .await?;
+        Ok(list.entities)
+    }
+
+    /// `scope` is the entity's `conversation_scope` (ids are unique only within one); `None` for
+    /// the owner's direct chat.
+    pub async fn update_bot_memory_entity(
+        &self,
+        bot_id: &str,
+        entity_id: &str,
+        changes: &UpdateBotMemoryEntity,
+        scope: Option<&str>,
+    ) -> Result<BotMemoryEntity> {
+        self.request(
+            Method::PATCH,
+            &["bots", bot_id, "memory", "entities", entity_id],
+            &scoped(scope).json(serde_json::to_value(changes)?),
+        )
+        .await
+    }
+
+    /// Folds an entity into `into`. Merging away the owner entity `e_user` is refused (400).
+    pub async fn merge_bot_memory_entity(
+        &self,
+        bot_id: &str,
+        entity_id: &str,
+        into: &str,
+        scope: Option<&str>,
+    ) -> Result<BotMemoryEntity> {
+        self.request(
+            Method::POST,
+            &["bots", bot_id, "memory", "entities", entity_id, "merge"],
+            &scoped(scope).json(json!({ "into": into })),
+        )
+        .await
+    }
+
+    /// Forgets an entity and every fact about it; returns those facts. Refused (400) for `e_user`.
+    pub async fn forget_bot_memory_entity(
+        &self,
+        bot_id: &str,
+        entity_id: &str,
+        scope: Option<&str>,
+    ) -> Result<Vec<BotMemoryFact>> {
+        let forgotten: BotMemoryForgotten = self
+            .request(
+                Method::DELETE,
+                &["bots", bot_id, "memory", "entities", entity_id],
+                &scoped(scope),
+            )
+            .await?;
+        Ok(forgotten.forgotten)
     }
 }

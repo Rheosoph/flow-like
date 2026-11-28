@@ -44,7 +44,9 @@ use chrono::{DateTime, Duration as ChronoDuration, FixedOffset};
 use flow_like::{
     flow::copilot::{
         BotToolHost, BotToolset, HeadlessMemory, NotesHandle, PlatformContextInput, ReplyFiles,
-        ToolTrail, bot_platform_context,
+        ToolTrail,
+        bot_discussion::DiscussionReply,
+        bot_platform_context,
         bot_talk::{AnsweredRound, BotPresence, BotTalk},
         decision_event::{self, EventDecision},
         find_bot_tool_spec,
@@ -437,6 +439,9 @@ pub(super) async fn holds_lease_or_retry(
     false
 }
 
+/// Who woke the turn and who reads the answer. `discussion` says the turn may be part of a
+/// discussion between bots: neither an `ask_bot` question or answer nor in an exchange room.
+#[allow(clippy::too_many_arguments)]
 async fn turn_requester(
     db: &DatabaseConnection,
     turn: &bot_turn::Model,
@@ -444,14 +449,33 @@ async fn turn_requester(
     kind: ConversationKind,
     addressed: bool,
     reactions: Vec<flow_like::flow::copilot::ReactionNote>,
+    talking_with: Option<&str>,
+    discussion: bool,
 ) -> Result<flow_like::flow::copilot::TurnRequester, ApiError> {
     let requester_id = turn
         .requester_id
         .clone()
         .unwrap_or_else(|| turn.owner_id.clone());
-    let ids = [requester_id.as_str(), turn.owner_id.as_str()];
+    let ids: Vec<&str> = [requester_id.as_str(), turn.owner_id.as_str()]
+        .into_iter()
+        .chain(talking_with)
+        .collect();
     let names = history::sender_names(db, &ids).await?;
+    let in_room = kind == ConversationKind::Group && discussion;
+    let room_bots = if in_room {
+        history::room_bot_names(db, &turn.conversation_id, &turn.bot_id).await?
+    } else {
+        Vec::new()
+    };
+    let hops = u32::try_from(turn.hops).unwrap_or(0);
     Ok(flow_like::flow::copilot::TurnRequester {
+        discussion_hops: (in_room && hops > 0).then_some(hops),
+        discussion_limit: flow_like_types::bot_turn::hop_limit(
+            true,
+            turn.discussion_hops
+                .and_then(|hops| u32::try_from(hops).ok()),
+        ),
+        room_bots,
         requester_name: names.get(&requester_id).cloned(),
         owner_name: names.get(&turn.owner_id).cloned(),
         requester_id,
@@ -460,6 +484,9 @@ async fn turn_requester(
         room: room.map(str::to_string),
         addressed,
         reactions,
+        talking_with: talking_with.map(|partner| {
+            flow_like::flow::copilot::TalkingWith::of(partner, &turn.bot_id, &names)
+        }),
     })
 }
 
@@ -553,6 +580,12 @@ pub(crate) fn reply_request(
         "reply_to": turn.trigger_message_id,
         "hops": u32::try_from(turn.hops).unwrap_or(0).saturating_add(1),
     });
+    if let Some(budget) = turn
+        .discussion_hops
+        .and_then(|hops| u32::try_from(hops).ok())
+    {
+        body["discussion_hops"] = json!(budget);
+    }
     if let Some(code) = error_code {
         body["error"] = json!({ "code": code });
     }
@@ -587,6 +620,16 @@ pub(crate) fn answer_request(turn: &bot_turn::Model, answer: &Answer) -> Option<
             && let Some(envelope) = request.envelope.as_mut()
         {
             envelope["body"]["note"] = json!(note);
+        }
+        if let Some(proposal) = &answer.discussion_proposal
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            envelope["body"]["discussion_proposal"] = json!(proposal);
+        }
+        if let Some(outcome) = &answer.discussion_outcome
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            envelope["body"]["discussion_outcome"] = json!(outcome);
         }
         if let Some(envelope) = request.envelope.as_mut() {
             flow_like_types::bot_reply_files::attach_reply_files(
@@ -635,6 +678,10 @@ pub(crate) struct Answer {
     pub(crate) tool_calls: Vec<flow_like_types::bot_tool_trail::ToolCall>,
     /// The files the bot attached to its reply with `file_attach`.
     pub(crate) files: Vec<flow_like_types::bot_reply_files::ReplyFile>,
+    /// The longer discussion the bot proposed with `discussion_propose`.
+    pub(crate) discussion_proposal: Option<flow_like_types::bot_message::DiscussionProposal>,
+    /// The outcome the bot ended its discussion with (`discussion_end`).
+    pub(crate) discussion_outcome: Option<flow_like_types::bot_message::DiscussionOutcome>,
     /// The taint the turn ended with; the reply records it for the turns that read it.
     pub(crate) taint: flow_like_types::data_classification::DataSensitivity,
 }
@@ -674,6 +721,8 @@ fn silent_answer(completed: bool) -> Answer {
         note: None,
         tool_calls: Vec::new(),
         files: Vec::new(),
+        discussion_proposal: None,
+        discussion_outcome: None,
         usage_stats: Vec::new(),
         taint: Default::default(),
     }
@@ -962,6 +1011,8 @@ async fn attempt_with(
             note: None,
             tool_calls: Vec::new(),
             files: Vec::new(),
+            discussion_proposal: None,
+            discussion_outcome: None,
             usage_stats: Vec::new(),
             taint: Default::default(),
         });
@@ -1015,6 +1066,8 @@ async fn attempt_with(
             note: None,
             tool_calls: Vec::new(),
             files: Vec::new(),
+            discussion_proposal: None,
+            discussion_outcome: None,
             usage_stats: Vec::new(),
             taint: Default::default(),
         });
@@ -1068,6 +1121,9 @@ async fn attempt_with(
     let addressed = transcript.addressed || asker.is_some();
     unaddressed.store(!addressed || !reactions.is_empty(), Ordering::SeqCst);
 
+    let in_discussion = answered_round.is_none()
+        && asker.is_none()
+        && !crate::routes::inbox::conversations::is_exchange(&conversation);
     let requester = turn_requester(
         &state.db,
         turn,
@@ -1075,6 +1131,8 @@ async fn attempt_with(
         kind,
         addressed,
         reactions,
+        transcript.talking_with.as_deref(),
+        in_discussion,
     )
     .await?;
     if let Some(saved) = &checkpoint {
@@ -1155,6 +1213,8 @@ async fn attempt_with(
                 note: None,
                 tool_calls: Vec::new(),
                 files: Vec::new(),
+                discussion_proposal: None,
+                discussion_outcome: None,
                 usage_stats: usage.snapshot(),
                 taint: Default::default(),
             });
@@ -1237,6 +1297,8 @@ async fn attempt_with(
                     note: None,
                     tool_calls: Vec::new(),
                     files: Vec::new(),
+                    discussion_proposal: None,
+                    discussion_outcome: None,
                     usage_stats: Vec::new(),
                     taint: Default::default(),
                 });
@@ -1254,7 +1316,7 @@ async fn attempt_with(
             }
         }
         let instruction = if decision_event::monitoring(event) {
-            decision_event::MONITOR_INSTRUCTION
+            decision_event::monitoring_instruction(event)
         } else {
             event_delivery
                 .map(EventDecision::instruction)
@@ -1516,6 +1578,12 @@ async fn attempt_with(
         bot.context.host_tools =
             std::mem::take(&mut bot.context.host_tools).with_reply_files(files.clone());
     }
+    let discussion = (kind == ConversationKind::Group && in_discussion && !ephemeral_user_context)
+        .then(DiscussionReply::new);
+    if let Some(proposals) = &discussion {
+        bot.context.host_tools =
+            std::mem::take(&mut bot.context.host_tools).with_discussion(proposals.clone());
+    }
     let room_memory = kind == ConversationKind::Group;
     let owner_memory_allowed =
         super::memory::memory_policy(&state.db, &chat_conversation, owner, &turn.bot_id)
@@ -1643,8 +1711,10 @@ async fn attempt_with(
         ancestors,
         batch.clone(),
     ));
-    // A call hears the reply while it is written when the turn answers in its own conversation.
-    let streams_reply = live_call && answered_round.is_none() && asker.is_none();
+    // The people of the conversation see (or, in a call, hear) the reply while it is written when
+    // the turn answers in its own conversation. An end-to-end encrypted conversation never gets
+    // here: the server refuses it above, so no plaintext of one is ever published.
+    let streams_reply = answered_round.is_none() && asker.is_none();
     let talk = match asker {
         Some(asked_by) => BotTalk::resumed(
             talk_host.clone(),
@@ -1659,7 +1729,7 @@ async fn attempt_with(
     let acknowledgement = bot.context.acknowledgement;
     let sub_task_compute = bot.context.compute.clone();
     let reply_stream = streams_reply
-        .then(|| ReplyStream::open(state, turn, bot.context.tool_gate.clone()))
+        .then(|| ReplyStream::open(state, turn, bot.context.tool_gate.clone(), live_call))
         .flatten();
     let reply_sink = reply_stream.as_ref().map(ReplyStream::sink);
     let usage_stats = flow_like::flow::copilot::bot_usage::BotUsage::default();
@@ -1794,6 +1864,8 @@ async fn attempt_with(
                 note: None,
                 tool_calls: Vec::new(),
                 files: Vec::new(),
+                discussion_proposal: None,
+                discussion_outcome: None,
                 usage_stats: Vec::new(),
                 taint: Default::default(),
             })
@@ -1881,6 +1953,8 @@ async fn attempt_with(
                     .as_ref()
                     .map(ReplyFiles::files)
                     .unwrap_or_default(),
+                discussion_proposal: discussion.as_ref().and_then(DiscussionReply::proposal),
+                discussion_outcome: discussion.as_ref().and_then(DiscussionReply::outcome),
                 taint: run_taint.taint(),
             })
         }

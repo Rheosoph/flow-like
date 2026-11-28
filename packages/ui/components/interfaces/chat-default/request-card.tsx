@@ -83,20 +83,22 @@ export function RequestMark({
 }: Readonly<{
 	icon: LucideIcon;
 	tone?: RequestTone;
-	size?: "sm" | "md";
+	/** `xs` is the icon of a one-line request, such as a settled approval in the transcript. */
+	size?: "xs" | "sm" | "md";
 	children?: ReactNode;
 }>) {
-	const box = size === "sm" ? "size-8" : "size-9";
+	const box = size === "xs" ? "size-5" : size === "sm" ? "size-8" : "size-9";
 	if (!children) {
 		return (
 			<span
 				className={cn(
-					"flex shrink-0 items-center justify-center rounded-xl border",
+					"flex shrink-0 items-center justify-center border",
+					size === "xs" ? "rounded-md" : "rounded-xl",
 					box,
 					MARK_TONES[tone],
 				)}
 			>
-				<Icon className="size-4" aria-hidden />
+				<Icon className={size === "xs" ? "size-3" : "size-4"} aria-hidden />
 			</span>
 		);
 	}

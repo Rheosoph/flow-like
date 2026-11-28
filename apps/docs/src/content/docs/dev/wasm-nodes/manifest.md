@@ -88,14 +88,31 @@ timeout = "extended"
 
 ### Timeout tiers
 
-| Tier | Limit |
-| --- | --- |
-| `quick` | 5 seconds |
-| `standard` | 30 seconds |
-| `extended` | 60 seconds |
-| `long_running` | 5 minutes |
-| `very_long` | 10 minutes |
-| `maximum` | 30 minutes |
+| Tier | Limit | Compute (fuel) |
+| --- | --- | --- |
+| `quick` | 5 seconds | 1e11 |
+| `standard` | 30 seconds | 6e11 |
+| `extended` | 60 seconds | 1.2e12 |
+| `long_running` | 5 minutes | 6e12 |
+| `very_long` | 10 minutes | 1.2e13 |
+| `maximum` | 30 minutes | 3.6e13 |
+
+Every call also has a compute budget, counted in WASM instructions ("fuel").
+The budget follows the tier: 2e10 fuel per second of the tier's limit, and never
+less than 1e11. Fuel is a deterministic backstop; on real hardware the
+wall-clock limit is normally reached first. Without it, CPU-bound nodes would
+run out of fuel after a few seconds no matter which tier they declared. The
+budget is refilled for every call.
+
+The server may cap both values. Executors limit the timeout with
+`EXECUTOR_WASM_MAX_TIMEOUT_SECS`, and the fuel shrinks with it. A package that
+declares no permissions, and the step that reads node definitions, always get
+1e11.
+
+Hosts released before fuel followed the tier grant 1e11 per call whatever the
+tier declares, so a CPU-heavy package fails there with "Out of fuel". Record the
+requirement in `min_flow_like_version`; the registry stores and shows it, but
+hosts do not enforce it yet.
 
 Choose the smallest tier that supports normal operation. A higher tier increases
 the maximum available resource; it does not reserve that resource in advance.

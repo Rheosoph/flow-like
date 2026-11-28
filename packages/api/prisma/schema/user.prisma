@@ -28,6 +28,10 @@ model User {
   // Other people see `email` only once its owner turned this on. Null is off.
   shareEmail Boolean? @default(false)
 
+  // When a signed-in app of this person last connected, kept to the hour. A bot's room
+  // invitation also goes out by email to someone away for a week.
+  lastSeenAt DateTime? @db.Timestamptz(3)
+
   memberships                 Membership[]
   profiles                    Profile[]
   personalAccessToken         PAT[]
@@ -59,6 +63,10 @@ model User {
   bots                        Bot[]
   botPermissions              BotPermission[]
   botTurns                    BotTurn[]
+  botTeams                    BotTeamPerson[]
+  botTeamThreads              BotTeamThread[]
+  botTeamChats                BotTeamChat[]
+  botOrgClassifications       BotOrgClassification[]
 
   status String @default("ACTIVE")
   tier   String @default("FREE")

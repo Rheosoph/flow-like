@@ -1,4 +1,5 @@
 import { isRecord } from "../../lib/response-shape";
+import { isWorkspaceHandle } from "../../lib/workspace-file-url";
 import {
 	BOT_SECRET_NAME_PATTERN,
 	type IBotApprovalItemDecision,
@@ -51,6 +52,7 @@ function itemOf(value: unknown): IInboxApprovalItem | undefined {
 		...(value.after_web_content === true ? { after_web_content: true } : {}),
 		...secretField(value.secret),
 		...inviteField(value.invite),
+		...pictureField(value.picture),
 	};
 }
 
@@ -133,6 +135,7 @@ export function approvalOf(entry: IInboxEntry): IInboxApproval | undefined {
 		...(body.after_web_content === true ? { after_web_content: true } : {}),
 		...secretField(body.secret),
 		...inviteField(body.invite),
+		...pictureField(body.picture),
 	};
 	const items = itemsOf(body.items);
 	if (items.length > 1) return { ...card, items };
@@ -145,7 +148,27 @@ export function approvalOf(entry: IInboxEntry): IInboxApproval | undefined {
 		after_web_content: only.after_web_content,
 		secret: only.secret,
 		invite: only.invite,
+		picture: only.picture,
 	};
+}
+
+/** An image file of a bot workspace; anything else is dropped. */
+function pictureField(value: unknown): Pick<IInboxApproval, "picture"> {
+	if (!isRecord(value)) return {};
+	const { app_id, path, bytes, sha256, mime } = value;
+	if (
+		typeof app_id !== "string" ||
+		!app_id ||
+		typeof path !== "string" ||
+		!path ||
+		typeof bytes !== "number" ||
+		typeof sha256 !== "string" ||
+		typeof mime !== "string" ||
+		!mime.startsWith("image/") ||
+		!isWorkspaceHandle({ app_id })
+	)
+		return {};
+	return { picture: { app_id, path, bytes, sha256, mime } };
 }
 
 function inviteField(value: unknown): Pick<IInboxApproval, "invite"> {

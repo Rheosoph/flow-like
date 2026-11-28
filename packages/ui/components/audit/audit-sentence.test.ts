@@ -11,7 +11,7 @@ import {
 } from "./audit-sentence";
 import { parseSavedHead } from "./saved-head";
 
-const LEVEL_RS = join(import.meta.dir, "../../../api/src/audit/level.rs");
+const LEVEL_RS = join(import.meta.dir, "../../../audit/src/level.rs");
 
 /** Built with `format!` in `audit/execution.rs` and `execution/rejection.rs`. */
 const EXECUTION_ACTIONS = ["board", "event"].flatMap((kind) =>

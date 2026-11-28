@@ -187,6 +187,8 @@ function AbilitiesView({ editor }: StepViewProps) {
 			appAccess={editor.appAccess}
 			pendingAppIds={editor.pendingAppIds}
 			onPendingAppIdsChange={editor.setPendingAppIds}
+			pendingEmailAlias={editor.pendingEmailAlias}
+			onPendingEmailAliasChange={editor.setPendingEmailAlias}
 			onToggle={editor.toggleCapability}
 			onProfileChange={editor.setProfileId}
 			onEmbeddingModelChange={editor.setEmbeddingModel}
@@ -276,8 +278,11 @@ function SafetyView({ editor }: StepViewProps) {
 		<SafetyStep
 			draft={editor.draft}
 			locked={editor.flowPilot}
+			localOnly={editor.localOnly}
 			onClassificationChange={editor.setClassification}
 			onToggle={editor.toggleCapability}
+			onOthersCanInviteChange={editor.setOthersCanInvite}
+			onOthersDailyTurnsChange={editor.setOthersDailyTurns}
 		/>
 	);
 }

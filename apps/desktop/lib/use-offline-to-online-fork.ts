@@ -18,13 +18,20 @@ import {
 } from "@flow-like/flow-like-ui";
 import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import type {
+	IAdoptUploadResponse,
 	IBeginOnlineForkBody,
 	IBeginOnlineForkResponse,
 	IFinalizeOnlineForkAppSettings,
 	IFinalizeOnlineForkResponse,
 	IForkBundleSummary,
+	IUploadIdInventory,
+	IUploadUrlsResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
-import type { IProfileApp } from "@flow-like/flow-like-ui/lib/schema/profile/profile";
+import type {
+	IProfile,
+	IProfileApp,
+} from "@flow-like/flow-like-ui/lib/schema/profile/profile";
+import type { IApiState } from "@flow-like/flow-like-ui/state/backend-state/api-state";
 import type { IBackendRole } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "next/navigation";
@@ -32,13 +39,64 @@ import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { appsDB } from "./apps-db";
 
-interface UploadLocalAppContentResponse {
-	content_objects_copied: number;
-	content_bytes_copied: number;
+interface ForkFilesResponse {
+	files_copied: number;
+	bytes_copied: number;
 	failures: { kind_and_path: string; reason: string }[];
 }
 
+interface LocalContentFile {
+	path: string;
+	size: number;
+}
+
+/** Most files one signed-URL request may ask for (`MAX_TRANSFER_BATCH`). */
+const UPLOAD_BATCH = 500;
+
 const LANGUAGE = "en";
+
+/**
+ * Puts the local app's content files through signed upload URLs into the
+ * hub's staging area, then has the hub move them into the new app, where
+ * they are re-keyed with the rest of the upload. No storage credential
+ * reaches the device.
+ */
+const uploadLocalContent = async (
+	api: IApiState,
+	profile: IProfile,
+	sourceAppId: string,
+	newAppId: string,
+): Promise<ForkFilesResponse> => {
+	const files = await invoke<LocalContentFile[]>("list_local_app_content", {
+		appId: sourceAppId,
+	});
+	const total: ForkFilesResponse = {
+		files_copied: 0,
+		bytes_copied: 0,
+		failures: [],
+	};
+	for (let start = 0; start < files.length; start += UPLOAD_BATCH) {
+		const signed = await api.post<IUploadUrlsResponse>(
+			profile,
+			`apps/${newAppId}/fork/online/upload-urls`,
+			{ files: files.slice(start, start + UPLOAD_BATCH) },
+		);
+		const uploaded = await invoke<ForkFilesResponse>("upload_local_app_files", {
+			args: { source_app_id: sourceAppId, files: signed.files },
+		});
+		total.files_copied += uploaded.files_copied;
+		total.bytes_copied += uploaded.bytes_copied;
+		total.failures.push(...uploaded.failures);
+	}
+	let adopt: IAdoptUploadResponse;
+	do {
+		adopt = await api.post<IAdoptUploadResponse>(
+			profile,
+			`apps/${newAppId}/fork/online/adopt`,
+		);
+	} while (adopt.remaining);
+	return total;
+};
 const TOKEN_FIELD_NAMES = new Set([
 	"access_token",
 	"auth_token",
@@ -80,6 +138,54 @@ async function loadLocalSinks(
 		return new Map();
 	}
 }
+
+interface LocalAppContents {
+	readonly appId: string;
+	readonly boards: readonly IBoard[];
+	readonly events: readonly IEvent[];
+	readonly pages: readonly PageListItem[];
+	readonly widgetIds: readonly string[];
+	readonly templateIds: readonly string[];
+}
+
+/**
+ * Every id of the local app. The server mints the uploaded app's ids from
+ * them and re-keys every board, event, page and widget pushed afterwards, so
+ * it has to know all of them, including nodes and pins other boards point at.
+ */
+const collectUploadIds = (local: LocalAppContents): IUploadIdInventory => {
+	const nodes = new Set<string>();
+	const pins = new Set<string>();
+	const layers = new Set<string>();
+	const addPins = (graphPins: Readonly<Record<string, { id: string }>>) => {
+		for (const pin of Object.values(graphPins)) pins.add(pin.id);
+	};
+	const addNodes = (graphNodes: IBoard["nodes"]) => {
+		for (const node of Object.values(graphNodes)) {
+			nodes.add(node.id);
+			addPins(node.pins);
+		}
+	};
+	for (const board of local.boards) {
+		addNodes(board.nodes);
+		for (const layer of Object.values(board.layers)) {
+			layers.add(layer.id);
+			addNodes(layer.nodes);
+			addPins(layer.pins);
+		}
+	}
+	return {
+		app_id: local.appId,
+		boards: local.boards.map((board) => board.id),
+		nodes: [...nodes],
+		pins: [...pins],
+		layers: [...layers],
+		events: local.events.map((event) => event.id),
+		pages: local.pages.map((page) => page.pageId),
+		widgets: [...local.widgetIds],
+		templates: [...local.templateIds],
+	};
+};
 
 function createProfileApp(appId: string): IProfileApp {
 	return {
@@ -190,18 +296,6 @@ export function useOfflineToOnlineFork() {
 				);
 
 				const sourceApp = await backend.appState.getApp(sourceAppId);
-				const beginBody: IBeginOnlineForkBody = {
-					source_app_id: sourceApp.forked_from ?? sourceAppId,
-					summary,
-					language: LANGUAGE,
-				};
-				const begin = await backend.apiState.post<IBeginOnlineForkResponse>(
-					profile,
-					"apps/fork/online/begin",
-					beginBody,
-				);
-
-				if (begin.project_limit_notice) toast.info(begin.project_limit_notice);
 				const appMeta = await backend.appState.getAppMeta(
 					sourceAppId,
 					LANGUAGE,
@@ -219,6 +313,33 @@ export function useOfflineToOnlineFork() {
 				const pageList = uniquePages(
 					await backend.pageState.getPages(sourceAppId),
 				);
+
+				// The server mints every id of the copy from this list and
+				// re-keys everything pushed below; the ids sent with each
+				// request stay the local ones.
+				const beginBody: IBeginOnlineForkBody = {
+					source_app_id: sourceApp.forked_from ?? sourceAppId,
+					id_inventory: collectUploadIds({
+						appId: sourceAppId,
+						boards,
+						events,
+						pages: pageList,
+						widgetIds: widgetEntries.map(([, widgetId]) => widgetId),
+						templateIds: templateEntries.map(([, templateId]) => templateId),
+					}),
+					fork_id_seeds: sourceApp.forked_from
+						? (sourceApp.fork_id_seeds ?? null)
+						: [],
+					summary,
+					language: LANGUAGE,
+				};
+				const begin = await backend.apiState.post<IBeginOnlineForkResponse>(
+					profile,
+					"apps/fork/online/begin",
+					beginBody,
+				);
+
+				if (begin.project_limit_notice) toast.info(begin.project_limit_notice);
 
 				// Best-effort extras. None of these are load-bearing for the
 				// fork itself, so every lookup degrades to "nothing to carry"
@@ -243,15 +364,11 @@ export function useOfflineToOnlineFork() {
 				const skipped: string[] = [];
 				const needsReauth: string[] = [];
 
-				const contentUpload = await invoke<UploadLocalAppContentResponse>(
-					"upload_local_app_content_bundle",
-					{
-						args: {
-							source_app_id: sourceAppId,
-							destination_content_prefix: begin.upload_path,
-							credentials: begin.shared_credentials,
-						},
-					},
+				const contentUpload = await uploadLocalContent(
+					backend.apiState,
+					profile,
+					sourceAppId,
+					begin.new_app_id,
 				);
 
 				if (contentUpload.failures.length > 0) {
@@ -476,7 +593,7 @@ export function useOfflineToOnlineFork() {
 				]);
 
 				toast.success(
-					`Online fork created (${contentUpload.content_objects_copied} content files, ${formatBytes(
+					`Online fork created (${contentUpload.files_copied} content files, ${formatBytes(
 						finalized.total_size_bytes,
 					)})`,
 					{ id: toastId },

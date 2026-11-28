@@ -3,15 +3,14 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{
-        ScopeParams, TableListParams, TableListResponse, column_reader, table_listing,
-    },
+    routes::app::db::{ScopeParams, TableListParams, read_table},
     state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_query::table::TableOperation;
 
 #[utoipa::path(
     get,
@@ -39,7 +38,7 @@ pub async fn list_tables(
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
     Query(params): Query<TableListParams>,
-) -> Result<Json<TableListResponse>, ApiError> {
+) -> Result<Json<flow_like_types::Value>, ApiError> {
     let permission = ensure_any_permission!(
         user,
         &app_id,
@@ -48,10 +47,17 @@ pub async fn list_tables(
         RolePermissions::ReadDatabase
     );
 
-    let credentials = state.master_credentials().await?;
-    let builder = credentials.to_db(&app_id).await?;
-    let connection = builder.execute().await?;
-
-    let reader = column_reader(&permission, &ScopeParams::default());
-    Ok(Json(table_listing(connection, &params, &reader).await?))
+    let tables = read_table(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &ScopeParams::default(),
+        1,
+        TableOperation::ListTables {
+            summary: params.wants_summary(),
+        },
+    )
+    .await?;
+    Ok(Json(tables))
 }

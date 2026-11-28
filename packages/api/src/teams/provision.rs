@@ -613,6 +613,7 @@ mod tests {
             allowed_responders: vec!["approver".into()],
             permissions: vec![],
             operation_until: 123,
+            bot_id: None,
         }
     }
 

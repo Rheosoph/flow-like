@@ -9,6 +9,7 @@ import type {
 	IUpdateBotRequest,
 } from "../../state/backend-state/bot-state";
 import type { IConversation } from "../../state/backend-state/inbox-state";
+import { BANNER_HIDDEN_KEY } from "./local-bots-banner-model";
 import {
 	fakeI18n,
 	installDomGlobals,
@@ -367,6 +368,16 @@ function row(botId: string) {
 const reviewOpen = () => dialog() !== null;
 const listed = (botId: string) => row(botId) !== undefined;
 
+function chatRow(botId: string) {
+	return Array.from(
+		container.querySelectorAll<HTMLButtonElement>("nav button"),
+	).find(
+		(button) =>
+			button.querySelector(".font-semibold span.truncate")?.textContent ===
+			NAMES[botId],
+	);
+}
+
 function buttonIn(scope: ParentNode | null | undefined, label: string) {
 	return Array.from(scope?.querySelectorAll("button") ?? []).find((button) =>
 		button.textContent?.includes(label),
@@ -425,22 +436,15 @@ afterAll(async () => {
 
 describe("moving bots from this computer to the account", () => {
 	test("signed in, a chat from before reads as yours next to the account's", () => {
-		const text = container.textContent ?? "";
-		expect(text).toContain("You: Paint the hallway");
-		expect(
-			container.querySelector(
-				"[aria-label='This chat lives only on this computer.']",
-			) !== null,
-		).toBe(true);
-		expect(
-			container.querySelector("[aria-label='Painter, Your bot']") !== null,
-		).toBe(true);
+		expect(chatRow(PAINTER)?.textContent).toContain("You: Paint the hallway");
 	});
 
 	test("the banner opens a review of every bot on this computer", async () => {
 		const text = container.textContent ?? "";
 		expect(text).toContain("4 bots live only on this computer");
-		expect(text.split("Local only").length - 1).toBe(4);
+		for (const botId of [SCOUT, WRITER, PAINTER, HELPER]) {
+			expect(chatRow(botId)).toBeDefined();
+		}
 
 		await click(buttonIn(container, "Review and move"));
 		const review = dialog();
@@ -652,7 +656,7 @@ describe("moving bots from this computer to the account", () => {
 	});
 
 	test("a local bot's panel moves just that bot", async () => {
-		await click(buttonIn(container, "Painter"));
+		await click(chatRow(PAINTER));
 		const pill = container.querySelector<HTMLButtonElement>(
 			"aside [data-slot='bot-pill']",
 		);
@@ -696,5 +700,26 @@ describe("moving bots from this computer to the account", () => {
 
 		serverFull.delete(HELPER);
 		await click(buttonIn(dialog(), "Close"));
+	});
+
+	test("hiding the banner keeps it away on the next visit", async () => {
+		const banner = () =>
+			container.querySelector("section[aria-label='Bots on this computer']");
+		try {
+			await click(
+				banner()?.querySelector<HTMLButtonElement>("button[aria-label='Hide']"),
+			);
+			expect(banner()).toBeNull();
+
+			await act(async () => root.render(null));
+			await act(async () => root.render(view()));
+			await settle();
+			await settle(100);
+			expect(chatRow(PAINTER)).toBeDefined();
+			expect(banner()).toBeNull();
+			expect(reviewOpen()).toBe(false);
+		} finally {
+			localStorage.removeItem(BANNER_HIDDEN_KEY);
+		}
 	});
 });

@@ -161,6 +161,9 @@ impl FunctionTopology {
 
 pub struct CompiledRunTemplate {
     pub widget_snapshot: Option<Arc<super::ArtifactWidgetSnapshot>>,
+    /// What the source board contributes to a Page contract. Absent on a template whose
+    /// artifact was written before these were recorded, or that was compiled in memory.
+    pub baseline: Option<Arc<super::BaselineFacts>>,
     pub pins: Box<[TemplatePin]>,
     pub nodes: Box<[TemplateNode]>,
     pub node_idx_by_id: AHashMap<Arc<str>, u32>,
@@ -170,9 +173,38 @@ pub struct CompiledRunTemplate {
     pub stage: ExecutionStage,
     pub log_level: LogLevel,
     pub(crate) function_topology: Arc<FunctionTopology>,
+    /// The logic this template runs for each node type it places.
+    logic_by_type: Box<[TypeLogic]>,
+}
+
+struct TypeLogic {
+    node_type: Arc<str>,
+    logic: Arc<dyn NodeLogic>,
 }
 
 impl CompiledRunTemplate {
+    /// Whether the current task may run this board document. A template never
+    /// changes and `reconstruct_board` declares the inferred requirement on the
+    /// view, so a cache hit compares that number instead of inferring it again
+    /// from every pin schema.
+    pub fn ensure_supported_format(&self) -> Result<()> {
+        crate::flow::board::format::ensure_supported(self.board.format_version)
+    }
+
+    /// Whether every node runs the logic `registry` holds for its type right now. A host that
+    /// reloads a package registers new logic under an unchanged fingerprint, and a template
+    /// built before the reload would go on running the previous one.
+    pub fn holds_logic_of(&self, registry: &FlowNodeRegistryInner) -> bool {
+        self.logic_by_type.iter().all(|placed| {
+            registry
+                .registry
+                .get(placed.node_type.as_ref())
+                .is_some_and(|(_, current)| {
+                    std::ptr::addr_eq(Arc::as_ptr(&placed.logic), Arc::as_ptr(current))
+                })
+        })
+    }
+
     /// Validate every resolved node, including function bodies, against the
     /// host environment before a cached template is used for a run.
     pub fn ensure_execution_environment(&self, environment: ExecutionEnvironment) -> Result<()> {
@@ -366,8 +398,19 @@ impl CompiledRunTemplate {
             &node_idx_by_id,
             &pins,
         ));
+        let mut node_types = AHashSet::new();
+        let logic_by_type = nodes
+            .iter()
+            .filter(|node| node_types.insert(node.name.clone()))
+            .map(|node| TypeLogic {
+                node_type: node.name.clone(),
+                logic: node.logic.clone(),
+            })
+            .collect();
         Ok(Self {
             widget_snapshot: None,
+            baseline: None,
+            logic_by_type,
             pins: pins.into_boxed_slice(),
             nodes: nodes.into_boxed_slice(),
             node_idx_by_id,

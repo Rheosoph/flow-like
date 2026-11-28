@@ -2,8 +2,9 @@
 
 import { useTranslation } from "@flow-like/locales";
 import BotIcon from "lucide-react/dist/esm/icons/bot.js";
-import { Fragment, useMemo } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { DEFAULT_CHAT_AI_DISCLOSURE } from "../../../lib/chat-appearance";
+import { useCompactComposer } from "./compact-composer";
 
 export const FLOWPILOT_AI_DISCLOSURE =
 	"FlowPilot is an AI assistant. Responses may be inaccurate—check important information.";
@@ -61,6 +62,25 @@ export function ChatAiDisclosure({ text }: Readonly<{ text?: string | null }>) {
 	}
 
 	const sentences = useMemo(() => splitSentences(disclosure), [disclosure]);
+	const compact = useCompactComposer();
+	const [expanded, setExpanded] = useState(false);
+
+	// A phone keeps the notice to one line under the composer; a tap shows all of it.
+	if (compact && !expanded) {
+		return (
+			<button
+				type="button"
+				data-fl-chat-ai-disclosure
+				aria-expanded={false}
+				aria-label={disclosure}
+				onClick={() => setExpanded(true)}
+				className="mx-auto flex w-fit max-w-full items-center gap-1 px-2 text-[11px] leading-4 text-muted-foreground"
+			>
+				<BotIcon aria-hidden="true" className="size-3 shrink-0 opacity-70" />
+				<span className="truncate">{sentences[0]?.text ?? disclosure}</span>
+			</button>
+		);
+	}
 
 	// Each sentence is its own inline block, so a narrow footer wraps between
 	// sentences before it splits one, and the icon stays on the first line.

@@ -485,13 +485,14 @@ impl DeviceRunner {
         let vision = vision_of(grant)
             .map(|bit| Arc::new(models.answering_with(bit)) as Arc<dyn ModelSource>);
         let readers: Arc<dyn ModelSource> = Arc::new(VisionRouted::new(models.clone(), vision));
+        let owner_id = grant.turn.owner_id.clone();
         Ok(Arc::new(move |expensive_documents| {
             let mut env = HostEnv::new(&workspace, &scope, access.clone(), readers.clone())
                 .with_expensive_documents(expensive_documents)
                 .with_secrets(secrets.clone())
                 .with_sessions(sessions.clone())
                 .with_notifier(Arc::new(HubNotifier(routes.clone())))
-                .with_scheduler(Arc::new(HubScheduler(routes.clone())))
+                .with_scheduler(Arc::new(HubScheduler(routes.clone(), owner_id.clone())))
                 .with_people(Arc::new(HubPeople(routes.clone())))
                 .with_skills(skills.clone())
                 .with_user_context(Arc::new(HubUserContext(routes.clone())))
@@ -634,6 +635,9 @@ impl TurnRunner for DeviceRunner {
         }
         if let Some(files) = &job.reply_files {
             tools = tools.with_reply_files(files.clone());
+        }
+        if let Some(proposals) = &job.discussion {
+            tools = tools.with_discussion(proposals.clone());
         }
         tools = tools.with_conversation_key(grant.conversation.id.clone());
         let mut context = context_of(grant, &job, tools);

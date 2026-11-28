@@ -393,6 +393,21 @@ describe("trigger entries", () => {
 		expect(texts(items)).toEqual(["Remind me daily", "Here is the news"]);
 	});
 
+	test("a channel trigger folds like any other trigger", () => {
+		const items = foldInboxEntries(
+			[
+				trigger(0, {
+					source: "channel",
+					title: "Anna",
+					text: "Hi bot",
+					payload: { provider: "discord", sender: { id: "1", name: "Anna" } },
+				}),
+			],
+			"me",
+		);
+		expect(items[0]).toMatchObject({ type: "trigger", source: "channel" });
+	});
+
 	test("a trigger with an unknown source or without a body is not shown", () => {
 		const items = foldInboxEntries(
 			[trigger(0, { source: "carrier-pigeon", title: "x" }), trigger(1, {})],
@@ -500,6 +515,74 @@ describe("bot ask activities", () => {
 			"me",
 		);
 		expect(items).toEqual([]);
+	});
+});
+
+describe("team requests", () => {
+	const answer = {
+		type: "team_answer",
+		team_id: "team_it",
+		lead_id: "bot_lead",
+		thread_id: "conv_thread",
+		request_message_id: "m1",
+		reply_message_id: "m2",
+		text: "Restart the VPN client.",
+	};
+
+	test("a team answer activity folds into a note between the messages", () => {
+		const items = foldInboxEntries(
+			[
+				entry("message", "me", { text: "#ITSupport VPN is down" }, 0),
+				entry("activity", "bot_lead", answer, 1),
+				entry("message", "me", { text: "thanks" }, 2),
+			],
+			"me",
+		);
+		expect(items.map((item) => item.type)).toEqual([
+			"message",
+			"team_answer",
+			"message",
+		]);
+		expect(items[1]).toMatchObject({
+			teamId: "team_it",
+			leadId: "bot_lead",
+			threadId: "conv_thread",
+			requestMessageId: "m1",
+			replyMessageId: "m2",
+			text: "Restart the VPN client.",
+		});
+		const blocks = groupConversationItems(items, { dayKey: () => "day" });
+		expect(blocks.map((block) => block.type)).toEqual([
+			"day",
+			"group",
+			"note",
+			"group",
+		]);
+	});
+
+	test("a team answer without its team or thread is not shown", () => {
+		const items = foldInboxEntries(
+			[
+				entry("activity", "bot_lead", { ...answer, thread_id: "" }, 0),
+				entry("activity", "bot_lead", { ...answer, team_id: undefined }, 1),
+			],
+			"me",
+		);
+		expect(items).toEqual([]);
+	});
+
+	test("a message keeps the teams its request went to", () => {
+		const [request, plain] = messages(
+			foldInboxEntries(
+				[
+					entry("message", "me", { text: "#A #B hi", teams: ["a", "b"] }, 0),
+					entry("message", "me", { text: "hi" }, 1),
+				],
+				"me",
+			),
+		);
+		expect(request.teams).toEqual(["a", "b"]);
+		expect(plain.teams).toBeUndefined();
 	});
 });
 

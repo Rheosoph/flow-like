@@ -95,7 +95,7 @@ export function normalizeForkTargetOptions(
 function isOfflineForkResponse(
 	res: IBeginForkResponse,
 ): res is IBeginOfflineForkResponse {
-	return "meta_blobs" in res;
+	return "meta_files" in res;
 }
 
 export interface ForkAppDialogProps {
@@ -351,15 +351,10 @@ export function ForkAppDialog({
 			setStage("done");
 			onForkStarted?.(res);
 			if (isOfflineForkResponse(res)) {
-				const blobCount = asArray(res.meta_blobs).length;
 				toast.success(
 					t(
-						"forkReadyLengthMetaArtifactvalInlineContentPulledViaSignedPrefix",
-						"Fork ready — {{length}} meta artifact{{val}} inline, content pulled via signed prefix",
-						{
-							length: blobCount,
-							val: blobCount === 1 ? "" : "s",
-						},
+						"forkReadyCopyingItToThisDevice",
+						"Fork ready — copying it to this device.",
 					),
 				);
 			} else {
@@ -611,26 +606,6 @@ export function ForkAppDialog({
 								{t("newAppId", "New app id:")}{" "}
 								<code className="text-xs">{response.new_app_id}</code>
 							</p>
-							{isOfflineForkResponse(response) && (
-								<p>
-									{asArray(response.meta_blobs).length}{" "}
-									{asArray(response.meta_blobs).length === 1
-										? "artifact"
-										: "artifacts"}{" "}
-									{t(
-										"shippedInlineContentPulledFrom",
-										"shipped inline, content pulled from",
-									)}{" "}
-									<code className="text-xs">
-										{response.source_content_prefix}
-									</code>
-									{t("credentialsExpireAt", ". Credentials expire at")}{" "}
-									<code className="text-xs">
-										{response.expires_at ?? "soon"}
-									</code>
-									.
-								</p>
-							)}
 							{skipped.length > 0 && (
 								<div className="space-y-1">
 									<p>

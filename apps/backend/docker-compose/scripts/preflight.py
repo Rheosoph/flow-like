@@ -16,7 +16,7 @@ import oidc_preflight
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE_WORKLOADS = {"API_IMAGE": "api", "DB_INIT_IMAGE": "db-init", "WEB_IMAGE": "web", "RUNTIME_IMAGE": "runtime",
-                   "COMPILER_IMAGE": "compiler", "SIGNALING_IMAGE": "signaling", "SINK_SERVICES_IMAGE": "sink-services",
+                   "COMPILER_IMAGE": "compiler", "QUERY_IMAGE": "query", "SIGNALING_IMAGE": "signaling", "SINK_SERVICES_IMAGE": "sink-services",
                    "EXECUTION_MANAGER_IMAGE": "execution-manager", "OBJECT_STORE_INIT_IMAGE": "object-store-init",
                    "AUDIT_WORKER_IMAGE": "audit-worker"}
 SANDBOX_SOURCES = {"SANDBOX_IMAGE": "RUNTIME_IMAGE", "SANDBOX_GATEWAY_IMAGE": "EXECUTION_MANAGER_IMAGE"}

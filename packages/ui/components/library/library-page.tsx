@@ -21,6 +21,7 @@ import { useInvoke } from "../../hooks/use-invoke";
 import { useIsMobile } from "../../hooks/use-mobile";
 import { useSearch } from "../../hooks/use-search-index";
 import { useAppCategoryLabel } from "../../lib/app-category";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
 import { asArray, isRecord } from "../../lib/response-shape";
 import type { IProfileApp } from "../../lib/schema/profile/profile";
 import { nowSystemTime } from "../../lib/time/now";
@@ -315,6 +316,7 @@ export function LibraryPage({
 	}, [apps]);
 	const handleOpenCreateFlow = useCallback(() => {
 		setCreateFlowOpen(true);
+		emitGuideEvent("library:create-opened");
 	}, []);
 	const handleCreateProject = useCallback(
 		async (projectName: string, isOnline: boolean) => {
@@ -346,6 +348,7 @@ export function LibraryPage({
 				);
 			}
 
+			emitGuideEvent("library:app-created");
 			const boards = await backend.boardState.getBoardSummaries(app.id);
 			const firstBoard = boards?.[0];
 
@@ -408,6 +411,7 @@ export function LibraryPage({
 							{
 								label: "Create Your First App",
 								onClick: handleOpenCreateFlow,
+								guide: "library-new-app",
 							},
 						]}
 						icons={[Sparkles, LayoutGridIcon, FilesIcon]}
@@ -512,6 +516,7 @@ export function LibraryPage({
 									size="icon"
 									className="h-11 w-11 sm:h-8 sm:w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
 									onClick={handleOpenCreateFlow}
+									data-guide="library-new-app"
 								>
 									<Plus className="h-4 w-4" />
 								</Button>

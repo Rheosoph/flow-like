@@ -3,10 +3,10 @@
 FROM rust:1.97.1-bookworm AS builder
 COPY rust-toolchain.toml /rust-toolchain.toml
 RUN rustup toolchain install
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev protobuf-compiler libprotobuf-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
-ARG CARGO_BUILD_JOBS=2
+ARG CARGO_BUILD_JOBS=1
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 # The worker compiles the audit section of the same document as the GCP API
 # image and accepts no runtime override. Pass the API build's flow_like_config
@@ -22,8 +22,9 @@ RUN --mount=type=secret,id=flow_like_config,target=/tmp/flow-like.gcp.config.jso
         && grep -Eq '"provider"[[:space:]]*:[[:space:]]*"gcp"' /tmp/flow-like.gcp.config.json \
         && cp /tmp/flow-like.gcp.config.json /app/flow-like.config.json; \
     else test -z "$FLOW_LIKE_CONFIG_SHA256"; fi \
-    && CARGO_HOME=/cargo-home cargo build --locked --release --package flow-like-audit-worker --features gcp \
-    && cp /app/target/release/flow-like-audit-worker /tmp/flow-like-audit-worker \
+    && CARGO_HOME=/cargo-home cargo build --locked --profile server --package flow-like-audit-worker --features gcp \
+    && cp /app/target/server/flow-like-audit-worker /tmp/flow-like-audit-worker \
+    && strip --strip-all /tmp/flow-like-audit-worker \
     && rm /app/flow-like.config.json
 
 FROM debian:bookworm-slim

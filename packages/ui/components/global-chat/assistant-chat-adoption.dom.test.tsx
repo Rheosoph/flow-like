@@ -40,6 +40,9 @@ vi.mock("next/navigation", () => ({
 vi.mock("./global-chat-body", () => ({
 	GlobalChatBody: () => <div data-testid="chat-body" />,
 }));
+vi.mock("../bots-tab/bot-overview-panel", () => ({
+	BotOverviewPanel: () => null,
+}));
 vi.mock("../bots-tab/editor/bot-editor-dialog", () => ({
 	BotEditorDialog: () => null,
 }));

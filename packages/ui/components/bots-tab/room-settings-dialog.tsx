@@ -31,7 +31,8 @@ import {
 /** A picked picture waiting for Save: a data URL, `null` to remove it, `undefined` to keep it. */
 type StagedImage = string | null | undefined;
 
-function useImageProblemText() {
+/** What to tell someone whose picked picture can't be used. */
+export function useRoomImageProblemText() {
 	const { t } = useTranslation("bots");
 	return (problem: RoomImageProblem) => {
 		switch (problem) {
@@ -151,7 +152,7 @@ function RoomSettingsForm({
 	const nameId = useId();
 	const rename = useRenameConversation();
 	const setImage = useSetConversationImage();
-	const problemText = useImageProblemText();
+	const problemText = useRoomImageProblemText();
 	const [title, setTitle] = useState(conversation.title ?? "");
 	const [staged, setStaged] = useState<StagedImage>(undefined);
 	const [preparing, setPreparing] = useState(false);

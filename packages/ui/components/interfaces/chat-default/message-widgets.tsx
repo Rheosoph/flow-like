@@ -266,7 +266,7 @@ export const MessageWidget = memo(function MessageWidget({
 			<button
 				type="button"
 				onClick={() => setMaximized(true)}
-				title="Maximize"
+				title={t("maximizeWidget", "Maximize widget")}
 				className="absolute top-2 right-2 z-10 flex items-center justify-center rounded-md border bg-background/80 backdrop-blur-sm p-1.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/widget:opacity-100 focus-visible:opacity-100"
 			>
 				<Maximize2 className="w-3.5 h-3.5" />

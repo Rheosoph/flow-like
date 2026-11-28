@@ -9,10 +9,10 @@
 use super::{
     approvals::{self, GrantRows},
     history::{self, HistoryError, Transcript},
-    ledger,
+    ledger, teams,
 };
 use crate::{
-    entity::{bot, bot_permission, bot_turn, conversation, inbox_entry},
+    entity::{bot, bot_permission, bot_team_bot, bot_turn, conversation, inbox_entry, user},
     error::ApiError,
     routes::{
         bots::{
@@ -24,9 +24,12 @@ use crate::{
             activity::record_bot_ask,
             approvals::{lock as lock_conversation, open_conversation, post_notice_in},
             delivery::BotRecipient,
-            exchange::{message_outgoing, open_exchange, post_as_bot},
+            exchange::{
+                BotLimits, message_outgoing, open_exchange, open_exchange_across, post_as_bot,
+            },
             now_millis, wake,
         },
+        user::identity::public_display_name,
     },
     state::AppState,
 };
@@ -36,13 +39,14 @@ use flow_like::flow::copilot::{
     FLUX_BOT_NAME, GENERAL_BOT_NAME,
     bot_talk::{
         BotPresence, BotTalkHost, CrewMember, HeadlessPermission, MAX_ASK_HOPS, NestedBotTurn,
-        PendingAnswer,
+        PendingAnswer, TalkGate, classification_gate,
     },
     tool_grants::{GrantCheck, GrantStore, ParkedBatch, approval_request, check_call},
 };
 use flow_like_types::{
     bot::{BotLocation, BotSystemKind},
     bot_message::{ApprovalRequest, MessageBody},
+    bot_team::{OrgLookup, TeamBrief},
     bot_turn::{MAX_HOPS, STORED_QUEUED, turn_id},
     data_classification::{DataClassification, DataSensitivity},
     inbox::{ActivityBody, ConversationKind, TOMBSTONE_FIELD},
@@ -54,6 +58,7 @@ use sea_orm::{
 };
 use serde_json::{Value, json};
 use std::{
+    collections::{BTreeMap, HashMap},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -205,15 +210,101 @@ pub(crate) fn crew_member(row: &bot::Model, presence: BotPresence) -> CrewMember
                 .and_then(DataClassification::parse),
             pii: row.pii,
         },
+        ..Default::default()
     }
 }
 
-/// The owner's other live bots with their presence.
+async fn owner_names<C: ConnectionTrait>(
+    db: &C,
+    owner_ids: &[String],
+) -> Result<HashMap<String, String>, ApiError> {
+    let rows = user::Entity::find()
+        .select_only()
+        .column(user::Column::Id)
+        .column(user::Column::Name)
+        .column(user::Column::PreferredUsername)
+        .filter(user::Column::Id.is_in(owner_ids.iter().cloned()))
+        .into_tuple::<(String, Option<String>, Option<String>)>()
+        .all(db)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, preferred)| {
+            let shown = public_display_name(name.as_deref(), preferred.as_deref(), None)
+                .unwrap_or_else(|| "Someone".to_string());
+            (id, shown)
+        })
+        .collect())
+}
+
+fn with_team(mut member: CrewMember, reach: &teams::TeamReach) -> CrewMember {
+    member.team = Some(reach.team_name.clone());
+    member.lead_of = reach.lead_of.clone();
+    member.direct = reach.direct;
+    member
+}
+
+/// The bots `caller_id` may ask: the owner's other live bots with their presence, and through its
+/// team the teammates of any owner and the leads of the org's other teams.
 pub(crate) async fn roster_in<C: ConnectionTrait>(
     db: &C,
     owner_id: &str,
     caller_id: &str,
+    conversation_id: Option<&str>,
     now: DateTime<FixedOffset>,
+) -> Result<Vec<CrewMember>, ApiError> {
+    let mut reach: HashMap<String, teams::TeamReach> =
+        teams::team_reach(db, caller_id, conversation_id)
+            .await?
+            .into_iter()
+            .map(|reach| (reach.bot.id.clone(), reach))
+            .collect();
+    let mut roster = own_roster(db, owner_id, caller_id, now, &mut reach).await?;
+    if reach.is_empty() {
+        return Ok(roster);
+    }
+    let mut owner_ids: Vec<String> = reach.values().map(|r| r.bot.owner_id.clone()).collect();
+    owner_ids.sort();
+    owner_ids.dedup();
+    let names = owner_names(db, &owner_ids).await?;
+    let mut presence_by_owner: HashMap<
+        String,
+        BTreeMap<String, crate::routes::bots::presence::BotPresence>,
+    > = HashMap::new();
+    for id in &owner_ids {
+        presence_by_owner.insert(id.clone(), presence_in(db, id, now).await?);
+    }
+    let mut foreign: Vec<teams::TeamReach> = reach.into_values().collect();
+    foreign.sort_by(|a, b| {
+        a.bot
+            .created_at
+            .cmp(&b.bot.created_at)
+            .then_with(|| a.bot.id.cmp(&b.bot.id))
+    });
+    roster.extend(foreign.iter().map(|found| {
+        let state = presence_by_owner
+            .get(&found.bot.owner_id)
+            .and_then(|presence| presence.get(&found.bot.id))
+            .map_or(PresenceState::Unknown, |presence| presence.state);
+        let mut member = with_team(crew_member(&found.bot, presence_of(state)), found);
+        member.owner_name = Some(
+            names
+                .get(&found.bot.owner_id)
+                .cloned()
+                .unwrap_or_else(|| "Someone".to_string()),
+        );
+        member
+    }));
+    Ok(roster)
+}
+
+/// The owner's other live bots with their presence; those in `reach` leave it, team fields set.
+async fn own_roster<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    caller_id: &str,
+    now: DateTime<FixedOffset>,
+    reach: &mut HashMap<String, teams::TeamReach>,
 ) -> Result<Vec<CrewMember>, ApiError> {
     let presence = presence_in(db, owner_id, now).await?;
     let rows = bot::Entity::find()
@@ -230,9 +321,72 @@ pub(crate) async fn roster_in<C: ConnectionTrait>(
             let state = presence
                 .get(&row.id)
                 .map_or(PresenceState::Unknown, |presence| presence.state);
-            crew_member(row, presence_of(state))
+            let member = crew_member(row, presence_of(state));
+            match reach.remove(&row.id) {
+                Some(found) => with_team(member, &found),
+                None => member,
+            }
         })
         .collect())
+}
+
+/// Across owners the server enforces the classification rule that needs no run state: a caller
+/// below the callee must not read up (the run's taint is the asking host's to check).
+async fn ensure_no_read_up<C: ConnectionTrait>(
+    db: &C,
+    caller_id: &str,
+    callee: &bot::Model,
+) -> Result<(), ApiError> {
+    let caller = bot::Entity::find_by_id(caller_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("Bot '{caller_id}' not found")))?;
+    let (caller, callee) = (
+        crew_member(&caller, BotPresence::Unknown),
+        crew_member(callee, BotPresence::Unknown),
+    );
+    match classification_gate(
+        &caller.classification,
+        &DataSensitivity::default(),
+        &callee.classification,
+    ) {
+        TalkGate::Allow => Ok(()),
+        TalkGate::Refuse(reason) => Err(ApiError::forbidden(format!(
+            "{reason} Nothing was sent to {}.",
+            callee.name
+        ))),
+    }
+}
+
+/// The bot `callee_id` that `caller_id`, a bot of `owner_id`, may ask: one of the owner's, or a
+/// teammate or other team's lead of another owner.
+pub(crate) async fn askable_bot<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    caller_id: &str,
+    callee_id: &str,
+    conversation_id: Option<&str>,
+) -> Result<bot::Model, ApiError> {
+    let row = bot::Entity::find_by_id(callee_id)
+        .filter(bot::Column::DeletedAt.is_null())
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("Bot '{callee_id}' not found")))?;
+    if row.owner_id == owner_id {
+        return Ok(row);
+    }
+    let reachable = teams::team_reach(db, caller_id, conversation_id)
+        .await?
+        .iter()
+        .any(|found| found.bot.id == row.id);
+    if reachable {
+        ensure_no_read_up(db, caller_id, &row).await?;
+        Ok(row)
+    } else {
+        Err(ApiError::not_found(format!(
+            "Bot '{callee_id}' is not one of your bots, a teammate or the lead of another team in your org"
+        )))
+    }
 }
 
 /// When a host last reported the bot, as the roster's offline note reads it.
@@ -463,6 +617,20 @@ impl ServerTalkHost {
         Ok(direct.unwrap_or_else(|| exchange_id.to_string()))
     }
 
+    /// The conversation whose people bound what team context `caller` may use: the held turn's,
+    /// else the desktop-hosted turn `run_id` names, else none (the owner's own chat).
+    async fn team_scope(&self, caller: &CrewMember) -> flow_like_types::Result<Option<String>> {
+        let scope = match &self.held {
+            Some(held) => turn_origin_conversation(&self.state.db, &held.turn)
+                .await
+                .map(Some),
+            None => {
+                turn_conversation(&self.state.db, &self.owner_id, &caller.id, &self.run_id).await
+            }
+        };
+        scope.map_err(|error| flow_like_types::anyhow!("{error}"))
+    }
+
     fn hops(&self) -> u32 {
         self.trigger_hops.saturating_add(1)
     }
@@ -471,11 +639,12 @@ impl ServerTalkHost {
         &self,
         caller: &CrewMember,
         callee: &CrewMember,
+        callee_owner: &str,
         tid: &str,
         started: Instant,
     ) -> flow_like_types::Result<String> {
         let remaining = Duration::from_secs(u64::from(WAIT_SECS)).saturating_sub(started.elapsed());
-        let state = wait_for_turn(&self.state.db, &self.owner_id, tid, remaining)
+        let state = wait_for_turn(&self.state.db, callee_owner, tid, remaining)
             .await
             .map_err(|error| flow_like_types::anyhow!("{error}"))?;
         let (reply_id, text) = answer_from(&state, callee)?;
@@ -528,9 +697,30 @@ pub(crate) fn answer_from(
 #[async_trait]
 impl BotTalkHost for ServerTalkHost {
     async fn roster(&self, caller: &CrewMember) -> flow_like_types::Result<Vec<CrewMember>> {
-        roster_in(&self.state.db, &self.owner_id, &caller.id, now_millis())
-            .await
-            .map_err(|error| flow_like_types::anyhow!("{error}"))
+        let conversation = self.team_scope(caller).await?;
+        roster_in(
+            &self.state.db,
+            &self.owner_id,
+            &caller.id,
+            conversation.as_deref(),
+            now_millis(),
+        )
+        .await
+        .map_err(|error| flow_like_types::anyhow!("{error}"))
+    }
+
+    async fn team_brief(&self, caller: &CrewMember) -> flow_like_types::Result<Option<TeamBrief>> {
+        let conversation = self.team_scope(caller).await?;
+        Ok(teams::team_brief_in(&self.state, &caller.id, conversation.as_deref()).await?)
+    }
+
+    async fn org_lookup(
+        &self,
+        caller: &CrewMember,
+        query: &str,
+    ) -> flow_like_types::Result<Option<OrgLookup>> {
+        let conversation = self.team_scope(caller).await?;
+        Ok(teams::org_lookup_in(&self.state, &caller.id, conversation.as_deref(), query).await?)
     }
 
     async fn has_grant(&self, from: &CrewMember, to: &CrewMember) -> flow_like_types::Result<bool> {
@@ -582,15 +772,7 @@ impl BotTalkHost for ServerTalkHost {
         callee: &CrewMember,
     ) -> flow_like_types::Result<String> {
         let title = format!("{} ↔ {}", caller.name, callee.name);
-        let id = open_exchange(
-            &self.state,
-            &self.owner_id,
-            &caller.id,
-            &callee.id,
-            Some(title),
-        )
-        .await
-        .map_err(|error| flow_like_types::anyhow!("{error}"))?;
+        let id = self.open(caller, callee, title).await?;
         self.remember(|asked| asked.callee = Some(callee.clone()));
         Ok(id)
     }
@@ -621,6 +803,47 @@ impl BotTalkHost for ServerTalkHost {
 }
 
 impl ServerTalkHost {
+    /// The pair's exchange. Across owners the bots must share an org; the callee's owner reads the
+    /// exchange too and the callee joins without an invitation.
+    async fn open(
+        &self,
+        caller: &CrewMember,
+        callee: &CrewMember,
+        title: String,
+    ) -> flow_like_types::Result<String> {
+        let db = &self.state.db;
+        let failed = |error: ApiError| flow_like_types::anyhow!("{error}");
+        let row = bot::Entity::find_by_id(&callee.id)
+            .filter(bot::Column::DeletedAt.is_null())
+            .one(db)
+            .await?
+            .ok_or_else(|| flow_like_types::anyhow!("{} no longer exists", callee.name))?;
+        if row.owner_id == self.owner_id {
+            return open_exchange(
+                &self.state,
+                &self.owner_id,
+                &caller.id,
+                &callee.id,
+                Some(title),
+            )
+            .await
+            .map_err(failed);
+        }
+        ensure_same_org(db, &caller.id, callee).await?;
+        let limits = team_limits(db, &[&caller.id, &callee.id]).await?;
+        open_exchange_across(
+            &self.state,
+            &self.owner_id,
+            &row.owner_id,
+            &caller.id,
+            &callee.id,
+            &limits,
+            Some(title),
+        )
+        .await
+        .map_err(failed)
+    }
+
     /// The callee's answer is already in the exchange (its turn posted it); anything else the
     /// caller sends is its question of `round`.
     async fn post(
@@ -686,19 +909,20 @@ impl ServerTalkHost {
             .one(&self.state.db)
             .await
             .map_err(|error| flow_like_types::anyhow!("{error}"))?;
-        if queued.is_none() {
+        let Some(queued) = queued else {
             return Err(flow_like_types::anyhow!(
                 "{} took no turn for this question: it is past the limit of bots asking bots, or the exchange can't be read by the server",
                 callee.name
             ));
-        }
+        };
+        let callee_owner = queued.owner_id;
         match callee.location {
             BotLocation::Server => {
                 let (state, run_id) = (self.state.clone(), tid.clone());
                 tokio::spawn(async move { super::run_hosted(&state, &run_id).await });
             }
             _ if callee.presence == BotPresence::Offline => {
-                let seen = last_seen(&self.state.db, &self.owner_id, &callee.id, now_millis())
+                let seen = last_seen(&self.state.db, &callee_owner, &callee.id, now_millis())
                     .await
                     .map_or_else(|| "never seen".to_string(), |at| format!("last seen {at}"));
                 return Err(PendingAnswer(format!(
@@ -709,7 +933,8 @@ impl ServerTalkHost {
             }
             _ => {}
         }
-        self.wait_for_answer(caller, callee, &tid, started).await
+        self.wait_for_answer(caller, callee, &callee_owner, &tid, started)
+            .await
     }
 
     /// A bot on a desktop asks `callee` through the hub its question of `round` (0 from desktops
@@ -735,6 +960,45 @@ impl ServerTalkHost {
             outcome,
         })
     }
+}
+
+/// An ask across owners needs both bots active in teams of one org.
+pub(crate) async fn ensure_same_org<C: ConnectionTrait>(
+    db: &C,
+    caller_id: &str,
+    callee: &CrewMember,
+) -> flow_like_types::Result<()> {
+    if teams::same_org(db, caller_id, &callee.id).await? {
+        return Ok(());
+    }
+    Err(flow_like_types::anyhow!(
+        "{} is not in your org, so you can't ask it. Only your owner's bots, your teammates and the leads of your org's other teams can be asked.",
+        callee.name
+    ))
+}
+
+/// The room limits of the active team memberships of `bot_ids` that set any.
+async fn team_limits<C: ConnectionTrait>(
+    db: &C,
+    bot_ids: &[&String],
+) -> Result<Vec<BotLimits>, sea_orm::DbErr> {
+    let rows = bot_team_bot::Entity::find()
+        .filter(bot_team_bot::Column::BotId.is_in(bot_ids.iter().map(|id| id.to_string())))
+        .filter(
+            bot_team_bot::Column::Status
+                .eq(flow_like_types::bot_team::TeamMemberStatus::Active.as_str()),
+        )
+        .all(db)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            row.limits.map(|limits| BotLimits {
+                bot_id: row.bot_id,
+                limits,
+            })
+        })
+        .collect())
 }
 
 pub(crate) struct DesktopAnswer {
@@ -920,6 +1184,7 @@ pub(crate) async fn ask_result_transcript<C: ConnectionTrait>(
         topic_at: None,
         trail: None,
         reads: Default::default(),
+        talking_with: None,
     })
 }
 

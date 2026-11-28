@@ -25,6 +25,10 @@ pub mod bot_restrictions;
 #[cfg(feature = "bot")]
 pub mod bot_skill;
 
+#[cfg(feature = "bot-task")]
+pub mod bot_calendar;
+#[cfg(feature = "inbox")]
+pub mod bot_mentions;
 #[cfg(feature = "inbox")]
 pub mod bot_message;
 #[cfg(feature = "inbox")]
@@ -35,6 +39,8 @@ pub mod bot_notify;
 pub mod bot_reply_files;
 #[cfg(feature = "bot-task")]
 pub mod bot_task;
+#[cfg(feature = "inbox")]
+pub mod bot_team;
 #[cfg(feature = "inbox")]
 pub mod bot_tool_trail;
 #[cfg(feature = "inbox")]

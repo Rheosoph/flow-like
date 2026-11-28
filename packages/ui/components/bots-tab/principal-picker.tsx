@@ -66,7 +66,7 @@ function PickerOption({
 				aria-pressed={multiple ? selected : undefined}
 				disabled={(disabled || Boolean(unavailable)) && !selected}
 				onClick={() => onPick(row)}
-				className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+				className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
 			>
 				<IdentityAvatar subject={row.id} size={32} />
 				<span className="flex min-w-0 flex-1 flex-col">
@@ -201,6 +201,8 @@ export function PrincipalPicker({
 	serverRule,
 	unavailable,
 	onPick,
+	className,
+	listClassName = "max-h-80",
 }: Readonly<{
 	source: PickerSource;
 	selected: ReadonlySet<string>;
@@ -219,6 +221,9 @@ export function PrincipalPicker({
 	/** The reason a principal can't be picked right now; their row is shown but disabled. */
 	unavailable?: (principal: PickedPrincipal) => string | undefined;
 	onPick: (principal: PickedPrincipal) => void;
+	className?: string;
+	/** Sizes the scrolling list; by default it stops at 20rem. */
+	listClassName?: string;
 }>) {
 	const { t } = useTranslation("bots");
 	const botLabels = useBotLabels();
@@ -369,8 +374,8 @@ export function PrincipalPicker({
 		: t("local.picker.searchLabel", "Search your bots");
 
 	return (
-		<div className="flex min-h-0 flex-col gap-3">
-			<label className="flex h-9 items-center gap-2 rounded-lg border bg-card px-2.5 text-muted-foreground focus-within:border-primary">
+		<div className={cn("flex min-h-0 flex-col gap-3", className)}>
+			<label className="flex h-10 shrink-0 items-center gap-2 rounded-lg border bg-card px-2.5 text-muted-foreground focus-within:border-primary">
 				<SearchIcon className="size-4 shrink-0" aria-hidden />
 				<input
 					type="search"
@@ -384,7 +389,12 @@ export function PrincipalPicker({
 					<Loader2Icon className="size-4 shrink-0 animate-spin" aria-hidden />
 				)}
 			</label>
-			<div className="flex max-h-80 min-h-0 flex-col gap-3 overflow-y-auto pr-1">
+			<div
+				className={cn(
+					"flex min-h-0 flex-col gap-3 overflow-y-auto pr-1",
+					listClassName,
+				)}
+			>
 				<PickerGroup
 					label={t("crew.picker.bots", "Your bots")}
 					rows={[...botRows, ...ownRows]}

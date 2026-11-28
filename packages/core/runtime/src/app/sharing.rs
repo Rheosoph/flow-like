@@ -3226,6 +3226,7 @@ mod tests {
             allow_forking: false,
             forked_at: None,
             forked_from: None,
+            fork_id_seeds: None,
             bot_id: None,
             refuse_bots: false,
         }

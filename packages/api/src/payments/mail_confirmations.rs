@@ -1,5 +1,13 @@
 use super::error;
-use crate::{entity::payment_order, error::ApiError, mail::EmailMessage, state::AppState};
+use crate::{
+    entity::payment_order,
+    error::ApiError,
+    mail::{
+        EmailMessage,
+        templates::{OrderConfirmation, order_confirmation},
+    },
+    state::AppState,
+};
 use sea_orm::EntityTrait;
 use serde_json::Value;
 
@@ -60,18 +68,28 @@ pub async fn send_order_confirmation(
         .get("withdrawal_waiver")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let event = confirmation_event(&order, kind)?;
-    let text = format!(
-        "{intro}\n\n{event}\nOrder: {}\nProduct: {title}\nAmount: {}.{:02} {}\nConfirmation email: {email}\nPurchase terms version: {terms_version}\nImmediate delivery withdrawal waiver accepted: {waiver}\n\nAccepted purchase terms\n\n{terms}\n",
-        order.id,
+    let amount = format!(
+        "{}.{:02} {}",
         order.amount / 100,
         order.amount % 100,
         order.currency.to_uppercase()
     );
+    let (html, text) = order_confirmation(&OrderConfirmation {
+        withdrawn: kind == "withdrawn",
+        intro,
+        event: confirmation_event(&order, kind)?,
+        order_id: &order.id,
+        product: title,
+        amount: &amount,
+        email,
+        terms_version,
+        waiver_accepted: waiver,
+        terms,
+    });
     mail.send(EmailMessage {
         to: email.to_owned(),
         subject: format!("{subject} ({})", order.id),
-        body_html: None,
+        body_html: Some(html),
         body_text: Some(text),
     })
     .await
@@ -83,7 +101,11 @@ pub async fn send_order_confirmation(
     })
 }
 
-fn confirmation_event(order: &payment_order::Model, kind: &str) -> Result<String, ApiError> {
+/// What was confirmed or declared and when, as rows of the confirmation's record.
+fn confirmation_event(
+    order: &payment_order::Model,
+    kind: &str,
+) -> Result<Vec<(String, String)>, ApiError> {
     let timestamp = if kind == "withdrawn" {
         order.withdrawn_at.ok_or_else(|| {
             error(
@@ -94,29 +116,33 @@ fn confirmation_event(order: &payment_order::Model, kind: &str) -> Result<String
     } else {
         let Some(confirmed_at) = order.snapshot.get("confirmed_at").and_then(Value::as_i64) else {
             // Older orders did not retain the first confirmation timestamp.
-            return Ok("Purchase confirmed.".into());
+            return Ok(vec![("Purchase".into(), "Confirmed".into())]);
         };
         confirmed_at
     };
     let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp)
         .ok_or_else(|| ApiError::internal("Invalid payment confirmation timestamp"))?
-        .to_rfc3339();
-    Ok(if kind == "withdrawn" {
-        let evidence = order.snapshot.get("withdrawal_confirmation");
-        let declaration = evidence
-            .and_then(|value| value.get("declaration"))
-            .and_then(Value::as_str)
-            .unwrap_or("Withdrawal from the purchase identified below.");
-        let consumer = evidence
-            .and_then(|value| value.get("consumer_name"))
-            .and_then(Value::as_str);
-        let name = consumer
-            .map(|name| format!("Consumer name: {name}\n"))
-            .unwrap_or_default();
-        format!("{name}Declaration received: {declaration}\nReceived at: {timestamp}")
-    } else {
-        format!("Purchase confirmed at: {timestamp}")
-    })
+        .format("%-d %B %Y, %H:%M:%S UTC")
+        .to_string();
+    if kind != "withdrawn" {
+        return Ok(vec![("Purchase confirmed at".into(), timestamp)]);
+    }
+    let evidence = order.snapshot.get("withdrawal_confirmation");
+    let declaration = evidence
+        .and_then(|value| value.get("declaration"))
+        .and_then(Value::as_str)
+        .unwrap_or("Withdrawal from the purchase identified below.");
+    let consumer = evidence
+        .and_then(|value| value.get("consumer_name"))
+        .and_then(Value::as_str);
+    Ok(consumer
+        .map(|name| ("Consumer name".to_string(), name.to_string()))
+        .into_iter()
+        .chain([
+            ("Declaration received".to_string(), declaration.to_string()),
+            ("Received at".to_string(), timestamp),
+        ])
+        .collect())
 }
 
 fn confirmation_recipient<'a>(snapshot: &'a Value, kind: &str) -> Result<&'a str, ApiError> {
@@ -223,8 +249,14 @@ mod tests {
     fn withdrawal_receipt_contains_recorded_declaration_name_and_received_time() {
         let order: payment_order::Model = serde_json::from_value(json!({"id":"order","kind":"APP","user_id":"buyer","item_id":"app","payee_user_id":"seller","platform_account_id":"acct_platform","livemode":false,"status":"WITHDRAWN","charge_type":"PLATFORM","amount":1000,"currency":"eur","application_fee_amount":0,"fee_bps":0,"snapshot":{"withdrawal_confirmation":{"consumer_name":"Jörg Buyer","confirmation_email":"receipt@example.com","declaration":"I withdraw from order order."}},"cancel_requested":false,"withdrawn_at":0,"expires_at":0,"next_check_at":0,"revision":1,"created_at":0,"updated_at":0})).unwrap();
         let receipt = confirmation_event(&order, "withdrawn").unwrap();
-        assert!(receipt.contains("Consumer name: Jörg Buyer"));
-        assert!(receipt.contains("Declaration received: I withdraw from order order."));
-        assert!(receipt.contains("Received at: 1970-01-01T00:00:00+00:00"));
+        let row = |label: &str, value: &str| (label.to_string(), value.to_string());
+        assert_eq!(
+            receipt,
+            [
+                row("Consumer name", "Jörg Buyer"),
+                row("Declaration received", "I withdraw from order order."),
+                row("Received at", "1 January 1970, 00:00:00 UTC"),
+            ]
+        );
     }
 }

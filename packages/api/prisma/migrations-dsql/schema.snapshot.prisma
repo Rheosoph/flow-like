@@ -292,6 +292,8 @@ model Notification {
 
   @@index([userId, createdAt])
   @@index([userId, read])
+  // The realtime poll's newest read time per user.
+  @@index([userId, readAt])
   @@index([appId, createdAt])
 }
 
@@ -461,9 +463,13 @@ model App {
   /// The owner refuses bots in this app: every bot's access answers `APP_REFUSES_BOTS`.
   /// NULL or false lets bots use it, bounded by their owners' roles.
   refuseBots   Boolean?
+  /// What the public store page shows beyond the description and reviews
+  /// (`ShowcaseSettings`). NULL = nothing; the owner opts sections in.
+  showcase     Json?
 
   technicalUsers TechnicalUser[]
   botApps        BotApp[]
+  teamPins       BotTeamApp[]
 
   outgoingAppConnections AppConnection[]  @relation("outgoingAppConnections")
   incomingAppConnections AppConnection[]  @relation("incomingAppConnections")
@@ -500,6 +506,8 @@ model App {
 
   aiActAssessments       AiActAssessment[]
   aiActModelObservations AiActModelObservation[]
+
+  dataSources AppDataSource[]
 
   createdAt               DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt               DateTime                 @updatedAt @db.Timestamptz(3)
@@ -1632,6 +1640,14 @@ model Bot {
   visionModel     String?
   /// Bit id of the model the bot's sub-tasks run on; null uses the bot's own.
   subtaskModel    String?
+  /// CalendarWake settings: which calendar events wake the bot and how long before; null uses the defaults.
+  calendarWake    Json?
+  /// When a host last planned the wake-ups of the bot's connected calendars.
+  calendarSyncedAt DateTime? @db.Timestamptz(3)
+  /// People who share an app with the owner may find and invite the bot (the owner accepts each invitation); null or false keeps it hidden.
+  othersCanInvite Boolean?
+  /// Turns all people other than the owner may start on the bot in a day; null is the default of 100.
+  othersDailyTurns Int?
   permissionsFrom BotPermission[]       @relation("BotPermissionFrom")
   permissionsTo   BotPermission[]       @relation("BotPermissionTo")
   hostHeartbeats  BotHostHeartbeat[]
@@ -1646,6 +1662,13 @@ model Bot {
   skills          BotSkill[]
   segments        ConversationSegment[]
   notes           BotNote[]
+  calendarFeed    BotCalendarFeed?
+  teamBots        BotTeamBot[]
+  ledTeams        BotTeam[]             @relation("BotTeamLead")
+  leadOffers      BotTeam[]             @relation("BotTeamLeadOffer")
+  teamChats       BotTeamChat[]
+  channelLinks    BotChannelLink[]
+  channelSenders  BotChannelSender[]
 
   @@unique([ownerId, systemKey])
   @@unique([ownerId, importKey])
@@ -1696,12 +1719,12 @@ model BotConnector {
   id              String   @id
   botId           String
   bot             Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
-  /// MCP | OAUTH
+  /// MCP | OAUTH | CALDAV
   kind            String
   label           String
   providerId      String?
   url             String?
-  /// NONE | SECRET | OAUTH
+  /// NONE | SECRET | OAUTH | BASIC
   authKind        String   @default("NONE")
   authRef         String?
   grantEncrypted  String?
@@ -1714,6 +1737,10 @@ model BotConnector {
   toolsSnapshot   Json     @default("[]")
   /// Tool name to the `schema_hash` it had when the owner set or confirmed its policy.
   confirmedHashes Json     @default("{}")
+  /// CALDAV: the calendar collection the bot reads and writes, one of `calendars`.
+  calendarUrl     String?
+  /// CALDAV: `[{url, name, color, writable, zone}]` from the last discovery.
+  calendars       Json?
   createdAt       DateTime @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @db.Timestamptz(3)
 
@@ -1826,6 +1853,10 @@ model BotTurn {
   hops             Int          @default(0)
   /// The person or bot whose message woke the turn; null on turns from before the column existed.
   requesterId      String?
+  /// The person whose message started the chain of bot turns this one belongs to; null on turns from before the column existed. The requester daily cap counts by it.
+  originId         String?
+  /// The bot turns a person allowed this turn's discussion between bots to reach; null: the default budget.
+  discussionHops   Int?
   /// OWNER | ROOM: an owner-only conversation, or a room shared with other people.
   audience         String       @default("OWNER")
   /// The running turn's live status line, at most 120 characters; cleared when it stops running.
@@ -1838,7 +1869,10 @@ model BotTurn {
   @@unique([botId, triggerMessageId])
   @@index([status, leaseUntil])
   @@index([ownerId, status])
+  // The realtime poll's newest turn per owner.
+  @@index([ownerId, updatedAt])
   @@index([botId, requesterId, createdAt])
+  @@index([botId, originId, createdAt])
   checkpoint       BotTurnCheckpoint?
 }
 
@@ -1888,6 +1922,27 @@ model BotTurnCheckpoint {
 }
 
 
+/// A bot's private iCalendar subscription: `GET /calendar-feeds/{token}.ics` serves its events, tasks
+/// and optionally memories. The row keeps the token's hash for lookup and a sealed copy so the owner
+/// can see the link again.
+model BotCalendarFeed {
+  id               String    @id
+  botId            String    @unique
+  bot              Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId          String
+  /// blake3 of the token, lowercase hex.
+  tokenHash        String    @unique
+  /// The token, encrypted like a bot secret (`v1:` + base64).
+  tokenEncrypted   String
+  includeEvents    Boolean   @default(true)
+  includeTasks     Boolean   @default(true)
+  includeMemories  Boolean   @default(false)
+  includeNotes     Boolean   @default(false)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(3)
+  lastFetchedAt    DateTime? @db.Timestamptz(3)
+}
+
 /// A public URL that wakes a bot: `POST /bots/hooks/{id}` with the secret (or an HMAC signature
 /// keyed by its hash) writes a `trigger` entry with `instruction` and the payload into the bot's
 /// conversation with its owner. The secret is shown once; only its hash is stored.
@@ -1920,7 +1975,7 @@ model BotTask {
   botId       String
   bot         Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
   ownerId     String
-  /// ONCE | CRON
+  /// ONCE | CRON | PLACE | EVENT
   kind        String
   runAt       DateTime? @db.Timestamptz(3)
   cron        String?
@@ -1947,8 +2002,22 @@ model BotTask {
   requestConversationId String?
   requestMessageId      String?
 
+  /// A place task's circle: center, radius in meters, the crossing that fires it (ENTER | EXIT | BOTH),
+  /// what the owner calls the place, whether it repeats, and when phones stop watching it.
+  placeLatitude  Float?
+  placeLongitude Float?
+  placeRadiusM   Float?
+  placeOn        String?
+  placeLabel     String?
+  placeRepeat    Boolean? @default(false)
+  placeUntil     DateTime? @db.Timestamptz(3)
+
+  /// An event task's TaskEvent (start, end, location, wake override, resolved offsets, external reference).
+  event          Json?
+
   @@index([botId])
   @@index([enabled, nextRunAt])
+  @@index([ownerId, kind, enabled])
 }
 
 // ---- capacity.prisma
@@ -2070,6 +2139,42 @@ model ComputeAttemptRevision {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([attemptId, createdAt])
+}
+
+// ---- data-source.prisma
+/// An external database an app's queries read as `<alias>.<table>`. The connection settings
+/// are plain JSON; the credentials are sealed by `data_source_secrets.rs` and never returned.
+model AppDataSource {
+  id String @id @default(cuid())
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  name   String
+  /// SQL schema name: lowercase letters, digits and _, unique per app.
+  alias  String
+  /// `postgres`, `mysql`, `clickhouse`, `bigquery` or `athena`.
+  driver String
+  /// The driver's non-secret settings (host, port, database, schema, ssl_mode, project_id, …).
+  config Json   @default("{}")
+
+  /// `v1:<provider>:<key id>:<ciphertext>`; null while no credentials are stored.
+  secret       String?
+  /// `<provider>:<key id>` of the sealer that wrote `secret`, so a job can find and re-wrap records.
+  sealedBy     String?
+  /// Names of the sealed fields (`username`, `password`, …), never their values.
+  secretFields Json    @default("[]")
+
+  createdBy String
+
+  lastCheckedAt   DateTime? @db.Timestamptz(3)
+  /// `ok`, or the error of the last connection check.
+  lastCheckStatus String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([appId, alias])
 }
 
 // ---- device_archives.prisma
@@ -2562,6 +2667,8 @@ model FileAccountingObject {
   @@index([userId])
   // Retention sweep: zero-size tombstones ordered by age, see storage_accounting.rs.
   @@index([size, updatedAt])
+  // Table maintenance: Lance datasets written recently, see table_maintenance.rs.
+  @@index([updatedAt])
 }
 
 // ---- flowscript.prisma
@@ -2899,6 +3006,10 @@ model Conversation {
   meetings       Meeting[]
   inviteLinks    ConversationInviteLink[]
   botNotes       BotNote[]
+  botTeam        BotTeam?
+  botTeamThread  BotTeamThread?
+  botTeamChat    BotTeamChat?
+  channelLinks   BotChannelLink[]
 
   @@unique([createdBy, importKey])
 }
@@ -2926,7 +3037,7 @@ model ConversationInviteLink {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   token          String       @unique
   name           String?
-  /// The member who made it, a user sub; no foreign key.
+  /// The member who made it: a user sub, or the bot that sent an email invitation; no foreign key.
   createdBy      String
   /// -1 is unlimited.
   maxUses        BigInt       @default(-1)
@@ -2934,6 +3045,11 @@ model ConversationInviteLink {
   expiresAt      DateTime?    @db.Timestamptz(3)
   createdAt      DateTime     @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime     @updatedAt @db.Timestamptz(3)
+  /// A bot's email invitation to someone without an account: the lowercased address it went to.
+  /// Such a link works once and is never listed to members.
+  email          String?
+  /// Why the bot invited them, as its owner approved it; shown on the link's page and in the email.
+  reason         String?
 
   @@index([conversationId, createdAt])
   @@index([createdBy])
@@ -3003,6 +3119,8 @@ model ConversationMember {
   invitedBy      String?
   invitedAt      DateTime?    @db.Timestamptz(3)
   acceptedAt     DateTime?    @db.Timestamptz(3)
+  /// Why a bot invited this person, as its owner approved it; shown with the pending invitation.
+  inviteReason   String?
 
   /// Hidden until a new message or explicit reopening; the history boundaries survive reopening.
   hiddenAt        DateTime? @db.Timestamptz(3)
@@ -3012,9 +3130,17 @@ model ConversationMember {
   clearedLegacyAt DateTime? @db.Timestamptz(3)
   clearedSeq      BigInt?
 
+  /// Visible messages from others after `lastReadAt` in this principal's copy. Null until a write
+  /// computes it; the conversation list counts live meanwhile.
+  unreadCount     Int?
+  /// This principal's newest visible message copy; only meaningful once `unreadCount` is set.
+  lastEntryId     String?
+
   @@id([conversationId, principalId])
   @@index([principalId, leftAt])
   @@index([principalId, status])
+  // The realtime poll's read, clear and hide aggregates per principal, from the index alone.
+  @@index([principalId, lastReadAt, clearedAt, hiddenAt], map: "ConversationMember_principalId_markers_idx")
 }
 
 /// One principal's copy of one conversation event. Pages are ordered by (createdAt, id).
@@ -4972,6 +5098,10 @@ model User {
   // Other people see `email` only once its owner turned this on. Null is off.
   shareEmail Boolean? @default(false)
 
+  // When a signed-in app of this person last connected, kept to the hour. A bot's room
+  // invitation also goes out by email to someone away for a week.
+  lastSeenAt DateTime? @db.Timestamptz(3)
+
   memberships                 Membership[]
   profiles                    Profile[]
   personalAccessToken         PAT[]
@@ -5003,6 +5133,10 @@ model User {
   bots                        Bot[]
   botPermissions              BotPermission[]
   botTurns                    BotTurn[]
+  botTeams                    BotTeamPerson[]
+  botTeamThreads              BotTeamThread[]
+  botTeamChats                BotTeamChat[]
+  botOrgClassifications       BotOrgClassification[]
 
   status String @default("ACTIVE")
   tier   String @default("FREE")
@@ -5840,4 +5974,199 @@ model BotDecisionWait {
   @@id([botId, conversationId])
   @@index([conversationId, participantId])
   @@index([expiresAt])
+}
+
+/// A team of bots and the people who work with them. Teams nest: the teams under one top-level
+/// team form an org, and every active member of any of its teams sees the whole org.
+model BotTeam {
+  id             String          @id
+  name           String
+  /// What every bot in the team reads about its work.
+  purpose        String?
+  parentId       String?
+  parent         BotTeam?        @relation("BotTeamTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children       BotTeam[]       @relation("BotTeamTree")
+  /// One of the team's active bots; null while the team has no lead.
+  leadBotId      String?
+  lead           Bot?            @relation("BotTeamLead", fields: [leadBotId], references: [id], onDelete: SetNull)
+  /// Another owner's bot an admin asked to lead the team; it leads once its owner accepts.
+  leadOfferBotId String?
+  leadOffer      Bot?            @relation("BotTeamLeadOffer", fields: [leadOfferBotId], references: [id], onDelete: SetNull)
+  leadOfferBy    String?
+  leadOfferAt    DateTime?       @db.Timestamptz(3)
+  /// Teammates ask each other without the first-time Allow card once their owners agreed.
+  directAsks     Boolean         @default(false)
+  /// The team room: a group conversation of the team's active people and bots.
+  conversationId String?         @unique
+  conversation   Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  /// The person who created the team.
+  createdBy      String
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime        @default(now()) @db.Timestamptz(3)
+  people         BotTeamPerson[]
+  bots           BotTeamBot[]
+  apps           BotTeamApp[]
+  threads        BotTeamThread[]
+  /// People's classifications in the org this team is the top-level team of.
+  classifications BotOrgClassification[]
+
+  @@index([parentId])
+}
+
+/// A person in a team. ADMIN manages the team, MEMBER works with its bots. PENDING until they accept.
+model BotTeamPerson {
+  teamId     String
+  team       BotTeam   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// ADMIN | MEMBER
+  role       String    @default("MEMBER")
+  /// PENDING | ACTIVE
+  status     String    @default("PENDING")
+  invitedBy  String?
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  acceptedAt DateTime? @db.Timestamptz(3)
+
+  @@id([teamId, userId])
+  @@index([userId])
+}
+
+/// A bot in a team. An owner's own bot joins at once; another person's bot is PENDING until its
+/// owner accepts. A bot is active in at most one team.
+model BotTeamBot {
+  teamId       String
+  team         BotTeam   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  botId        String
+  bot          Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  /// PENDING | ACTIVE
+  status       String    @default("PENDING")
+  /// The bot's owner agreed to direct asks in this team.
+  directAgreed Boolean   @default(false)
+  /// The BotRoomLimits its owner set for the team and its room; null adds none.
+  limits       Json?
+  invitedBy    String?
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  acceptedAt   DateTime? @db.Timestamptz(3)
+
+  @@id([teamId, botId])
+  @@index([botId])
+}
+
+/// A person's thread with a team: their `#Team` requests land here and the team's lead answers.
+/// Its members are the person, the current lead and the lead's owner.
+model BotTeamThread {
+  teamId         String
+  team           BotTeam      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationId String       @unique
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@id([teamId, userId])
+  @@index([userId])
+}
+
+/// A person's chat with another owner's bot of an org they share. The person asks, the bot's
+/// owner decides; the chat's members are the person, the bot and the owner, who watches it.
+model BotTeamChat {
+  botId          String
+  bot            Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The bot's owner when the person asked: who decides and watches.
+  ownerId        String
+  /// PENDING | ACTIVE | DECLINED | ENDED
+  status         String        @default("PENDING")
+  /// Created on approval; the person keeps it with its history after the chat ends.
+  conversationId String?       @unique
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  /// The BotRoomLimits the owner set on approval; null adds none.
+  limits         Json?
+  /// Why the person asks.
+  note           String?
+  requestedAt    DateTime      @default(now()) @db.Timestamptz(3)
+  decidedAt      DateTime?     @db.Timestamptz(3)
+  endedAt        DateTime?     @db.Timestamptz(3)
+
+  @@id([botId, userId])
+  @@index([userId])
+  @@index([ownerId, status])
+}
+
+/// A person's classification in an org, set by an admin of its top-level team. A person without a
+/// row counts as internal.
+model BotOrgClassification {
+  /// The org's top-level team.
+  orgId          String
+  org            BotTeam  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// DataClassification, lowercase.
+  classification String
+  setBy          String
+  updatedAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([orgId, userId])
+  @@index([userId])
+}
+
+/// One outside chat a bot is part of: a Microsoft Teams conversation or a Discord channel or
+/// thread. Its messages go into `conversationId`, a group room of the owner and the bot where the
+/// people writing in the chat are guests. `id` is derived from (botId, provider, chatKey), so the
+/// same chat finds its room again; removing the row keeps the room and the next message opens a
+/// new one.
+model BotChannelLink {
+  id             String       @id
+  botId          String
+  bot            Bot          @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId        String
+  /// teams | discord
+  provider       String
+  /// The provider's stable id of the chat (tenant + conversation for Teams, guild + channel for Discord).
+  chatKey        String
+  chatTitle      String
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// Provider data for replies, JSON, at most 4 KB.
+  meta           String       @default("{}")
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  lastSeenAt     DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@unique([botId, provider, chatKey])
+  @@index([ownerId])
+  @@index([conversationId])
+}
+
+/// The name an outside person last wrote to a bot under, by the requester id their turns carry
+/// (`ext:<provider>:<hash>`), so prompts and approval cards name them.
+model BotChannelSender {
+  id        String
+  botId     String
+  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  name      String
+  updatedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([botId, id])
+  @@index([id])
+}
+
+/// An app pinned to a team, shown in its org chart. Whoever pins it owns or administers the app.
+/// A team admin's pin is ACTIVE at once; a member's pin is PENDING until a team admin approves it.
+model BotTeamApp {
+  teamId     String
+  team       BotTeam   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  appId      String
+  app        App       @relation(fields: [appId], references: [id], onDelete: Cascade)
+  /// PENDING | ACTIVE
+  status     String    @default("PENDING")
+  /// The person who pinned the app, by value: their pins go when they leave the org.
+  pinnedBy   String
+  /// The team admin who approved a member's pin.
+  approvedBy String?
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  approvedAt DateTime? @db.Timestamptz(3)
+
+  @@id([teamId, appId])
+  @@index([appId])
 }

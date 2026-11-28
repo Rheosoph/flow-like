@@ -1,10 +1,11 @@
 import {
-	configureOAuthSession,
-	oauthDB,
 	oauthConsentStore as browserConsentStore,
 	oauthTokenStore as browserTokenStore,
-	oauthSessionKey,
+	configureOAuthSession,
+	localOAuthSession,
 	normalizeOAuthHub,
+	oauthDB,
+	oauthSessionKey,
 	useBackendStore,
 } from "@flow-like/flow-like-ui";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -17,7 +18,8 @@ configureOAuthSession(() => {
 	} | null;
 	const user = backend?.auth?.user;
 	const hub = backend?.profile?.hub;
-	if (!hub || !user?.profile.sub) return undefined;
+	if (!hub || backend?.auth?.isLoading) return undefined;
+	if (!user?.profile.sub) return localOAuthSession(hub, backend?.profile?.id);
 	return {
 		hub,
 		subject: user.profile.sub,

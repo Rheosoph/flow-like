@@ -21,7 +21,8 @@ jobs:
   clippy:
     name: Rust lint and format
     if: inputs.rust
-    runs-on: ubuntu-latest
+    # ubuntu-26.04 ships PipeWire 1.6 headers, which libspa 0.8 (xcap -> pipewire 0.8) cannot bind.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-environment

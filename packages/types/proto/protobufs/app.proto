@@ -120,7 +120,9 @@ message App {
   // Default false — apps are not forkable until explicitly enabled.
   optional bool allow_forking = 27;
 
-  // For forked apps: the source app's id, for lineage / attribution.
+  // For forked apps: the id of the app this one was forked from. Duplicating
+  // or uploading a fork keeps that id, so it names where upstream changes
+  // come from.
   optional string forked_from = 28;
 
   // For forked apps: when the fork happened.
@@ -141,4 +143,15 @@ message App {
 
   // The owner refuses bots in this app. Unset means bots may use it.
   optional bool refuse_bots = 33;
+
+  // For forked apps: how an id of `forked_from` maps to its id here.
+  // Unset means the mapping was never recorded (forks made before it was).
+  optional ForkIdSeeds fork_id_seeds = 34;
+}
+
+// The `remap::derive_id` seeds that carried an app's ids into its fork,
+// oldest first: id_here = derive_id(seeds[n-1], … derive_id(seeds[0], id)).
+// No seeds means the ids were copied unchanged.
+message ForkIdSeeds {
+  repeated string seeds = 1;
 }

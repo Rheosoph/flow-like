@@ -1,7 +1,7 @@
 use super::{
     Connection, TeamsPermission, auth, cards, client,
     context::{self, Context, Enrichment},
-    files::{self, FileEntry},
+    files::{self, FileEntry, FileOwner},
     hash, lookup,
     microsoft::{self, MicrosoftError},
     now, store,
@@ -37,11 +37,11 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use utoipa::ToSchema;
 
-const DAY_MS: i64 = 86_400_000;
+pub(super) const DAY_MS: i64 = 86_400_000;
 const HISTORY_MS: i64 = 30 * DAY_MS;
 const DISPATCH_LEASE_MS: i64 = 120_000;
 const DELIVERY_LEASE_MS: i64 = 60_000;
-const MAX_MESSAGE_BYTES: usize = 24_000;
+pub(super) const MAX_MESSAGE_BYTES: usize = 24_000;
 const MAX_PASSIVE_BYTES: usize = 4_000;
 const MAX_HISTORY: usize = 30;
 /// Keeps the encrypted conversation row well under DSQL's 1 MiB limit.
@@ -53,7 +53,7 @@ const HEALTH_REFRESH_MS: i64 = 60_000;
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(4);
 /// Shared by the context lookups and the file downloads, which run concurrently. Microsoft
 /// expects the messaging endpoint to answer within about 15 seconds.
-const PREPARE_BUDGET: Duration = Duration::from_secs(10);
+pub(super) const PREPARE_BUDGET: Duration = Duration::from_secs(10);
 const GRAPH_COPY_TIMEOUT: Duration = Duration::from_secs(3);
 /// Graph can list a message shortly after Teams delivered it, so a 404 is retried once.
 const GRAPH_COPY_LAG: Duration = Duration::from_millis(700);
@@ -146,13 +146,13 @@ struct Delivery {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Dispatch {
-    status: String,
-    lease_until: i64,
+pub(super) struct Dispatch {
+    pub(super) status: String,
+    pub(super) lease_until: i64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum Claim {
+pub(super) enum Claim {
     Done,
     InFlight,
     Retry,
@@ -160,7 +160,7 @@ enum Claim {
 
 /// What `incoming` does with an activity that is not a card action.
 #[derive(Debug, PartialEq, Eq)]
-enum Gate {
+pub(super) enum Gate {
     Ignore,
     /// The team changed, so cached team and channel names are stale.
     ForgetTeam(String),
@@ -172,7 +172,7 @@ enum Gate {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Revision {
+pub(super) enum Revision {
     Delete,
     Edit,
 }
@@ -207,7 +207,7 @@ fn other_activity(activity: &Value) -> Gate {
 
 /// Other people's messages only reach the history when the bot may read every message.
 /// Deletes and edits always apply, because they only change entries the history already holds.
-fn gate(activity: &Value, reads_messages: bool) -> Result<Gate, ApiError> {
+pub(super) fn gate(activity: &Value, reads_messages: bool) -> Result<Gate, ApiError> {
     match activity["type"].as_str() {
         Some("message") => {}
         Some("messageDelete" | "messageUpdate") => {
@@ -304,7 +304,7 @@ async fn live(
     Ok((sink, event))
 }
 
-fn string<'a>(value: &'a Value, pointer: &str) -> Result<&'a str, ApiError> {
+pub(super) fn string<'a>(value: &'a Value, pointer: &str) -> Result<&'a str, ApiError> {
     value
         .pointer(pointer)
         .and_then(Value::as_str)
@@ -345,6 +345,9 @@ pub async fn incoming(
         return Err(ApiError::NOT_FOUND);
     }
     auth::verify(&c, &headers, &activity).await?;
+    if c.bot_id.is_some() {
+        return super::bot::incoming(&state, &c, &activity).await;
+    }
     let (sink, event) = live(&state, &c).await?;
     let action_data = activity
         .pointer("/value/action/data")
@@ -438,7 +441,7 @@ pub async fn incoming(
 }
 
 /// The setup page shows when the bot last handled a message or card action.
-async fn record_activity(state: &AppState, c: &Connection) {
+pub(super) async fn record_activity(state: &AppState, c: &Connection) {
     if let Err(error) = save_activity(state, c).await {
         tracing::warn!(connection_id = %c.id, %error, "Could not record Teams bot activity");
     }
@@ -471,7 +474,7 @@ fn recent_activity(health: &Value, c: &Connection, now: i64) -> bool {
             .is_some_and(|at| now - at < HEALTH_REFRESH_MS)
 }
 
-fn dispatch_claim(existing: &Dispatch, now: i64) -> Claim {
+pub(super) fn dispatch_claim(existing: &Dispatch, now: i64) -> Claim {
     match existing.status.as_str() {
         "dispatched" => Claim::Done,
         "dispatching" if existing.lease_until > now => Claim::InFlight,
@@ -482,7 +485,7 @@ fn dispatch_claim(existing: &Dispatch, now: i64) -> Claim {
 /// Microsoft retries a message whose response was slow. The retry must neither start the
 /// run a second time nor lose it when the first dispatch failed. Returns the lease revision,
 /// or `None` when the message was already dispatched.
-async fn claim_dispatch(
+pub(super) async fn claim_dispatch(
     state: &AppState,
     c: &Connection,
     run: &str,
@@ -512,7 +515,7 @@ async fn claim_dispatch(
     }
 }
 
-async fn release_dispatch(state: &AppState, run: &str, revision: i32, dispatched: bool) {
+pub(super) async fn release_dispatch(state: &AppState, run: &str, revision: i32, dispatched: bool) {
     let released = Dispatch {
         status: if dispatched { "dispatched" } else { "failed" }.into(),
         lease_until: 0,
@@ -684,7 +687,7 @@ async fn input_payload(
         files::collect(
             state,
             c,
-            sink,
+            FileOwner::Sink(sink),
             &session.run_id,
             files::classify(activity),
             deadline
@@ -703,7 +706,7 @@ async fn input_payload(
     })
     .await?;
     let refs = earlier_files(&conversation.messages, &entry, chrono::Utc::now());
-    let earlier = files::resign(state, c, sink, &refs, &files, deadline).await;
+    let earlier = files::resign(state, c, FileOwner::Sink(sink), &refs, &files, deadline).await;
     let global = store::get::<UserSession>(state, &user_key(session))
         .await?
         .map(|v| v.0.value)
@@ -1532,7 +1535,7 @@ fn stored_message(message: &Value) -> Value {
     message
 }
 
-fn activity_url(
+pub(super) fn activity_url(
     session: &Session,
     message: Option<&str>,
     reply: bool,
@@ -1613,7 +1616,7 @@ async fn settle(state: &AppState, id: &str, delivery: &Delivery, revision: i32, 
 
 /// Sends at most once per `key` and run. Deterministic failures are 4xx, 409 means the same
 /// delivery is still running, and 429/5xx are transient.
-async fn deliver(
+pub(super) async fn deliver(
     state: &AppState,
     c: &Connection,
     session: &Session,

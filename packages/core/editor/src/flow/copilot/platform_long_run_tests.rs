@@ -19,6 +19,17 @@ fn is_checkpoint(request: &CompletionRequest) -> bool {
         message,
         rig::message::Message::System { content } if content.starts_with("Write a factual continuation checkpoint")
     )) || request.preamble.as_deref().is_some_and(|preamble| preamble.starts_with("Write a factual continuation checkpoint"))
+        || is_cached_checkpoint(request)
+}
+
+/// A checkpoint asked for at the end of the turn's own request.
+fn is_cached_checkpoint(request: &CompletionRequest) -> bool {
+    match request.chat_history.last() {
+        rig::message::Message::User { content } => content.iter().any(|item| {
+            matches!(item, UserContent::Text(text) if text.text.contains("Write a factual continuation checkpoint"))
+        }),
+        _ => false,
+    }
 }
 
 #[derive(Clone)]
@@ -233,6 +244,30 @@ async fn run_conversation(
     history: Vec<ChatMessage>,
     scope: Option<&str>,
 ) -> (Result<String>, Arc<Bridge>) {
+    run_turn(
+        client,
+        rounds,
+        large_results,
+        surface,
+        images,
+        history,
+        scope,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_turn(
+    client: &Client,
+    rounds: usize,
+    large_results: bool,
+    surface: PlatformSurface,
+    images: Option<Vec<ChatImage>>,
+    history: Vec<ChatMessage>,
+    scope: Option<&str>,
+    compact: bool,
+) -> (Result<String>, Arc<Bridge>) {
     let state = Arc::new(FlowLikeState::new(
         FlowLikeConfig::new(),
         HTTPClient::new_without_refetch(),
@@ -249,6 +284,7 @@ async fn run_conversation(
         .with_tool_rounds(rounds)
         .with_long_running()
         .with_conversation_scope(scope.map(str::to_owned))
+        .with_compaction_requested(compact)
         .chat_with_client(
             surface,
             "Help the owner.".into(),
@@ -291,6 +327,63 @@ async fn extended_bot_turns_execute_more_than_twelve_rounds_and_reserve_synthesi
             .any(|tool| tool.name == UPDATE_WORK_PLAN_TOOL)
     );
     assert!(requests.last().unwrap().tools.is_empty());
+}
+
+#[tokio::test]
+async fn every_tool_request_states_the_rounds_left_and_the_answer_request_does_not() {
+    let client = Client::new(vec![
+        call("first", "list_apps", json!({})),
+        call("second", "list_apps", json!({})),
+        call("third", "list_apps", json!({})),
+        text("Verified all pages."),
+    ]);
+    run(&client, 3, false).await.0.unwrap();
+    let requests: Vec<String> = client
+        .0
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| serde_json::to_string(request).unwrap())
+        .collect();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[0].contains("Turn budget: 3 of 3 tool rounds left, counting this one."));
+    assert!(requests[1].contains("Turn budget: 2 of 3 tool rounds left, counting this one."));
+    assert!(requests[2].contains("Turn budget: this is the last of 3 tool rounds"));
+    assert!(!requests[3].contains("Turn budget:"));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.matches("Turn budget:").count() <= 1),
+        "an earlier budget note stayed in the history"
+    );
+    assert!(!requests[0].contains("until the turn deadline"));
+}
+
+#[test]
+fn durable_runs_count_reserved_model_calls_against_the_rounds_left() {
+    assert_eq!(tool_rounds_left(128, 5, None), 123);
+    assert_eq!(tool_rounds_left(128, 5, Some(8)), 121);
+    assert_eq!(tool_rounds_left(128, 0, Some(128)), 1);
+    assert_eq!(tool_rounds_left(128, 128, None), 0);
+}
+
+#[test]
+fn the_budget_note_rounds_the_deadline_up_to_whole_minutes() {
+    assert_eq!(
+        turn_budget_note(40, 128, Some(12 * 60_000 + 1)),
+        "Turn budget: 40 of 128 tool rounds left, counting this one. About 13 minutes until the turn deadline."
+    );
+    assert!(
+        turn_budget_note(2, 128, Some(60_000)).ends_with("About 1 minute until the turn deadline.")
+    );
+    assert!(
+        turn_budget_note(2, 128, Some(59_999))
+            .ends_with("Less than a minute until the turn deadline.")
+    );
+    assert!(
+        turn_budget_note(1, 128, Some(-5)).ends_with("Less than a minute until the turn deadline.")
+    );
 }
 
 #[tokio::test]
@@ -381,6 +474,10 @@ async fn compaction_preserves_tool_pairs_original_request_steering_and_recent_im
     assert!(run(&client, 20, true).await.0.is_ok());
     let requests = client.0.requests.lock().unwrap();
     assert!(requests.iter().any(is_checkpoint));
+    assert!(
+        !requests.iter().any(is_cached_checkpoint),
+        "a history with screenshots is summarized from a transcript"
+    );
     let mut saw_recent_images = false;
     for request in requests.iter().filter(|request| !is_checkpoint(request)) {
         assert_complete_tool_pairs(request);
@@ -521,6 +618,14 @@ async fn converse(client: &Client, talk: &[ChatMessage], scope: &str) -> String 
         .unwrap()
 }
 
+async fn converse_compacting(client: &Client, talk: &[ChatMessage], scope: Option<&str>) -> String {
+    let surface = PlatformSurface::Orchestrator;
+    run_turn(client, 4, false, surface, None, talk.to_vec(), scope, true)
+        .await
+        .0
+        .unwrap()
+}
+
 fn reply_request(client: &Client) -> String {
     let requests = client.0.requests.lock().unwrap();
     let reply = requests
@@ -558,39 +663,121 @@ async fn a_checkpoint_that_never_arrives_does_not_hold_the_turn_back() {
 }
 
 #[tokio::test]
-async fn a_failed_checkpoint_stops_the_turn_only_when_nothing_else_frees_context() {
+async fn a_failed_checkpoint_at_the_hard_limit_folds_without_a_model_and_the_turn_goes_on() {
     let mut client = Client::new(large_rounds(12));
     client.0.fail_checkpoint = true;
     let (answer, bridge) = run(&client, 20, true).await;
     assert!(answer.unwrap().contains("Verified every page."));
     assert_eq!(bridge.calls.load(Ordering::Relaxed), 12);
 
-    let mut client = Client::new(vec![call("call-0", "list_apps", json!({}))]);
+    let mut client = Client::new(vec![
+        call("call-0", "list_apps", json!({})),
+        text("Answered from the shortened record."),
+    ]);
     client.0.fail_checkpoint = true;
     let surface = PlatformSurface::Orchestrator;
     let (answer, bridge) =
         run_conversation(&client, 20, false, surface, None, long_talk(34), None).await;
-    assert!(answer.unwrap().contains("task is unfinished"));
-    assert_eq!(bridge.calls.load(Ordering::Relaxed), 0);
-    assert!(is_checkpoint(
-        client.0.requests.lock().unwrap().last().unwrap()
-    ));
+    let answer = answer.unwrap();
+    assert!(answer.contains("Answered from the shortened record."));
+    assert!(!answer.contains("task is unfinished"));
+    assert_eq!(bridge.calls.load(Ordering::Relaxed), 1);
+    let requests = client.0.requests.lock().unwrap();
+    // The cached request came back empty, so the transcript was tried once before the fold.
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| is_checkpoint(request))
+            .count(),
+        2
+    );
+    let reply = requests
+        .iter()
+        .find(|request| !is_checkpoint(request))
+        .unwrap();
+    assert_complete_tool_pairs(reply);
+    let reply = serde_json::to_string(reply).unwrap();
+    assert!(reply.contains("Written without a model"));
+    assert!(reply.contains("Inspect every page and save the report."));
+    assert!(reply.contains("message-33"));
+    assert!(!reply.contains("message-0 "));
 }
 
 #[tokio::test]
-async fn a_stop_at_the_hard_limit_leaves_recorded_artifacts_and_remaining_work_in_saved_reply() {
+async fn a_checkpoint_without_images_rereads_the_turn_request_with_tools_unusable() {
+    let mut rounds: Vec<_> = (0..10)
+        .map(|index| {
+            let mut round = text(&format!(
+                "Inspecting page {index}. {}",
+                "detail ".repeat(4_000)
+            ));
+            round.extend(call(&format!("call-{index}"), "list_apps", json!({})));
+            round
+        })
+        .collect();
+    rounds.push(text("Verified every page."));
+    let client = Client::new(rounds);
+    let answer = run(&client, 20, false).await.0.unwrap();
+    assert!(answer.contains("Verified every page."));
+    let requests = client.0.requests.lock().unwrap();
+    let cached: Vec<_> = requests
+        .iter()
+        .filter(|request| is_cached_checkpoint(request))
+        .collect();
+    assert!(
+        !cached.is_empty(),
+        "no checkpoint reused the turn's request"
+    );
+    for request in cached {
+        assert_complete_tool_pairs(request);
+        let system = request.preamble.clone().or_else(|| {
+            request
+                .chat_history
+                .iter()
+                .find_map(|message| match message {
+                    rig::message::Message::System { content } => Some(content.clone()),
+                    _ => None,
+                })
+        });
+        assert!(system.is_some_and(|system| system.starts_with("Help the owner.")));
+        assert!(!request.tools.is_empty());
+        assert!(matches!(
+            request.tool_choice,
+            Some(rig::message::ToolChoice::None)
+        ));
+    }
+    let last = serde_json::to_string(requests.last().unwrap()).unwrap();
+    assert!(last.contains("untrusted_historical_checkpoint"));
+    assert!(last.contains("workspace/report.txt"));
+}
+
+#[tokio::test]
+async fn a_checkpoint_that_keeps_failing_never_ends_the_turn() {
     let mut rounds = vec![call("plan", UPDATE_WORK_PLAN_TOOL, plan(0, "active"))];
     rounds.extend((0..10).map(|index| {
         let mut round = text(&"Inspecting pages. ".repeat(1_500));
         round.extend(call(&format!("call-{index}"), "list_apps", json!({})));
         round
     }));
+    rounds.push(call(
+        "plan-done",
+        UPDATE_WORK_PLAN_TOOL,
+        plan(1, "completed"),
+    ));
+    rounds.push(text("Report saved to workspace/report.txt."));
     let mut client = Client::new(rounds);
     client.0.fail_checkpoint = true;
-    let answer = run(&client, 20, false).await.0.unwrap();
-    assert!(answer.contains("task is unfinished"));
-    assert!(answer.contains("Report path: workspace/report.txt"));
-    assert!(answer.contains("Unfinished: Inspect pages and verify the report"));
+    let (answer, bridge) = run(&client, 20, false).await;
+    let answer = answer.unwrap();
+    assert!(answer.contains("Report saved to workspace/report.txt."));
+    assert!(!answer.contains("task is unfinished"));
+    assert_eq!(bridge.calls.load(Ordering::Relaxed), 10);
+    let requests = client.0.requests.lock().unwrap();
+    for request in requests.iter().filter(|request| !is_checkpoint(request)) {
+        assert_complete_tool_pairs(request);
+    }
+    let last = serde_json::to_string(requests.last().unwrap()).unwrap();
+    assert!(last.contains("Written without a model"));
 }
 
 #[tokio::test]
@@ -635,6 +822,68 @@ async fn the_next_turn_starts_from_the_summary_the_previous_turn_began() {
     let request = reply_request(&fourth);
     assert!(!request.contains("Earlier part of this conversation, summarized"));
     assert!(request.contains("message-10 was edited"));
+}
+
+#[tokio::test]
+async fn a_requested_compaction_folds_a_conversation_below_every_limit_for_later_turns() {
+    let scope = "requested-compaction";
+    let mut talk = long_talk(6);
+    let untouched = Client::new(vec![text("Plain answer.")]);
+    converse(&untouched, &talk, "requested-compaction-control").await;
+    assert_eq!(
+        checkpoints(&untouched),
+        0,
+        "the conversation is below every limit"
+    );
+
+    let first = Client::new(vec![text("First answer.")]);
+    assert_eq!(
+        converse_compacting(&first, &talk, Some(scope)).await,
+        "First answer."
+    );
+    assert_eq!(checkpoints(&first), 1);
+    let request = reply_request(&first);
+    assert!(request.contains("Earlier part of this conversation, summarized"));
+    assert!(!request.contains("message-0 "));
+    assert!(
+        request.contains("message-5 "),
+        "the newest messages stay word for word"
+    );
+
+    talk.extend(exchange("First answer."));
+    let second = Client::new(vec![text("Second answer.")]);
+    converse(&second, &talk, scope).await;
+    let request = reply_request(&second);
+    assert!(request.contains("Earlier part of this conversation, summarized"));
+    assert!(!request.contains("message-0 "));
+    assert_eq!(checkpoints(&second), 0, "the next turn summarized again");
+}
+
+#[tokio::test]
+async fn a_requested_compaction_without_older_messages_or_conversation_writes_no_summary() {
+    let short = Client::new(vec![text("Short answer.")]);
+    let talk = exchange("Earlier answer.");
+    let answer = converse_compacting(&short, &talk, Some("requested-compaction-short")).await;
+    assert_eq!(answer, "Short answer.");
+    assert_eq!(checkpoints(&short), 0);
+
+    let unscoped = Client::new(vec![text("Unscoped answer.")]);
+    assert_eq!(
+        converse_compacting(&unscoped, &long_talk(6), None).await,
+        "Unscoped answer."
+    );
+    assert_eq!(checkpoints(&unscoped), 0);
+}
+
+#[tokio::test]
+async fn a_failed_requested_compaction_still_answers_from_the_full_conversation() {
+    let mut client = Client::new(vec![text("Answer anyway.")]);
+    client.0.fail_checkpoint = true;
+    let scope = Some("requested-compaction-failed");
+    let answer = converse_compacting(&client, &long_talk(6), scope).await;
+    assert_eq!(answer, "Answer anyway.");
+    assert_eq!(checkpoints(&client), 1);
+    assert!(reply_request(&client).contains("message-0 "));
 }
 
 #[tokio::test]

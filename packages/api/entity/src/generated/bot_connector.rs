@@ -35,6 +35,10 @@ pub struct Model {
     pub tools_snapshot: Json,
     #[sea_orm(column_name = "confirmedHashes", column_type = "JsonBinary")]
     pub confirmed_hashes: Json,
+    #[sea_orm(column_name = "calendarUrl", column_type = "Text", nullable)]
+    pub calendar_url: Option<String>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub calendars: Option<Json>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]

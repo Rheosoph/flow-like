@@ -8,10 +8,10 @@ pub mod get_row;
 pub mod get_sheet_names;
 #[cfg(feature = "execute")]
 pub mod grid;
-#[cfg(feature = "execute")]
-pub mod inspect;
 pub mod insert_column;
 pub mod insert_row;
+#[cfg(feature = "execute")]
+pub mod inspect;
 pub mod loop_rows;
 pub mod new_worksheet;
 pub mod read_cell;
@@ -22,10 +22,10 @@ pub mod sheet_compressor;
 #[cfg(feature = "execute")]
 pub mod styles;
 pub mod table_detect;
-#[cfg(feature = "execute")]
-pub mod workbook;
 pub mod try_extract_tables;
 pub mod try_extract_tables_ai;
+#[cfg(feature = "execute")]
+pub mod workbook;
 pub mod write_cell;
 pub mod write_cell_html;
 

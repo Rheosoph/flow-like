@@ -22,6 +22,7 @@ pub mod cache;
 pub mod comments;
 pub mod connection;
 pub mod data;
+pub mod data_sources;
 pub mod db;
 pub mod device_metadata;
 pub mod events;
@@ -41,6 +42,7 @@ pub mod publication;
 pub mod roles;
 pub mod route;
 pub mod sales;
+pub mod showcase;
 pub mod team;
 pub mod template;
 pub mod wasm_catalog;
@@ -103,6 +105,15 @@ pub fn routes() -> Router<AppState> {
             "/{app_id}/settings/bots",
             patch(internal::change_bot_access::change_bot_access),
         )
+        .route(
+            "/{app_id}/settings/showcase",
+            get(showcase::settings::get_showcase_settings)
+                .put(showcase::settings::put_showcase_settings),
+        )
+        .route(
+            "/{app_id}/showcase",
+            get(showcase::get_showcase::get_showcase),
+        )
         .route("/{app_id}/fork", post(fork::online_fork::online_fork))
         .route(
             "/{app_id}/notifications/create",
@@ -162,6 +173,7 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/locked", locked::routes())
         .nest("/{app_id}/invoke", invoke::routes())
         .nest("/{app_id}/db", db::routes())
+        .nest("/{app_id}/data-sources", data_sources::routes())
         .nest("/{app_id}/graph", graph::routes())
         .nest("/{app_id}/api", api::routes())
         .nest("/{app_id}/routes", route::routes())

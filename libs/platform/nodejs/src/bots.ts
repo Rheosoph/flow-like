@@ -138,9 +138,83 @@ export type SetBotSecretRequest = (
 	description?: string | null;
 };
 
+export interface BotMemoryEvidence {
+	seq: number;
+	message_id: string;
+	/** What was said, where the fact comes from. */
+	quote: string;
+	at: string;
+	speaker?: { id: string; name?: string };
+}
+
+/** One thing the bot remembers. */
+export interface BotMemoryFact {
+	id: string;
+	text: string;
+	kind: string;
+	subject: string;
+	subject_id?: string;
+	object_id?: string;
+	relation?: string;
+	source: string;
+	confidence: number;
+	recorded_at: string;
+	valid_from: string | null;
+	valid_to: string | null;
+	geojson?: JsonObject;
+	time?: string;
+	expires_at?: string;
+	/** The id of the fact that replaced this one; null while it still holds. */
+	superseded_by: string | null;
+	evidence: BotMemoryEvidence[];
+	/** The conversation the fact was learned in; absent in the owner's direct chat. */
+	conversation_scope?: string;
+}
+
+export type BotMemoryEntityKind =
+	| "person"
+	| "place"
+	| "organization"
+	| "project"
+	| "thing";
+
+/** A person, place, organization, project or thing the bot knows about. */
+export interface BotMemoryEntity {
+	/** Unique only within its conversation scope. */
+	id: string;
+	name: string;
+	kind: BotMemoryEntityKind;
+	/** The entity that stands for the bot's owner (`e_user`). */
+	owner: boolean;
+	participant?: string;
+	aliases: string[];
+	fact_count: number;
+	created_at: string;
+	updated_at: string;
+	/** Absent in the owner's direct chat. */
+	conversation_scope?: string;
+}
+
+export interface BotMemoryFactsOptions {
+	/** Also the facts that newer ones replaced. */
+	includeSuperseded?: boolean;
+}
+
+export interface BotMemoryEntityOptions {
+	/** The entity's `conversation_scope`; leave out for the owner's direct chat. */
+	scope?: string;
+}
+
+export interface UpdateBotMemoryEntityRequest {
+	name?: string;
+	kind?: BotMemoryEntityKind;
+}
+
 const DEFAULT_APPEARANCE: JsonObject = { kind: "pip" };
 
 const botPath = (botId: string) => `/bots/${segment(botId)}`;
+const memoryEntityPath = (botId: string, entityId: string) =>
+	`${botPath(botId)}/memory/entities/${segment(entityId)}`;
 
 /** Bots act for their owner. These routes accept people only (PATs), not API keys. */
 export function createBotMethods(http: HttpClient) {
@@ -203,6 +277,79 @@ export function createBotMethods(http: HttpClient) {
 				"DELETE",
 				`${botPath(botId)}/secrets/${segment(name)}`,
 			);
+		},
+		/** What the bot remembers, newest first. */
+		async listBotMemoryFacts(
+			botId: string,
+			options: BotMemoryFactsOptions = {},
+		): Promise<BotMemoryFact[]> {
+			return (
+				await http.request<{ facts: BotMemoryFact[] }>(
+					"GET",
+					`${botPath(botId)}/memory/facts`,
+					{ query: { include_superseded: options.includeSuperseded } },
+				)
+			).facts;
+		},
+		/** Makes the bot forget one fact and returns it. */
+		forgetBotMemoryFact(botId: string, factId: string): Promise<BotMemoryFact> {
+			return http.request(
+				"DELETE",
+				`${botPath(botId)}/memory/facts/${segment(factId)}`,
+			);
+		},
+		/** Wipes everything the bot remembered. 409 while another process works on the memory: retry later. */
+		async resetBotMemory(botId: string): Promise<void> {
+			await http.request("DELETE", `${botPath(botId)}/memory`);
+		},
+		async listBotMemoryEntities(botId: string): Promise<BotMemoryEntity[]> {
+			return (
+				await http.request<{ entities: BotMemoryEntity[] }>(
+					"GET",
+					`${botPath(botId)}/memory/entities`,
+				)
+			).entities;
+		},
+		updateBotMemoryEntity(
+			botId: string,
+			entityId: string,
+			changes: UpdateBotMemoryEntityRequest,
+			options: BotMemoryEntityOptions = {},
+		): Promise<BotMemoryEntity> {
+			return http.request("PATCH", memoryEntityPath(botId, entityId), {
+				body: changes,
+				query: { scope: options.scope },
+			});
+		},
+		/** Folds `entityId` into `into`; refused (400) for the owner entity `e_user`. */
+		mergeBotMemoryEntity(
+			botId: string,
+			entityId: string,
+			into: string,
+			options: BotMemoryEntityOptions = {},
+		): Promise<BotMemoryEntity> {
+			return http.request(
+				"POST",
+				`${memoryEntityPath(botId, entityId)}/merge`,
+				{
+					body: { into },
+					query: { scope: options.scope },
+				},
+			);
+		},
+		/** Forgets the entity and every fact about it; returns those facts. Refused (400) for `e_user`. */
+		async forgetBotMemoryEntity(
+			botId: string,
+			entityId: string,
+			options: BotMemoryEntityOptions = {},
+		): Promise<BotMemoryFact[]> {
+			return (
+				await http.request<{ forgotten: BotMemoryFact[] }>(
+					"DELETE",
+					memoryEntityPath(botId, entityId),
+					{ query: { scope: options.scope } },
+				)
+			).forgotten;
 		},
 	};
 }

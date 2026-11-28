@@ -11,7 +11,7 @@ use crate::{
     state::AppState,
     utils::fork::{
         job, materialize_uploaded_app_media, preview::compute_app_content_size_and_count,
-        sync_uploaded_metadata_media_to_db,
+        sync_uploaded_metadata_media_to_db, upload::adopt_all_staged,
     },
 };
 use axum::{
@@ -80,9 +80,9 @@ pub struct FinalizeOnlineForkResponse {
 /// Finalize an offline → online fork.
 ///
 /// The desktop side splits its work into two streams:
-/// - **Content** (metadata/, media/, upload/, storage/) is uploaded via the
-///   scoped credentials returned by `/fork/online/begin` directly to
-///   the content store at `apps/{app_id}/...`.
+/// - **Content** (metadata/, media/, upload/, storage/) goes up through
+///   signed URLs into a staging area under `tmp/`, and the server moves it
+///   to `apps/{app_id}/...` (`/fork/online/adopt`, and here for the rest).
 /// - **Meta** (boards, events, widgets, templates, pages) is pushed
 ///   via the **normal app-edit endpoints** (`PUT /apps/{id}/board/`,
 ///   `POST /apps/{id}/events/upsert`, etc.). Those endpoints already
@@ -147,6 +147,12 @@ pub async fn finalize_online_fork(
             "app {} is not in offline-bundle state (visibility={:?}); fork is already finalized or wasn't started via /fork/online/begin",
             app_id, app_row.visibility
         )));
+    }
+
+    // Files the desktop staged but did not move in yet. The upload's own
+    // staging is keyed by its uploader, not by whoever finalizes.
+    if let Some(job) = job::find_live_by_dest(&state, &app_id).await? {
+        adopt_all_staged(&state, &app_id, &job).await?;
     }
 
     // Desktop metadata media lands under `apps/{id}/media`; the API

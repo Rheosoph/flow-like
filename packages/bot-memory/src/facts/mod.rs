@@ -12,6 +12,7 @@ use flow_like_types::{Result, create_id};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::entities::{DeclaredEntity, EntityKind};
 use crate::llm::{LlmRequest, LlmTask, MemoryLlm, parse_json_answer};
 use crate::model::{FactSource, HistoryItem, Role, Seq, SeqSpan, Speaker};
 use crate::pointer::{PartRef, Pointer};
@@ -21,15 +22,15 @@ use crate::text::{
     truncate_chars, truncate_to_tokens,
 };
 
+pub(crate) use update::{Candidates, apply_prepared_facts, prepare_facts, revive};
 pub use update::{
     DecidedBy, Decision, NEAR_DUPLICATE_COSINE, Neighbour, UPDATE_NEIGHBOURS, UpdateAction,
     UpdateReport, decide_by_rule, guard_time, guard_trust, integrate_facts, merge_into,
     parse_update_answer, supersede, update_request,
 };
-pub(crate) use update::{apply_prepared_facts, prepare_facts, revive};
 
 /// Stored with nothing yet; bump when the extraction prompt changes meaning.
-pub const EXTRACTION_PROMPT_VERSION: u32 = 3;
+pub const EXTRACTION_PROMPT_VERSION: u32 = 4;
 pub const MAX_QUOTE_CHARS: usize = 200;
 const MAX_FACT_CHARS: usize = 300;
 
@@ -122,6 +123,17 @@ pub struct Fact {
     pub kind: FactKind,
     /// Who or what the fact is about, lowercase: `user`, `user.sister`, `project atlas`.
     pub subject: String,
+    /// The entity the subject resolved to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_id: Option<String>,
+    /// The other entity the fact connects the subject with, as said: `lyon`, `acme`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
+    /// How subject and object relate, short and lowercase: `lives in`, `works at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relation: Option<String>,
     /// A location in WGS84 GeoJSON geometry coordinates, longitude before latitude.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geojson: Option<Value>,
@@ -219,6 +231,20 @@ impl Fact {
 
     pub fn newest_evidence(&self) -> Option<&Evidence> {
         self.evidence.iter().max_by_key(|evidence| evidence.seq)
+    }
+
+    /// Whether the fact is a subject or object edge of `entity`.
+    pub fn touches(&self, entity: &str) -> bool {
+        self.subject_id.as_deref() == Some(entity) || self.object_id.as_deref() == Some(entity)
+    }
+
+    /// The entity at the fact's other end, seen from `entity`.
+    pub fn other_end(&self, entity: &str) -> Option<&str> {
+        match (self.subject_id.as_deref(), self.object_id.as_deref()) {
+            (Some(subject), Some(object)) if subject == entity => Some(object),
+            (Some(subject), Some(object)) if object == entity => Some(subject),
+            _ => None,
+        }
     }
 
     pub fn evidence_seqs(&self) -> Vec<Seq> {
@@ -350,6 +376,8 @@ pub struct Rejection {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ExtractionOutcome {
     pub facts: Vec<Fact>,
+    /// The entities the answers declared, for resolving the facts' subjects and objects.
+    pub entities: Vec<DeclaredEntity>,
     pub rejected: Vec<Rejection>,
     /// Pieces whose answer never parsed, even alone, or whose call failed: mined again while
     /// idle.
@@ -375,7 +403,10 @@ Rules:
 - One atomic fact per item: a full declarative sentence without pronouns that starts with its subject (\"The user's sister Mia lives in Lyon.\").
 - Resolve relative dates (\"tomorrow\", \"last Friday\") against the message time and write absolute dates.
 - kind: profile (stable facts about the user), preference (likes, dislikes, how the user wants things done), event (something that happened or will happen at a time), decision (a choice that was made), knowledge (anything else worth keeping).
-- subject: who or what the fact is about, short and lowercase, e.g. user, user.sister, project atlas.
+- subject: who or what the fact is about, short and lowercase: user for the owner, otherwise the name of an entity from entities (mia, project atlas).
+- object: the other entity the fact connects the subject with, by its name from entities (\"Mia lives in Lyon\": lyon); null when there is none.
+- relation: how subject and object relate, two or three lowercase words (lives in, works at, sister of); null without an object.
+- entities: every person, place, organization or project the facts name, once per batch, with kind (person, place, organization, project, thing) and every other name the conversation uses for it as aliases, written from the bot's view: {\"name\": \"Mia\", \"kind\": \"person\", \"aliases\": [\"user's sister\"]}. Never list the owner.
 - valid_from and valid_to: when the fact became or stops being true in the world (YYYY-MM-DD or YYYY-MM-DDTHH:MM), null when unknown.
 - time: the specific moment the fact concerns, as an RFC 3339 timestamp with offset; null when unknown. Resolve it from the evidence and its message time.
 - geojson: a GeoJSON Point with coordinates [longitude, latitude] only when the evidence supplies verified coordinates; otherwise null. Never invent coordinates from a place name.
@@ -391,9 +422,23 @@ Rules:
 /// Strict-mode friendly: every property required, nullable dates.
 pub fn extraction_schema() -> Value {
     let kinds: Vec<&str> = FactKind::ALL.iter().map(|kind| kind.as_str()).collect();
+    let entity_kinds: Vec<&str> = EntityKind::ALL.iter().map(|kind| kind.as_str()).collect();
     json!({
         "type": "object",
         "properties": {
+            "entities": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "kind": { "type": "string", "enum": entity_kinds },
+                        "aliases": { "type": "array", "items": { "type": "string" } }
+                    },
+                    "required": ["name", "kind", "aliases"],
+                    "additionalProperties": false
+                }
+            },
             "facts": {
                 "type": "array",
                 "items": {
@@ -402,6 +447,8 @@ pub fn extraction_schema() -> Value {
                         "text": { "type": "string" },
                         "kind": { "type": "string", "enum": kinds },
                         "subject": { "type": "string" },
+                        "object": { "type": ["string", "null"] },
+                        "relation": { "type": ["string", "null"] },
                         "valid_from": { "type": ["string", "null"] },
                         "valid_to": { "type": ["string", "null"] },
                         "time": { "type": ["string", "null"] },
@@ -428,12 +475,12 @@ pub fn extraction_schema() -> Value {
                         "source": { "type": "string", "enum": ["user_stated", "bot_inferred", "tool_untrusted"] },
                         "confidence": { "type": "number" }
                     },
-                    "required": ["text", "kind", "subject", "valid_from", "valid_to", "time", "ttl_seconds", "geojson", "evidence", "source", "confidence"],
+                    "required": ["text", "kind", "subject", "object", "relation", "valid_from", "valid_to", "time", "ttl_seconds", "geojson", "evidence", "source", "confidence"],
                     "additionalProperties": false
                 }
             }
         },
-        "required": ["facts"],
+        "required": ["entities", "facts"],
         "additionalProperties": false
     })
 }
@@ -465,7 +512,7 @@ pub fn extraction_request(
         task: LlmTask::FactExtraction,
         system: EXTRACTION_SYSTEM.to_string(),
         prompt: format!(
-            "Time zone: {tz}. Now: {now}.\n\nSummary so far:\n{summary}\n\nEarlier messages (context only):\n{preceding}\n\nMessages to extract from:\n{messages}\n\nAnswer with JSON {{\"facts\": [...]}}.",
+            "Time zone: {tz}. Now: {now}.\n\nSummary so far:\n{summary}\n\nEarlier messages (context only):\n{preceding}\n\nMessages to extract from:\n{messages}\n\nAnswer with JSON {{\"entities\": [...], \"facts\": [...]}}.",
             tz = input.timezone.name(),
             now = format_minute(input.now, input.timezone),
             messages = render_lines(chunk, input.timezone, item_budget),
@@ -478,7 +525,41 @@ pub fn extraction_request(
 #[derive(Deserialize)]
 struct ExtractionAnswer {
     #[serde(default)]
+    entities: Vec<EntityAnswer>,
+    #[serde(default)]
     facts: Vec<FactAnswer>,
+}
+
+#[derive(Deserialize)]
+struct EntityAnswer {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+}
+
+impl EntityAnswer {
+    fn declared(self) -> Option<DeclaredEntity> {
+        let name = sanitize_fact_text(&truncate_chars(&one_line(&self.name), 80))?;
+        Some(DeclaredEntity {
+            name,
+            kind: EntityKind::parse(&self.kind).unwrap_or_default(),
+            aliases: self
+                .aliases
+                .iter()
+                .filter_map(|alias| sanitize_fact_text(&truncate_chars(&one_line(alias), 80)))
+                .take(crate::entities::MAX_ALIASES)
+                .collect(),
+        })
+    }
+}
+
+/// A short lowercase relation label, without links or orders.
+pub(crate) fn relation_label(relation: Option<&str>) -> Option<String> {
+    let label = normalize(&strip_links(relation?));
+    (!label.is_empty()).then(|| truncate_chars(&label, 40))
 }
 
 #[derive(Deserialize)]
@@ -489,6 +570,10 @@ struct FactAnswer {
     kind: String,
     #[serde(default)]
     subject: String,
+    #[serde(default)]
+    object: Option<String>,
+    #[serde(default)]
+    relation: Option<String>,
     #[serde(default)]
     valid_from: Option<String>,
     #[serde(default)]
@@ -683,11 +768,26 @@ fn validate_fact(
                 .ok_or_else(|| reject(RejectReason::InvalidMetadata))
         })
         .transpose()?;
+    let object = answer
+        .object
+        .as_deref()
+        .map(|object| match participants.first() {
+            Some(speaker) => statement_subject(object, speaker),
+            None => normalize_subject(object),
+        })
+        .filter(|object| object != &subject);
     let mut fact = Fact {
         id: Fact::new_id(),
         text,
         kind,
+        relation: object
+            .is_some()
+            .then(|| relation_label(answer.relation.as_deref()))
+            .flatten(),
+        object,
         subject,
+        subject_id: None,
+        object_id: None,
         geojson,
         time,
         expires_at,
@@ -716,7 +816,14 @@ pub fn parse_extraction_answer(
 ) -> Result<ExtractionOutcome> {
     let parsed: ExtractionAnswer = parse_json_answer(answer)?;
     let by_seq: BTreeMap<Seq, &HistoryItem> = span.iter().map(|item| (item.seq, *item)).collect();
-    let mut outcome = ExtractionOutcome::default();
+    let mut outcome = ExtractionOutcome {
+        entities: parsed
+            .entities
+            .into_iter()
+            .filter_map(EntityAnswer::declared)
+            .collect(),
+        ..ExtractionOutcome::default()
+    };
     for fact in parsed.facts {
         match validate_fact(fact, &by_seq, input) {
             Ok(fact) => outcome.facts.push(fact),
@@ -799,6 +906,7 @@ pub async fn extract_facts(
         match parse_extraction_answer(&answer, items, input) {
             Ok(piece) => {
                 outcome.facts.extend(piece.facts);
+                outcome.entities.extend(piece.entities);
                 outcome.rejected.extend(piece.rejected);
             }
             Err(_) if len > 1 => {

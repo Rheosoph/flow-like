@@ -14,13 +14,15 @@ azure_identity_queue = { package = "azure_identity", version = "1.0.0", default-
 blake3.workspace = true
 chrono.workspace = true
 flow-like = { workspace = true, features = ["flow-runtime", "model"] }
-flow-like-azure-data.workspace = true
+flow-like-azure-data = { workspace = true, features = ["postgres"] }
 flow-like-db.workspace = true
+flow-like-file-accounting.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog = { workspace = true, default-features = false, features = ["server"] }
 flow-like-compiler.workspace = true
 flow-like-executor = { workspace = true, features = ["server", "channel-azure"] }
 flow-like-types-contracts = { workspace = true, features = ["dispatch"] }
+futures-util.workspace = true
 image.workspace = true
 mimalloc.workspace = true
 sea-orm.workspace = true

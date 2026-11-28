@@ -55,6 +55,8 @@ async fn groups_recall_owner_rules_and_save_attributed_statements_without_changi
             evidence_seq: None,
             kind: Some("preference".into()),
             subject: None,
+            object: None,
+            relation: None,
             valid_from: None,
             valid_to: None,
         },
@@ -212,7 +214,7 @@ async fn groups_recall_owner_rules_and_save_attributed_statements_without_changi
     );
 
     toolbox.note_foreign_call();
-    let blocked: Value = serde_json::from_str(
+    let noted: Value = serde_json::from_str(
         &toolbox
             .call(
                 "memory_save",
@@ -221,7 +223,27 @@ async fn groups_recall_owner_rules_and_save_attributed_statements_without_changi
             .await,
     )
     .unwrap();
-    assert_eq!(blocked["status"], "needs_confirmation");
+    assert_eq!(noted["status"], "ok", "{noted}");
+    let note = session
+        .engine()
+        .stores()
+        .facts
+        .get(noted["id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(note.source, FactSource::ToolUntrusted);
+    assert_eq!(note.kind, FactKind::Knowledge);
+    assert!(note.subject.contains("alice"));
+    assert_eq!(
+        owner
+            .stores()
+            .facts
+            .count(&FactFilter::default())
+            .await
+            .unwrap(),
+        1
+    );
 
     owner.stores().facts.delete(&[owner_fact.id]).await.unwrap();
     assert!(
@@ -253,6 +275,10 @@ async fn owner_only_search_results_remain_pageable_from_a_room() {
             text: format!("The filename convention is {word}."),
             kind: FactKind::Knowledge,
             subject: format!("project {word}"),
+            subject_id: None,
+            object: None,
+            object_id: None,
+            relation: None,
             valid_from: None,
             valid_to: None,
             recorded_at: now,

@@ -21,6 +21,7 @@ import {
 	queryByRole,
 	settle,
 } from "../testing/dom-harness";
+import { moment } from "../testing/icu";
 import type { EventsDevicesValue } from "./events-devices";
 import type { SampleApp, SampleValueOptions } from "./events-test-kit";
 
@@ -674,7 +675,9 @@ describe("A schedule on the Events list: when it runs and where", () => {
 		});
 		expect(byRole("link", "edge-berlin-01", cell)).toBeTruthy();
 		expect(cell.querySelector("[data-runs-on-next]")?.textContent).toBe(
-			"Next run Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			moment(
+				"Next run Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			),
 		);
 		expect(has(cell, "[data-runs-on-where]")).toBe(false);
 		expect(where()?.getAttribute("data-schedule-where")).toBe("device");
@@ -685,7 +688,9 @@ describe("A schedule on the Events list: when it runs and where", () => {
 			(line) => line.textContent,
 		);
 		expect(runs).toEqual([
-			"Next run Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			moment(
+				"Next run Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			),
 			"Last run 02:00 GMT+2 · 12 hr. ago · 00:00 your time · succeeded",
 		]);
 		const run = byRole("button", "Run on another device…", dialog);
@@ -867,7 +872,9 @@ describe("A schedule on the Events list: when it runs and where", () => {
 			schedules: [onEdge("device")],
 		});
 		expect(cell.querySelector("[data-runs-on-next]")?.textContent).toBe(
-			"Next run by its schedule: Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			moment(
+				"Next run by its schedule: Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			),
 		);
 	});
 

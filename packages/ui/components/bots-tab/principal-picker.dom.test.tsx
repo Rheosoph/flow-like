@@ -5,7 +5,7 @@ import {
 	fakeI18n,
 	installDomGlobals,
 	restoreDomGlobals,
-	settle,
+	settleUntil,
 	translate,
 	domWindow as window,
 } from "./testing/dom-harness";
@@ -119,8 +119,9 @@ describe("the principal picker names", () => {
 				),
 			),
 		);
-		await settle(60);
-		const text = window.document.body.textContent ?? "";
+		const bodyText = () => window.document.body.textContent ?? "";
+		await settleUntil(() => bodyText().includes("Mara Albers"));
+		const text = bodyText();
 		expect(text).toContain("Flux");
 		expect(text).toContain("Mara Albers");
 		expect(text).not.toContain("bot_flux");
@@ -170,8 +171,9 @@ describe("the principal picker in ruled mode", () => {
 				),
 			),
 		);
-		await settle(60);
-		const text = window.document.body.textContent ?? "";
+		const bodyText = () => window.document.body.textContent ?? "";
+		await settleUntil(() => bodyText().includes("Already invited"));
+		const text = bodyText();
 		expect(text).toContain("Sam Stranger");
 		expect(text).toContain("Pat Pending");
 		expect(text).toContain("Already invited");

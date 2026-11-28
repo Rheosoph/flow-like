@@ -72,6 +72,18 @@ describe("resolvePinEditorKind", () => {
 		).toBe("label");
 	});
 
+	test("Ask Bot's bot id gets the bot picker", () => {
+		expect(resolvePinEditorKind(pin("bot_id"), "bots_ask_bot")).toBe("bot");
+		expect(resolvePinEditorKind(pin("bot_id"), "other_node")).toBe("plain");
+		expect(resolvePinEditorKind(pin("message"), "bots_ask_bot")).toBe("plain");
+		expect(
+			resolvePinEditorKind(
+				pin("bot_id", { depends_on: ["src"] }),
+				"bots_ask_bot",
+			),
+		).toBe("label");
+	});
+
 	test("booleans route to the checkbox", () => {
 		expect(
 			resolvePinEditorKind(pin("flag", { data_type: IVariableType.Boolean })),

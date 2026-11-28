@@ -127,11 +127,12 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
     } else {
         BTreeSet::new()
     };
-    let connectors = if settings.has(BotCapability::Connectors) {
-        crate::bot_tools::connectors::rules_of(db, &row.id).await?
-    } else {
-        Vec::new()
-    };
+    let connectors =
+        if settings.has(BotCapability::Connectors) || settings.has(BotCapability::Calendar) {
+            crate::bot_tools::connectors::rules_of(db, &row.id).await?
+        } else {
+            Vec::new()
+        };
     let owner_mail_addresses = if settings.has(BotCapability::Email) {
         crate::mail_ingress::owner_addresses::account_address(db, &row)
             .await?
@@ -302,7 +303,7 @@ pub(crate) async fn server_bot_model(
     profile: &Profile,
     policy: &BotModelPolicy,
 ) -> Option<String> {
-    bot_model_where(state, owner_id, flow_like_state, profile, policy, false).await
+    bot_model_where(state, owner_id, flow_like_state, profile, policy, |_| true).await
 }
 
 /// The model the assistants of a bot's turn run on: its sub-task model when the caller can run
@@ -324,16 +325,31 @@ pub(crate) async fn server_assistant_model(
         .unwrap_or_else(|| turn_model.to_string())
 }
 
-/// [`server_bot_model`] for a model that leaves the server: only hosted models qualify, since a
-/// customer provider's Bit carries the owner's credentials.
-pub(crate) async fn hosted_bot_model(
+/// Whether a bot on its owner's device can call a model of this provider: a hosted model through
+/// the hub, or a `custom:*` provider the device calls itself with the Bit's own endpoint and key.
+/// Personal agent accounts sign in on the owner's desktop only.
+pub(crate) fn runs_on_device(provider_name: &str) -> bool {
+    is_hosted_provider_name(provider_name)
+        || crate::routes::user::bits::relayable_provider(provider_name)
+}
+
+/// [`server_bot_model`] for a bot on its owner's device: only models [`runs_on_device`] accepts.
+pub(crate) async fn device_bot_model(
     state: &AppState,
     owner_id: &str,
     flow_like_state: &Arc<FlowLikeState>,
     profile: &Profile,
     policy: &BotModelPolicy,
 ) -> Option<String> {
-    bot_model_where(state, owner_id, flow_like_state, profile, policy, true).await
+    bot_model_where(
+        state,
+        owner_id,
+        flow_like_state,
+        profile,
+        policy,
+        runs_on_device,
+    )
+    .await
 }
 
 async fn bot_model_where(
@@ -342,7 +358,7 @@ async fn bot_model_where(
     flow_like_state: &Arc<FlowLikeState>,
     profile: &Profile,
     policy: &BotModelPolicy,
-    hosted_only: bool,
+    runs_there: fn(&str) -> bool,
 ) -> Option<String> {
     if policy.primary.is_none() && policy.fallbacks.is_empty() {
         return None;
@@ -359,7 +375,7 @@ async fn bot_model_where(
             return false;
         };
         ensure_metered_or_customer_provider(&provider.provider_name).is_ok()
-            && (!hosted_only || is_hosted_provider_name(&provider.provider_name))
+            && runs_there(&provider.provider_name)
             && (!is_hosted_provider_name(&provider.provider_name)
                 || tier.is_none_or(|tier| crate::model_tier::llm_bit_allowed(&bit, tier)))
     })

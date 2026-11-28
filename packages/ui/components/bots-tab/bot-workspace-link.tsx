@@ -15,9 +15,6 @@ import {
 	workspaceFailure,
 } from "./use-bot-workspace";
 
-const PILL =
-	"h-8 gap-1.5 rounded-full border-primary/30 bg-primary/10 px-3.5 text-[13px] text-primary hover:bg-primary/15 hover:text-primary dark:border-primary/30 dark:bg-primary/10 dark:hover:bg-primary/15";
-
 /**
  * The way into the bot's workspace app. Opening the panel never sets a workspace up; following
  * the link does, the same as opening Files or Data.
@@ -25,7 +22,8 @@ const PILL =
 export function BotWorkspaceLink({
 	bot,
 	name,
-}: Readonly<{ bot: IBot; name: string }>) {
+	className,
+}: Readonly<{ bot: IBot; name: string; className?: string }>) {
 	const { t } = useTranslation("bots");
 	const router = useRouter();
 	const { supported, query } = useBotWorkspace(bot.id, false);
@@ -76,7 +74,7 @@ export function BotWorkspaceLink({
 	const appId = query.data?.app_id;
 	if (appId) {
 		return (
-			<Button asChild variant="outline" size="sm" className={PILL}>
+			<Button asChild variant="outline" size="sm" className={className}>
 				<Link href={workspaceFullViewRoute(appId)}>
 					{label}
 					{icon}
@@ -89,7 +87,7 @@ export function BotWorkspaceLink({
 			type="button"
 			variant="outline"
 			size="sm"
-			className={PILL}
+			className={className}
 			disabled={query.isFetching}
 			onClick={() => void open()}
 		>

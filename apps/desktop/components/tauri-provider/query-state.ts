@@ -1,11 +1,16 @@
 import type {
 	CreateSavedQueryPayload,
 	CreateStudioForecastPayload,
+	CrossAppSqlPayload,
+	CrossAppSqlResult,
 	ExecuteSqlPayload,
 	ExecuteSqlResult,
 	IQueryState,
 	SavedQuery,
 	SavedStudioForecast,
+	SqlParameterOptions,
+	SqlParameterOptionsRequest,
+	SqlQueryDescription,
 	StudioForecastPayload,
 	StudioForecastResult,
 	StudioForecastSummary,
@@ -35,6 +40,22 @@ export function normalizeExecuteSqlResult(
 		...result,
 		columns: asArray(result.columns),
 		rows: asArray(result.rows),
+	};
+}
+
+function normalizeCrossAppSqlResult(
+	result: CrossAppSqlResult,
+	source: string,
+): CrossAppSqlResult {
+	return {
+		...result,
+		...normalizeExecuteSqlResult(result, source),
+		tables: asArray(result.tables),
+		cached: result.cached === true,
+		computed_at:
+			typeof result.computed_at === "number" ? result.computed_at : Date.now(),
+		expires_at:
+			typeof result.expires_at === "number" ? result.expires_at : null,
 	};
 }
 
@@ -191,6 +212,125 @@ export class QueryState implements IQueryState {
 			);
 		}
 		return await invoke<ExecuteSqlResult>("query_execute_sql", {
+			appId,
+			payload,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	async executeCrossAppSql(
+		payload: CrossAppSqlPayload,
+	): Promise<CrossAppSqlResult> {
+		const local = await Promise.all(
+			payload.sources.map((source) => this.backend.isLocalOnly(source.app_id)),
+		);
+		if (local.length > 0 && local.every(Boolean))
+			return normalizeCrossAppSqlResult(
+				await invoke<CrossAppSqlResult>("query_execute_cross_app", {
+					payload,
+				}),
+				"The local cross-app query",
+			);
+		if (local.some(Boolean))
+			throw new Error(
+				"A query can combine local-only apps or online apps, but not both. Query local-only apps in a separate widget.",
+			);
+		return normalizeCrossAppSqlResult(
+			await fetcher<CrossAppSqlResult>(
+				this.requireProfile(),
+				"user/data/query",
+				{ method: "POST", body: JSON.stringify(payload) },
+				this.backend.auth,
+			),
+			"The cross-app query",
+		);
+	}
+
+	private async routeCrossApp<T>(
+		sources: CrossAppSqlPayload["sources"],
+		local: () => Promise<T>,
+		remote: () => Promise<T>,
+	): Promise<T> {
+		const flags = await Promise.all(
+			sources.map((source) => this.backend.isLocalOnly(source.app_id)),
+		);
+		if (flags.length > 0 && flags.every(Boolean)) return local();
+		if (flags.some(Boolean))
+			throw new Error(
+				"A query can combine local-only apps or online apps, but not both. Query local-only apps in a separate widget.",
+			);
+		return remote();
+	}
+
+	async describeCrossAppSql(
+		payload: Pick<CrossAppSqlPayload, "sql" | "sources">,
+	): Promise<SqlQueryDescription> {
+		return this.routeCrossApp(
+			payload.sources,
+			() =>
+				invoke<SqlQueryDescription>("query_describe_cross_app", { payload }),
+			() =>
+				fetcher<SqlQueryDescription>(
+					this.requireProfile(),
+					"user/data/query/describe",
+					{ method: "POST", body: JSON.stringify(payload) },
+					this.backend.auth,
+				),
+		);
+	}
+
+	async crossAppSqlParameterOptions(
+		payload: Pick<CrossAppSqlPayload, "sources"> & SqlParameterOptionsRequest,
+	): Promise<SqlParameterOptions> {
+		return this.routeCrossApp(
+			payload.sources,
+			() =>
+				invoke<SqlParameterOptions>("query_cross_app_parameter_options", {
+					payload,
+				}),
+			() =>
+				fetcher<SqlParameterOptions>(
+					this.requireProfile(),
+					"user/data/query/options",
+					{ method: "POST", body: JSON.stringify(payload) },
+					this.backend.auth,
+				),
+		);
+	}
+
+	async describeSql(
+		appId: string,
+		payload: Pick<ExecuteSqlPayload, "sql" | "surface" | "overlay_id">,
+		userScoped?: boolean,
+	): Promise<SqlQueryDescription> {
+		if (!(await this.backend.isOffline(appId)))
+			return fetcher<SqlQueryDescription>(
+				this.requireProfile(),
+				appendScope(`apps/${appId}/db/queries/describe`, userScoped),
+				{ method: "POST", body: JSON.stringify(payload) },
+				this.backend.auth,
+			);
+		return invoke<SqlQueryDescription>("query_describe_sql", {
+			appId,
+			payload,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	async sqlParameterOptions(
+		appId: string,
+		payload: Pick<ExecuteSqlPayload, "surface" | "overlay_id"> &
+			SqlParameterOptionsRequest,
+		userScoped?: boolean,
+	): Promise<SqlParameterOptions> {
+		if (!(await this.backend.isOffline(appId)))
+			return fetcher<SqlParameterOptions>(
+				this.requireProfile(),
+				appendScope(`apps/${appId}/db/queries/options`, userScoped),
+				{ method: "POST", body: JSON.stringify(payload) },
+				this.backend.auth,
+			);
+		return invoke<SqlParameterOptions>("query_sql_parameter_options", {
 			appId,
 			payload,
 			userScoped: userScoped ?? false,

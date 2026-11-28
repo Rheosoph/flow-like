@@ -459,6 +459,8 @@ pub async fn global_chat(
     // The message this window wrote to the bot's inbox: the reply is stored there as the bot and
     // the bot's memory reads and extends that conversation.
     interactive: Option<crate::bot_host::interactive::InteractiveArgs>,
+    // The person asked to compact the conversation: the turn folds its older messages first.
+    compact_context: Option<bool>,
 ) -> Result<UnifiedCopilotResponse, String> {
     let mut finish = None;
     let mut bot_memory = None;
@@ -568,6 +570,7 @@ pub async fn global_chat(
             legacy_memory_read_only,
             legacy_memory_allowed,
             bot_turn_id,
+            compaction_requested: compact_context.unwrap_or(false),
             ..Default::default()
         },
         bot_id,
@@ -711,6 +714,7 @@ pub async fn global_chat_native(
     let notes = options.notes.take();
     let trail = options.trail.take();
     let reply_files = options.reply_files.take();
+    let discussion = options.discussion.take();
     let recovery = options
         .recovery
         .take()
@@ -730,6 +734,7 @@ pub async fn global_chat_native(
     let seed_taint = options.seed_taint;
     let shared_context = options.shared_context.take();
     let suppress_owner_notifications = options.suppress_owner_notifications;
+    let compaction_requested = options.compaction_requested;
     let legacy_memory_allowed = allows_legacy_owner_memory(
         options.legacy_memory_allowed,
         bot_memory.as_ref().map(|source| source.use_owner_memory),
@@ -872,8 +877,13 @@ pub async fn global_chat_native(
         if let Some(files) = reply_files {
             context.host_tools = std::mem::take(&mut context.host_tools).with_reply_files(files);
         }
+        if let Some(proposals) = discussion {
+            context.host_tools = std::mem::take(&mut context.host_tools).with_discussion(proposals);
+        }
         if let Some(key) = conversation_key {
-            context.host_tools = std::mem::take(&mut context.host_tools).with_conversation_key(key);
+            context.host_tools = std::mem::take(&mut context.host_tools)
+                .with_conversation_key(key)
+                .with_compaction_requested(compaction_requested);
         }
         std::sync::Arc::make_mut(&mut bot.context).recovery = recovery.map(Into::into);
         std::sync::Arc::make_mut(&mut bot.context).acknowledgement = acknowledgement;
@@ -1315,7 +1325,10 @@ pub async fn global_chat_native(
                 };
                 let bridge: Arc<dyn PlatformToolBridge> = match &bot {
                     Some(bot) if !bot.runs_flowpilot() => {
-                        Arc::new(bot_chat::BotDesktopBridge(desktop_bridge))
+                        Arc::new(bot_chat::BotDesktopBridge(
+                            desktop_bridge,
+                            bot.context.workspace_app_id.clone(),
+                        ))
                     }
                     _ => Arc::new(desktop_bridge),
                 };
@@ -1580,7 +1593,7 @@ mod lifecycle_tests {
         const COMMAND: usize = future_size!(
             global_chat;
             A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10,
-            A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, A21, A22,
+            A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, A21, A22, A23,
         );
         const NATIVE: usize = future_size!(
             global_chat_native;

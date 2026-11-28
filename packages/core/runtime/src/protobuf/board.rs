@@ -170,8 +170,16 @@ impl ToProto<flow_like_types::proto::Board> for Board {
             stage: self.stage.to_proto(),
             log_level: self.log_level.to_proto(),
             execution_mode: self.execution_mode.to_proto(),
-            refs: self.refs.clone(),
-            internal_refs: self.internal_refs.clone(),
+            refs: self
+                .refs
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            internal_refs: self
+                .internal_refs
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             hash: self.hash,
             created_at: Some(Timestamp::from(self.created_at)),
             updated_at: Some(Timestamp::from(self.updated_at)),

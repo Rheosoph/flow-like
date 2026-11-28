@@ -1,0 +1,19 @@
+[package]
+name = "flow-like-execution-queue"
+version = "0.1.0"
+edition = "2024"
+description = "Redis execution delivery and settlement shared by dispatchers and workers"
+license-file = "../../LICENSE"
+
+[features]
+default = []
+redis = ["dep:redis", "dep:tokio", "dep:serde_json", "dep:tracing", "dep:cuid2"]
+
+[dependencies]
+flow-like-types-contracts = { workspace = true, features = ["dispatch"] }
+thiserror.workspace = true
+redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp", "connection-manager"], optional = true }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"], optional = true }
+serde_json = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+cuid2 = { workspace = true, optional = true }

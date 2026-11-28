@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 #[cfg(feature = "aws")]
@@ -9,10 +10,14 @@ use flow_like::credentials::SharedCredentials;
 use flow_like::flow::execution::ExecutionEnvironment;
 use flow_like::flow_like_model_provider::egress::ProviderEgress;
 use flow_like::flow_like_storage::files::store::FlowLikeStore;
+use flow_like::hub::{Hub, hub_api_url};
 use flow_like::state::FlowLikeState;
+use flow_like::utils::http::{HTTPClient, HubEgress};
+use flow_like_storage::lance::session::Session as LanceSession;
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_types::Result;
 use flow_like_types::async_trait;
+use flow_like_types::reqwest::Url;
 #[cfg(feature = "gcp")]
 use gcp_credentials::GcpRuntimeCredentials;
 #[cfg(feature = "r2")]
@@ -34,6 +39,32 @@ pub mod local_credentials;
 pub mod mixed_credentials;
 #[cfg(feature = "r2")]
 pub mod r2_credentials;
+
+/// One Lance session for every table this process opens, so a warm instance
+/// keeps manifests, file metadata and indexes between requests. Object stores
+/// stay keyed by their storage options, so each credential keeps its own client,
+/// and every open still resolves the latest table version from storage.
+fn process_lance_session() -> Arc<LanceSession> {
+    static SESSION: LazyLock<Arc<LanceSession>> =
+        LazyLock::new(|| FlowLikeState::retained_lance_session(None));
+    SESSION.clone()
+}
+
+/// URLs of the hubs the operator configured: the platform's own and the ones it depends on.
+fn platform_hub_urls<'a>(domain: &'a str, hubs: &'a [String]) -> impl Iterator<Item = Url> + 'a {
+    std::iter::once(domain)
+        .chain(hubs.iter().map(String::as_str))
+        .filter_map(|hub| hub_api_url(hub, true, &[]).ok())
+}
+
+/// The hub client of anything the API resolves for a caller. A profile names the hubs its
+/// Bits are read from, and so does every Bit and every hub's own dependency list, so a hub
+/// other than the platform's own must pass the server's egress mode before it is asked.
+pub(crate) fn server_hub_client(platform: &Hub) -> Result<HTTPClient> {
+    let own_hubs = platform_hub_urls(&platform.domain, &platform.hubs);
+    HTTPClient::new_without_refetch()
+        .confined_to(HubEgress::new(ProviderEgress::for_server(), own_hubs))
+}
 
 /// Validates that a path component (sub, app_id) does not contain path traversal
 /// or injection characters. Allows alphanumeric, hyphens, underscores, and dots.
@@ -116,28 +147,19 @@ pub trait RuntimeCredentialsTrait {
 pub enum CredentialsAccess {
     EditApp,
     ReadApp,
-    /// Read-only access scoped to the **content** bucket of an app
-    /// only (`apps/{app_id}/...` on the content store). Used by the
-    /// fork-an-app flow: the desktop pulls user content (metadata/,
-    /// upload/, storage/) directly via these credentials, while
-    /// boards/events/widgets/templates/pages on the meta bucket
-    /// always come back via API responses (after server-side
-    /// secret-stripping). Granting `ReadApp` instead would let a
-    /// misbehaving client GET raw `*.board` / `*.event` files
-    /// containing source-app secrets.
+    /// Read access to an app's content bucket prefix (`apps/{app_id}/...`).
+    /// This excludes metadata that must pass through server-side secret stripping.
+    /// Offline forks use individual signed downloads with server-enforced exclusions.
     ReadAppContent,
-    /// Read+write access scoped to the **content** bucket of an app
-    /// only. Used wherever scoped credentials cross the trust
-    /// boundary into a client (presign-data-access for uploads,
-    /// fork-online-begin for desktop bundle uploads). Boards /
-    /// events / widgets / templates / pages live in the meta bucket
-    /// and *must* be written via the API so that authorization
-    /// (RolePermissions::Write*) and validation (event schedule
-    /// checks, page-event coupling, sink registration, etc.) run on
-    /// every change. Granting `EditApp` to the client would let it
-    /// drop arbitrary `.board` / `.event` files server-side,
-    /// bypassing every guard.
+    /// Read and write access to the app's full content prefix, including databases.
+    /// Bot workspace uploads use this scope. Metadata remains behind the API's
+    /// resource permissions and validation; file-only clients use `EditAppFiles`.
     EditAppContent,
+    /// Read access to `apps/{app_id}/upload/*` in the content bucket.
+    /// Project databases and metadata require their own API permissions.
+    ReadAppFiles,
+    /// Read and write access to `apps/{app_id}/upload/*` in the content bucket.
+    EditAppFiles,
     /// Read-only access scoped to the project LanceDB at
     /// `apps/{app_id}/storage/db` on the **content** bucket only.
     /// Exists for app-to-app shared database access: a connected app
@@ -184,6 +206,8 @@ impl Display for CredentialsAccess {
             CredentialsAccess::ReadApp => write!(f, "read_app"),
             CredentialsAccess::ReadAppContent => write!(f, "read_app_content"),
             CredentialsAccess::EditAppContent => write!(f, "edit_app_content"),
+            CredentialsAccess::ReadAppFiles => write!(f, "read_app_files"),
+            CredentialsAccess::EditAppFiles => write!(f, "edit_app_files"),
             CredentialsAccess::ReadAppDb => write!(f, "read_app_db"),
             CredentialsAccess::EditAppDb => write!(f, "edit_app_db"),
             CredentialsAccess::EditUser => write!(f, "edit_user"),
@@ -393,7 +417,7 @@ impl RuntimeCredentials {
     }
 
     pub async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder> {
-        match self {
+        let builder = match self {
             #[cfg(feature = "aws")]
             RuntimeCredentials::Aws(aws) => aws.to_db(app_id).await,
             #[cfg(feature = "azure")]
@@ -403,11 +427,12 @@ impl RuntimeCredentials {
             #[cfg(feature = "r2")]
             RuntimeCredentials::R2(r2) => r2.to_db(app_id).await,
             RuntimeCredentials::Mixed(mixed) => mixed.to_db(app_id).await,
-        }
+        }?;
+        Ok(builder.session(process_lance_session()))
     }
 
     pub async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
-        match self {
+        let builder = match self {
             #[cfg(feature = "aws")]
             RuntimeCredentials::Aws(aws) => aws.to_db_scoped(sub, app_id).await,
             #[cfg(feature = "azure")]
@@ -417,12 +442,14 @@ impl RuntimeCredentials {
             #[cfg(feature = "r2")]
             RuntimeCredentials::R2(r2) => r2.to_db_scoped(sub, app_id).await,
             RuntimeCredentials::Mixed(mixed) => mixed.to_db_scoped(sub, app_id).await,
-        }
+        }?;
+        Ok(builder.session(process_lance_session()))
     }
 
     #[instrument(skip(self, state), level = "debug")]
     pub async fn to_state(&self, state: AppState) -> Result<FlowLikeState> {
         let package_widget_source = state.wasm_registry.clone();
+        let hub_client = server_hub_client(&state.platform_config)?;
         let mut flow_state = match self {
             #[cfg(feature = "aws")]
             RuntimeCredentials::Aws(aws) => aws.to_state(state).await,
@@ -437,9 +464,11 @@ impl RuntimeCredentials {
 
         // The API is a shared server: anything built on this state must not
         // fall back to the process's own cloud identity, and calls to a private
-        // model's own endpoint must stay out of the network the API runs in.
+        // model's own endpoint or to a hub a profile names must stay out of the
+        // network the API runs in.
         flow_state.execution_environment = ExecutionEnvironment::Server;
         flow_state.model_egress = ProviderEgress::for_server();
+        flow_state.http_client = Arc::new(hub_client);
 
         if let Some(package_widget_source) = package_widget_source {
             flow_state
@@ -463,6 +492,63 @@ impl RuntimeCredentials {
             RuntimeCredentials::R2(r2) => r2.into_shared_credentials(),
             RuntimeCredentials::Mixed(mixed) => mixed.into_shared_credentials(),
         }
+    }
+}
+
+#[cfg(test)]
+mod hub_client_tests {
+    use super::*;
+
+    #[test]
+    fn the_operators_hubs_are_the_platform_domain_and_its_dependency_hubs() {
+        let hubs = [
+            "hub.partner.io".to_string(),
+            " ".to_string(),
+            "http://api:8080".to_string(),
+        ];
+        let urls: Vec<String> = platform_hub_urls("api.example.com", &hubs)
+            .map(String::from)
+            .collect();
+        assert_eq!(
+            urls,
+            [
+                "https://api.example.com/api/v1",
+                "https://hub.partner.io/api/v1",
+                "http://api:8080/api/v1"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_profile_hub_on_the_servers_own_network_is_refused() {
+        let own = platform_hub_urls("api.example.com", &[]);
+        let http = Arc::new(
+            HTTPClient::new_without_refetch()
+                .confined_to(HubEgress::new(ProviderEgress::for_server(), own))
+                .unwrap(),
+        );
+        for hub in [
+            "169.254.169.254",
+            "127.0.0.1:8080",
+            "localhost",
+            "[fd00:ec2::254]",
+        ] {
+            let refused = Hub::new(hub, http.clone()).await.unwrap_err().to_string();
+            assert!(
+                refused.contains("is outside the addresses this server may reach"),
+                "{hub}: {refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_state_and_dependency_lookup_the_api_builds_uses_the_confined_hub_client() {
+        let state = include_str!("credentials.rs");
+        assert!(state.contains("let hub_client = server_hub_client(&state.platform_config)?;"));
+        assert!(state.contains("flow_state.http_client = Arc::new(hub_client);"));
+        let dependencies = include_str!("routes/bit/get_with_dependencies.rs");
+        assert!(dependencies.contains("server_hub_client(&state.platform_config)?"));
+        assert!(!dependencies.contains("HTTPClient::new_without_refetch()"));
     }
 }
 
@@ -513,6 +599,34 @@ mod storage_path_segment_tests {
         .to_string();
         assert_ne!(read, write);
         assert_ne!(read, earlier);
+    }
+
+    /// `State::scoped_credentials` caches a grant under this text and the audit
+    /// trail records it, so two modes sharing it would share one grant.
+    #[test]
+    fn every_access_mode_has_its_own_cache_key() {
+        let modes = [
+            CredentialsAccess::EditApp,
+            CredentialsAccess::ReadApp,
+            CredentialsAccess::ReadAppContent,
+            CredentialsAccess::EditAppContent,
+            CredentialsAccess::ReadAppFiles,
+            CredentialsAccess::EditAppFiles,
+            CredentialsAccess::ReadAppDb,
+            CredentialsAccess::EditAppDb,
+            CredentialsAccess::EditUser,
+            CredentialsAccess::ReadUser,
+            CredentialsAccess::InvokeNone,
+            CredentialsAccess::InvokeRead,
+            CredentialsAccess::InvokeWrite,
+            CredentialsAccess::ServerExecute,
+            CredentialsAccess::ShadowExecute,
+            CredentialsAccess::ReadLogs,
+        ];
+        let keys: std::collections::BTreeSet<String> =
+            modes.iter().map(ToString::to_string).collect();
+        assert_eq!(keys.len(), modes.len(), "{keys:?}");
+        assert!(keys.contains("read_app_files") && keys.contains("edit_app_files"));
     }
 
     #[test]

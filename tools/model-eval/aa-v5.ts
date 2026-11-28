@@ -218,7 +218,7 @@ export function parseAAV5Page(html: string, source: AAV5Source): AAV5Page {
 	}
 	const chunks: string[] = [];
 	for (const script of html.matchAll(
-		/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi,
+		/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi,
 	)) {
 		const push = /^\s*self\.__next_f\.push\(([\s\S]*)\)\s*;?\s*$/.exec(
 			script[1],

@@ -17,8 +17,11 @@ use crate::{
     },
     error::ApiError,
     middleware::jwt::AppPermissionResponse,
-    permission::role_permission::RolePermissions,
-    routes::app::connection::deny_connected_app,
+    permission::{global_permission::GlobalPermission, role_permission::RolePermissions},
+    routes::{
+        app::connection::deny_connected_app,
+        course::access::{ensure_course_exists, ensure_course_readable},
+    },
     state::AppState,
 };
 
@@ -142,8 +145,11 @@ impl MetaMode {
             MetaMode::Template(_) => {
                 ensure_permission!(user, app_id, state, RolePermissions::WriteTemplates)
             }
-            MetaMode::Course(_) => {
-                ensure_permission!(user, app_id, state, RolePermissions::WriteCourses)
+            MetaMode::Course(course_id) => {
+                let permission =
+                    ensure_permission!(user, app_id, state, RolePermissions::WriteCourses);
+                Self::ensure_course_writable(user, course_id, state).await?;
+                permission
             }
             MetaMode::Widget(_) => {
                 ensure_permission!(user, app_id, state, RolePermissions::WriteWidgets)
@@ -158,6 +164,19 @@ impl MetaMode {
         };
         self.ensure_app_target(app_id, &state.db).await?;
         Ok(permission)
+    }
+
+    /// Courses belong to the platform, not to an app, so no app role decides who may change one:
+    /// the caller needs the same global permission the course routes ask for.
+    async fn ensure_course_writable(
+        user: &AppUser,
+        course_id: &str,
+        state: &AppState,
+    ) -> Result<(), ApiError> {
+        user.check_global_permission(state, GlobalPermission::WriteCourses)
+            .await?;
+        ensure_course_exists(state, course_id).await?;
+        Ok(())
     }
 
     /// An app role authorizes only metadata belonging to that app.
@@ -234,8 +253,11 @@ impl MetaMode {
             MetaMode::Template(_) => {
                 ensure_permission!(user, app_id, state, RolePermissions::ReadTemplates)
             }
-            MetaMode::Course(_) => {
-                ensure_permission!(user, app_id, state, RolePermissions::ReadCourses)
+            MetaMode::Course(course_id) => {
+                let permission =
+                    ensure_permission!(user, app_id, state, RolePermissions::ReadCourses);
+                ensure_course_readable(state, user, course_id).await?;
+                permission
             }
             MetaMode::Widget(_) => {
                 ensure_permission!(user, app_id, state, RolePermissions::ReadWidgets)
@@ -363,6 +385,42 @@ mod tests {
                     .is_ok()
             );
         }
+    }
+
+    /// A course has no app, so `ensure_app_target` cannot tie it to the caller's app; the global
+    /// course permission is what stands between an app admin and every course on the platform.
+    #[test]
+    fn course_metadata_asks_for_the_platform_course_permission() {
+        let source = include_str!("meta.rs");
+        let body_of = |name: &str| {
+            let body = source
+                .split_once(&format!("\n    pub async fn {name}("))
+                .unwrap_or_else(|| panic!("{name} exists"))
+                .1;
+            &body[..body.find("\n    }\n").unwrap()]
+        };
+        let write = body_of("ensure_write_permission");
+        let course = write
+            .split_once("MetaMode::Course(course_id) =>")
+            .expect("the course arm of ensure_write_permission")
+            .1;
+        let course = &course[..course.find("MetaMode::Widget").unwrap()];
+        assert!(course.contains("Self::ensure_course_writable(user, course_id, state).await?"));
+        let read = body_of("ensure_read_permission");
+        let course = read
+            .split_once("MetaMode::Course(course_id) =>")
+            .expect("the course arm of ensure_read_permission")
+            .1;
+        let course = &course[..course.find("MetaMode::Widget").unwrap()];
+        assert!(course.contains("ensure_course_readable(state, user, course_id).await?"));
+        let writable = source
+            .split_once("\n    async fn ensure_course_writable(")
+            .expect("ensure_course_writable exists")
+            .1;
+        assert!(
+            writable[..writable.find("\n    }\n").unwrap()]
+                .contains("check_global_permission(state, GlobalPermission::WriteCourses)")
+        );
     }
 
     #[test]

@@ -6,19 +6,20 @@
 //! to an epoch signed with the audit key. Monthly archives go to the audit bucket.
 //! Design: todo/874-audit-retention.md.
 
-pub mod crypto;
+pub use flow_like_audit::crypto;
 mod execution;
-pub mod export;
-pub mod keys;
-pub mod kms;
-pub mod level;
-pub mod merkle;
-pub mod record;
+pub use flow_like_audit::export;
+pub use flow_like_audit::keys;
+pub use flow_like_audit::kms;
+pub use flow_like_audit::level;
+pub use flow_like_audit::merkle;
+pub use flow_like_audit::record;
 pub mod request;
-pub mod signer;
-pub mod verify;
-pub mod wire;
-pub mod worker;
+pub use flow_like_audit::signer;
+pub(crate) mod storage_access;
+pub use flow_like_audit::verify;
+pub use flow_like_audit::wire;
+pub use flow_like_audit::worker;
 
 pub use execution::{
     ExecutionAuditContext, record_execution_dispatch, record_execution_dispatch_failure,
@@ -239,3 +240,18 @@ macro_rules! audit_branch {
 
 /// Type of the details argument of the audit macros.
 pub type DetailsValue = Value;
+
+impl flow_like_audit::worker::AuditState for crate::state::State {
+    fn audit_database(&self) -> &sea_orm::DatabaseConnection {
+        &self.db
+    }
+    fn audit_dialect(&self) -> crate::db::DbDialect {
+        self.db_dialect
+    }
+    fn audit_config(&self) -> &flow_like::hub::AuditConfig {
+        &self.platform_config.audit
+    }
+    fn audit_encryption_key(&self) -> Option<[u8; 32]> {
+        Some(self.encryption_key)
+    }
+}

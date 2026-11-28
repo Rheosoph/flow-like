@@ -19,6 +19,8 @@ mock.module("@flow-like/locales", () => ({
 }));
 
 const mutate = mock((_: unknown, __?: unknown) => {});
+const reset = mock(() => {});
+let connectorList: IBotConnector[] = [];
 const docs: IBotConnector = {
 	id: "bc_docs",
 	bot_id: "bot_1",
@@ -53,10 +55,10 @@ const docs: IBotConnector = {
 };
 mock.module("../../hooks/use-bots", () => ({
 	...actual.hooks,
-	useBotConnectors: () => ({ data: [docs] }),
+	useBotConnectors: () => ({ data: connectorList }),
 	useBotSecrets: () => ({ data: [] }),
 	useConnectedAccounts: () => ({ data: [] }),
-	useBotConnectorAction: () => ({ mutate, isPending: false }),
+	useBotConnectorAction: () => ({ mutate, reset, isPending: false }),
 }));
 
 const { createRoot } = await import("react-dom/client");
@@ -70,6 +72,7 @@ afterAll(() => {
 });
 
 async function render(botId: string | null) {
+	connectorList = [docs];
 	const container = window.document.createElement("div");
 	window.document.body.appendChild(container);
 	const root = createRoot(container as unknown as Element);
@@ -78,6 +81,7 @@ async function render(botId: string | null) {
 	);
 	return {
 		container,
+		rerender: () => root.render(createElement(BotConnectorsCard, { botId })),
 		cleanup: async () => {
 			await act(async () => root.unmount());
 			container.remove();
@@ -153,6 +157,30 @@ test("adding an MCP server opens the form with a sign-in choice", async () => {
 			(b) => b.textContent === "Add server",
 		);
 		expect((add as unknown as HTMLButtonElement).disabled).toBe(true);
+	} finally {
+		await view.cleanup();
+	}
+});
+
+test("CalDAV calendars are set up under Calendar, not listed here", async () => {
+	const view = await render("bot_1");
+	try {
+		connectorList = [
+			docs,
+			{
+				...docs,
+				id: "bc_cal",
+				kind: "caldav",
+				label: "iCloud",
+				url: "https://caldav.icloud.com/",
+				tools_snapshot: [],
+			},
+		];
+		await act(async () => view.rerender());
+		const text = view.container.textContent ?? "";
+		expect(text).toContain("Docs");
+		expect(text).not.toContain("iCloud");
+		expect(text).not.toContain("CalDAV");
 	} finally {
 		await view.cleanup();
 	}

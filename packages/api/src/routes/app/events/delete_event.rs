@@ -66,20 +66,22 @@ pub async fn delete_event(
 
 /// Everything an event owns outside its own bucket file: Teams bot registration, sink and
 /// external schedule, remote registrations and auth. Safe to repeat for an event already gone.
+/// Every step names `app`'s id, so the id of another app's event removes nothing.
 pub(crate) async fn remove_event(
     state: &AppState,
     app: &mut App,
     event_id: &str,
 ) -> Result<(), ApiError> {
+    let app_id = app.id.clone();
     // Restored versions can change an event's type, so this runs for every event.
-    crate::teams::management::cleanup_event(state, event_id).await?;
+    crate::teams::management::cleanup_event(state, &app_id, event_id).await?;
 
     // The event might only exist in the database (e.g., if bucket sync failed)
     if let Err(e) = app.delete_event(event_id).await {
         tracing::warn!("Failed to delete event from bucket (may not exist): {}", e);
     }
 
-    delete_event_with_sink(&state.db, state, event_id)
+    delete_event_with_sink(&state.db, state, &app_id, event_id)
         .await
         .map_err(|e| {
             tracing::error!("Failed to delete event from database: {}", e);

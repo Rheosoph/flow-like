@@ -791,7 +791,9 @@ fn deleting_a_bot_removes_its_direct_chats_and_it_leaves_its_groups() {
     f.store.set_secret(&a.id, "API_KEY", "v", None).unwrap();
     f.changes.take();
 
-    f.store.delete_bot(&a.id).unwrap();
+    f.store
+        .delete_bot(&a.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     let mut changes = f.changes.take();
     changes.sort_by_key(|change| format!("{change:?}"));
     let mut expected = vec![
@@ -825,7 +827,10 @@ fn deleting_a_bot_removes_its_direct_chats_and_it_leaves_its_groups() {
             .iter()
             .any(|entry| entry.message_id == "g_1")
     );
-    assert_eq!(code(f.store.delete_bot(&a.id)), codes::NOT_FOUND);
+    assert_eq!(
+        code(f.store.delete_bot(&a.id, &crate::BuiltInDeletion::Refuse)),
+        codes::NOT_FOUND
+    );
 }
 
 #[test]
@@ -1342,4 +1347,39 @@ fn the_public_send_refuses_triggers_and_activity_but_the_runtime_path_takes_them
             .send_internal(&chat.id, LOCAL_OWNER_ID, bad)
             .is_err()
     );
+}
+
+#[test]
+fn a_bots_at_name_for_another_bot_becomes_a_mention() {
+    let f = fixture();
+    let (tiro, story) = (f.bot("Tiro"), f.bot("Story"));
+    let room = f.group(&[&tiro, &story]);
+    let named = f
+        .send(
+            &room.id,
+            &tiro.id,
+            "named",
+            "message",
+            json!({ "text": "@story: bitte als v2 ablegen. `@Tiro` @Tiro" }),
+        )
+        .unwrap();
+    assert_eq!(named.envelope["body"]["mentions"], json!([story.id]));
+    for (sender, message_id, text) in [
+        (tiro.id.as_str(), "bare", "Story, bitte ablegen"),
+        (LOCAL_OWNER_ID, "person", "@Story danke"),
+    ] {
+        let sent = f
+            .send(
+                &room.id,
+                sender,
+                message_id,
+                "message",
+                json!({ "text": text }),
+            )
+            .unwrap();
+        assert!(
+            sent.envelope["body"].get("mentions").is_none(),
+            "{message_id}"
+        );
+    }
 }

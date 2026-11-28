@@ -175,7 +175,7 @@ async fn process_single_record(
 fn is_supported_image_format(extension: &str) -> bool {
     matches!(
         extension.to_ascii_lowercase().as_str(),
-        "jpg" | "jpeg" | "jfif" | "png" | "gif" | "bmp" | "tif" | "tiff" | "avif" | "ico"
+        "jpg" | "jpeg" | "jfif" | "png" | "gif" | "bmp" | "tif" | "tiff" | "ico"
     )
 }
 
@@ -362,6 +362,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn accepted_formats_have_working_decoders() {
+        for (extension, format) in [
+            ("jpg", image::ImageFormat::Jpeg),
+            ("png", image::ImageFormat::Png),
+            ("gif", image::ImageFormat::Gif),
+            ("bmp", image::ImageFormat::Bmp),
+            ("tiff", image::ImageFormat::Tiff),
+            ("ico", image::ImageFormat::Ico),
+        ] {
+            assert!(is_supported_image_format(extension));
+            let pixels = image::DynamicImage::new_rgb8(16, 16);
+            let mut encoded = Cursor::new(Vec::new());
+            pixels.write_to(&mut encoded, format).unwrap();
+            encoded.set_position(0);
+            let decoded = ImageReader::new(encoded)
+                .with_guessed_format()
+                .unwrap()
+                .decode()
+                .unwrap_or_else(|error| panic!("{extension} decoder failed: {error}"));
+            assert_eq!(decoded.dimensions(), (16, 16));
+        }
+    }
+
+    #[test]
     fn file_backed_decode_preserves_legacy_landscape_pixels() {
         let image = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(33, 20, |x, y| {
             image::Rgb([(x * 7) as u8, (y * 11) as u8, ((x + y) * 4) as u8])
@@ -441,6 +465,8 @@ mod tests {
         assert!(is_supported_image_format("jfif"));
         assert!(is_supported_image_format("tif"));
         assert!(!is_supported_image_format("heic"));
+        // The image crate's `avif` feature only encodes; this worker has no AVIF decoder.
+        assert!(!is_supported_image_format("avif"));
     }
 
     #[test]

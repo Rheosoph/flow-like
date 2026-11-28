@@ -15,6 +15,7 @@ import {
 } from "../../lib/flowpilot/agent-backend-diagnostics";
 import { buildChatMessageError } from "../../lib/flowpilot/chat-error";
 import { sanitizeFlowScriptForPersistence } from "../../lib/flowscript-persistence";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
 import { isTauri } from "../../lib/platform";
 import { IRole } from "../../lib/schema/llm/history";
 import {
@@ -936,6 +937,7 @@ export async function driveGlobalChatStream({
 		// (and with it every per-run buffer), so no explicit clearSub* calls are needed.
 		store.getState().clearDebugReport(runId);
 		store.getState().endRun(runId);
+		emitGuideEvent("bots:reply-finished");
 		unregisterGlobalChatRunControl(runId);
 		clearActiveRun(runId);
 		void drainGlobalChatQueue?.(conversationId);

@@ -713,7 +713,9 @@ impl PyodideRuntime {
             .context("add WASI p1 to linker")?;
         if spec.reactor {
             linker
-                .func_wrap("host", "call", |_: i32, _: i32, _: i32, _: i32| -> i32 { -1 })
+                .func_wrap("host", "call", |_: i32, _: i32, _: i32, _: i32| -> i32 {
+                    -1
+                })
                 .map_err(|e| anyhow::anyhow!("{e:#}"))
                 .context("define host door")?;
         }
@@ -859,7 +861,13 @@ impl PyodideRuntime {
             fuel: None,
         };
         let run = self
-            .run_guest(&module, &exec_path, &limits, &network, &GuestSpec::python_cli())
+            .run_guest(
+                &module,
+                &exec_path,
+                &limits,
+                &network,
+                &GuestSpec::python_cli(),
+            )
             .await;
 
         // ── Shut down workspace file server ───────────────────────────────

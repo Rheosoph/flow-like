@@ -102,8 +102,9 @@ memory_schemas!(
     "memory_forget",
 );
 
-/// The specs of the memory tools. Writes need no approval round trip: the toolbox itself holds a
-/// write back while web or tool content is part of the turn.
+/// The specs of the memory tools. Writes need no approval round trip: while web or tool content
+/// is part of the turn, the toolbox saves with tool trust and holds back profile facts,
+/// preferences and forgetting.
 pub fn memory_tool_specs() -> Vec<PlatformToolSpec> {
     tool_definitions()
         .into_iter()

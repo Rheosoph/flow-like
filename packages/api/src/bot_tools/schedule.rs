@@ -6,12 +6,13 @@
 
 use crate::{
     bot_host::{
+        calendar_tasks,
         task_authority::{TaskEdit, author_of_turn},
         task_schedules,
     },
     entity::bot_task,
     routes::{
-        bots::{lock_bot, tasks},
+        bots::{calendar, lock_bot, owned_bot, tasks},
         inbox::now_millis,
     },
     state::AppState,
@@ -20,6 +21,7 @@ use async_trait::async_trait;
 use flow_like_bot_tools::Scheduler;
 use flow_like_types::{
     Result, anyhow,
+    bot_calendar::{CalendarWake, UpdateCalendarWake},
     bot_task::{BotTask, CreateBotTask, TaskConversation, TaskCreator, TaskKind, UpdateBotTask},
 };
 use sea_orm::ConnectionTrait;
@@ -28,29 +30,41 @@ pub(crate) struct ApiScheduler {
     state: AppState,
     owner_id: String,
     bot_id: String,
-    turn_id: String,
+    turn_id: Option<String>,
 }
 
 impl ApiScheduler {
-    pub(crate) fn new(state: &AppState, owner_id: &str, bot_id: &str, turn_id: &str) -> Self {
+    /// A scheduler for the bot's turn `turn_id`; without a turn (the owner's calendar view, a host's
+    /// calendar sync) it reaches every task of the bot.
+    pub(crate) fn new(
+        state: &AppState,
+        owner_id: &str,
+        bot_id: &str,
+        turn_id: Option<&str>,
+    ) -> Self {
         Self {
             state: state.clone(),
             owner_id: owner_id.to_string(),
             bot_id: bot_id.to_string(),
-            turn_id: turn_id.to_string(),
+            turn_id: turn_id.map(str::to_string),
         }
     }
 }
 
 impl ApiScheduler {
     async fn scope(&self) -> Result<tasks::TaskScope> {
-        tasks::scope_of_turn(&self.state.db, &self.owner_id, &self.bot_id, &self.turn_id)
+        let Some(turn_id) = &self.turn_id else {
+            return Ok(tasks::TaskScope::Everything);
+        };
+        tasks::scope_of_turn(&self.state.db, &self.owner_id, &self.bot_id, turn_id)
             .await
             .map_err(|error| anyhow!("{error}"))
     }
 }
 
 pub(crate) fn to_task(row: bot_task::Model, conversation: Option<TaskConversation>) -> BotTask {
+    let place = crate::bot_host::place_tasks::place_of(&row);
+    let event = crate::bot_host::calendar_tasks::event_of(&row);
     BotTask {
         kind: TaskKind::parse(&row.kind).unwrap_or(TaskKind::Once),
         created_by: TaskCreator::parse(&row.created_by).unwrap_or(TaskCreator::Owner),
@@ -68,6 +82,8 @@ pub(crate) fn to_task(row: bot_task::Model, conversation: Option<TaskConversatio
         monitoring: row.monitoring.unwrap_or(false),
         created_at: row.created_at.to_rfc3339(),
         conversation,
+        place,
+        event,
     }
 }
 
@@ -105,8 +121,11 @@ impl Scheduler for ApiScheduler {
                 );
                 Box::pin(async move {
                     lock_bot(txn, &bot).await?;
-                    let origin = tasks::origin_of_turn(txn, &owner, &bot, &turn).await?;
-                    let author = author_of_turn(txn, &owner, &bot, Some(turn.as_str())).await?;
+                    let origin = match turn.as_deref() {
+                        Some(turn) => tasks::origin_of_turn(txn, &owner, &bot, turn).await?,
+                        None => None,
+                    };
+                    let author = author_of_turn(txn, &owner, &bot, turn.as_deref()).await?;
                     tasks::create_in(
                         txn,
                         &owner,
@@ -150,7 +169,7 @@ impl Scheduler for ApiScheduler {
                     lock_bot(txn, &bot).await?;
                     let edit = TaskEdit {
                         change: request,
-                        author: author_of_turn(txn, &owner, &bot, Some(turn.as_str())).await?,
+                        author: author_of_turn(txn, &owner, &bot, turn.as_deref()).await?,
                     };
                     tasks::update_scoped_in(
                         txn,
@@ -173,6 +192,29 @@ impl Scheduler for ApiScheduler {
             Err(error) if error.status() == axum::http::StatusCode::NOT_FOUND => Ok(None),
             Err(error) => Err(anyhow!("{error}")),
         }
+    }
+
+    async fn in_owner_chat(&self) -> Result<bool> {
+        let Some(turn_id) = &self.turn_id else {
+            return Ok(true);
+        };
+        Ok(matches!(
+            tasks::scope_of_turn(&self.state.db, &self.owner_id, &self.bot_id, turn_id).await,
+            Ok(tasks::TaskScope::Everything)
+        ))
+    }
+
+    async fn calendar_wake(&self) -> Result<CalendarWake> {
+        let bot = owned_bot(&self.state.db, &self.owner_id, &self.bot_id)
+            .await
+            .map_err(|error| anyhow!("{error}"))?;
+        Ok(calendar_tasks::wake_of(&bot))
+    }
+
+    async fn set_calendar_wake(&self, update: UpdateCalendarWake) -> Result<CalendarWake> {
+        calendar::set_wake(&self.state, &self.owner_id, &self.bot_id, update)
+            .await
+            .map_err(|error| anyhow!("{error}"))
     }
 
     async fn cancel(&self, task_id: &str) -> Result<bool> {

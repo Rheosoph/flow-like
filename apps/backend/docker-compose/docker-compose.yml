@@ -314,6 +314,7 @@ services:
       EXECUTION_BACKEND: ${EXECUTION_BACKEND:-http}
       ASYNC_EXECUTION_BACKEND: ${ASYNC_EXECUTION_BACKEND:-redis}
       EXECUTOR_URL: ${EXECUTOR_URL:-http://execution-gateway:9000}
+      QUERY_SERVICE_URL: ${QUERY_SERVICE_URL:-http://query:8090}
       REDIS_EXECUTION_QUEUE: ${REDIS_EXECUTION_QUEUE:-exec:jobs:v3}
       EXECUTION_TIMEOUT_SECONDS: ${EXECUTION_TIMEOUT_SECONDS:-3600}
       COMPILATION_BACKEND: ${COMPILATION_BACKEND:-http}
@@ -326,6 +327,8 @@ services:
       CLOUDFLARE_TURN_KEY_API_TOKEN: ${CLOUDFLARE_TURN_KEY_API_TOKEN:-}
       SINK_SECRET: ${SINK_SECRET:-}
       MAINTENANCE_TOKEN: ${MAINTENANCE_TOKEN:-}
+      FILE_ACCOUNTING_RECONCILE_INTERVAL_SECS: ${FILE_ACCOUNTING_RECONCILE_INTERVAL_SECS:-900}
+      TABLE_MAINTENANCE_INTERVAL_SECS: ${TABLE_MAINTENANCE_INTERVAL_SECS:-900}
       SINK_TOKEN_ENCRYPTION_KEY: ${SINK_TOKEN_ENCRYPTION_KEY:-}
       TEAMS_PUBLIC_BASE_URL: ${TEAMS_PUBLIC_BASE_URL:-}
       TEAMS_MANAGED_TENANT_ID: ${TEAMS_MANAGED_TENANT_ID:-}
@@ -454,7 +457,7 @@ services:
     pids_limit: ${API_PIDS:-256}
     stop_grace_period: ${SHUTDOWN_GRACE_PERIOD:-60s}
   api-gateway:
-    image: ${NGINX_IMAGE:-nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c}
+    image: ${NGINX_IMAGE:-nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3}
     depends_on:
       api:
         condition: service_healthy
@@ -594,6 +597,68 @@ services:
       - /tmp:size=2g,mode=1777
     pids_limit: ${RUNTIME_PIDS:-512}
     stop_grace_period: ${EXECUTION_STOP_GRACE_PERIOD:-65m}
+  query:
+    image: ${QUERY_IMAGE:-ghcr.io/rheosoph/flow-like-docker-compose-query:${FLOW_LIKE_IMAGE_TAG:-dev}}
+    scale: ${QUERY_REPLICAS:-1}
+    build:
+      context: ../../..
+      dockerfile: apps/backend/query-service/Dockerfile
+    expose:
+      - "8090"
+    environment:
+      PORT: 8090
+      RUST_LOG: ${RUST_LOG:-info}
+      BACKEND_PUB: ${BACKEND_PUB:?Run scripts/setup-env.py and configure .env}
+      QUERY_MAX_ROWS: ${QUERY_MAX_ROWS:-10000}
+      QUERY_MAX_TIMEOUT_MS: ${QUERY_MAX_TIMEOUT_MS:-50000}
+      QUERY_MEMORY_BYTES: ${QUERY_MEMORY_BYTES:-2576980377}
+      # Spill and model files go to disk volumes: tmpfs pages count against the memory limit.
+      QUERY_SPILL_DIR: /var/lib/flow-like/query-spill
+      QUERY_SPILL_MAX_BYTES: ${QUERY_SPILL_MAX_BYTES:-4294967296}
+      QUERY_MODEL_CACHE_DIR: /var/lib/flow-like/query-models
+      QUERY_MODEL_CACHE_MAX_BYTES: ${QUERY_MODEL_CACHE_MAX_BYTES:-4294967296}
+      # Self-hosted databases usually sit on private networks.
+      QUERY_ALLOW_PRIVATE_NETWORKS: "true"
+    volumes:
+      - query_models:/var/lib/flow-like/query-models
+      - /var/lib/flow-like/query-spill
+    deploy:
+      replicas: ${QUERY_REPLICAS:-1}
+      resources:
+        limits:
+          cpus: ${QUERY_CPUS:-2}
+          memory: ${QUERY_MEMORY:-4G}
+          pids: ${QUERY_PIDS:-256}
+      update_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: any
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:8090/health
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    pids_limit: ${QUERY_PIDS:-256}
   compiler:
     image: ${COMPILER_IMAGE:-ghcr.io/rheosoph/flow-like-docker-compose-compiler:${FLOW_LIKE_IMAGE_TAG:-dev}}
     build:
@@ -995,7 +1060,7 @@ services:
           pids: ${TEMPO_PIDS:-256}
     pids_limit: ${TEMPO_PIDS:-256}
   compiler-gateway:
-    image: ${NGINX_IMAGE:-nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c}
+    image: ${NGINX_IMAGE:-nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3}
     user: 101:101
     entrypoint: *a1
     read_only: true
@@ -1027,7 +1092,7 @@ services:
           pids: ${COMPILER_GATEWAY_PIDS:-256}
     pids_limit: ${COMPILER_GATEWAY_PIDS:-256}
   runtime-gateway:
-    image: ${NGINX_IMAGE:-nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c}
+    image: ${NGINX_IMAGE:-nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3}
     user: 101:101
     entrypoint: *a1
     read_only: true
@@ -1061,7 +1126,7 @@ services:
     profiles:
       - trusted
   execution-callback:
-    image: ${NGINX_IMAGE:-nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c}
+    image: ${NGINX_IMAGE:-nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3}
     user: 101:101
     entrypoint: *a1
     read_only: true
@@ -1184,7 +1249,7 @@ services:
           pids: ${OBJECT_STORE_INIT_PIDS:-256}
     pids_limit: ${OBJECT_STORE_INIT_PIDS:-256}
   object-gateway:
-    image: ${NGINX_IMAGE:-nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c}
+    image: ${NGINX_IMAGE:-nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3}
     user: 101:101
     entrypoint:
       - /docker-entrypoint.sh
@@ -1400,7 +1465,7 @@ services:
     pids_limit: 128
     stop_grace_period: ${EXECUTION_STOP_GRACE_PERIOD:-65m}
   execution-gateway:
-    image: ${NGINX_IMAGE:-nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c}
+    image: ${NGINX_IMAGE:-nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3}
     user: 101:101
     entrypoint:
       - nginx
@@ -1455,6 +1520,7 @@ volumes:
   tempo_data: null
   object_store_data: {}
   object_store_logs: {}
+  query_models: {}
 networks:
   app: {}
   database:

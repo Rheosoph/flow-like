@@ -24,6 +24,9 @@ vi.mock("@flow-like/locales", () => ({
 	i18n: { t: (_key: string, fallback: string) => fallback },
 	useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
 }));
+vi.mock("../../bots-tab/team-answer-card", () => ({
+	TeamAnswerCard: () => null,
+}));
 vi.mock("./VoiceMode", () => ({ VoiceMode: () => null }));
 vi.mock("./ai-disclosure", () => ({ ChatAiDisclosure: () => null }));
 vi.mock("./chat-run-controls", () => ({
@@ -380,5 +383,38 @@ describe("tap to dismiss the keyboard", () => {
 
 		await touch(container.querySelector("[data-fl-chat-messages]"));
 		expect(document.activeElement).not.toBe(field);
+	});
+});
+
+describe("following new content", () => {
+	test("a chat opened on its history follows a reply that streams in", async () => {
+		await render();
+		const scroller = container.querySelector(
+			"[data-fl-chat-messages]",
+		) as HTMLElement;
+		const scrolledTo: number[] = [];
+		Object.defineProperty(scroller, "scrollHeight", {
+			configurable: true,
+			get: () => 900,
+		});
+		Object.defineProperty(scroller, "clientHeight", {
+			configurable: true,
+			get: () => 300,
+		});
+		Object.defineProperty(scroller, "scrollTop", {
+			configurable: true,
+			get: () => scrolledTo.at(-1) ?? 600,
+			set: (value: number) => scrolledTo.push(value),
+		});
+		await act(async () => {
+			chatRef.current?.pushCurrentMessageUpdate({
+				...answer,
+				id: "live-reply",
+				timestamp: 2,
+				inner: { role: IRole.Assistant, content: "Writing" },
+			});
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		});
+		expect(scrolledTo).toContain(900);
 	});
 });

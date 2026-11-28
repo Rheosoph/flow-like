@@ -18,7 +18,9 @@ use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct WasmPurchaseParams {
+    #[serde(alias = "successUrl")]
     pub success_url: Option<String>,
+    #[serde(alias = "cancelUrl")]
     pub cancel_url: Option<String>,
 }
 

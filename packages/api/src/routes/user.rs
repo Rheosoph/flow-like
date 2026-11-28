@@ -29,11 +29,13 @@ pub async fn ensure_user_exists(state: &AppState, sub: &str) -> Result<(), crate
         return Ok(());
     }
 
+    let now = chrono::Utc::now().fixed_offset();
     let user = user::ActiveModel {
         id: sea_orm::ActiveValue::Set(sub.to_string()),
         tracking_id: sea_orm::ActiveValue::Set(Some(create_id())),
-        created_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
-        updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
+        created_at: sea_orm::ActiveValue::Set(now),
+        updated_at: sea_orm::ActiveValue::Set(now),
+        last_seen_at: sea_orm::ActiveValue::Set(Some(now)),
         ..Default::default()
     };
 
@@ -84,11 +86,13 @@ pub mod billing;
 pub mod bits;
 pub mod bootstrap;
 pub mod contacts;
+pub mod data_query;
 pub mod get_invites;
 pub mod groups;
 pub mod handle;
 pub mod identity;
 pub mod info;
+pub(crate) mod last_seen;
 pub mod lookup;
 pub mod manage_invite;
 pub mod notifications;
@@ -154,6 +158,15 @@ pub fn routes() -> Router<AppState> {
         .route("/invites", get(get_invites::get_invites))
         .route("/templates", get(templates::get_templates))
         .route("/schedules", get(schedules::get_schedules))
+        .route("/data/query", post(data_query::data_query))
+        .route(
+            "/data/query/describe",
+            post(data_query::parameters::describe_data_query),
+        )
+        .route(
+            "/data/query/options",
+            post(data_query::parameters::data_query_options),
+        )
         .route("/groups", get(groups::get_user_groups))
         .route("/widgets", get(widgets::get_widgets))
         .route("/notifications", get(notifications::get_notifications))

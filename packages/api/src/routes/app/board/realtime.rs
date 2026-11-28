@@ -13,6 +13,7 @@ use axum::{
     extract::{Path, State},
     http::header,
 };
+use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_types::base64::Engine;
 use flow_like_types::base64::engine::general_purpose::STANDARD;
 use flow_like_types::{anyhow, create_id};
@@ -159,16 +160,21 @@ pub async fn access(
 
     let board_format_version = super::capabilities::supported_version(&client_headers)?
         .min(flow_like::flow::board::format::CURRENT_BOARD_FORMAT_VERSION);
-    state
-        .master_board_shared(&app_id, &board_id, &state, None)
-        .await?;
-    let user_model = User::find_by_id(&sub)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
+    // Joining needs the board to exist, not its hydrated form: a cold instance would spend the
+    // whole board load on a check a HEAD answers.
+    let (board_exists, user_model) = flow_like_types::tokio::join!(
+        board_source_exists(&state, &app_id, &board_id),
+        User::find_by_id(&sub).one(&state.db),
+    );
+    board_exists?;
+    let user_model = user_model?.ok_or(ApiError::NOT_FOUND)?;
 
     let jti = create_id();
-    let issued_ice = state.realtime_ice.issue(&jti).await.map_err(|error| {
+    let (issued_ice, room_key) = flow_like_types::tokio::join!(
+        state.realtime_ice.issue(&jti),
+        get_or_rotate_room_key(&state, &app_id, &board_id),
+    );
+    let issued_ice = issued_ice.map_err(|error| {
         tracing::error!(error = %error, "Failed to issue realtime ICE credentials");
         ApiError::bad_gateway("Realtime ICE credentials are temporarily unavailable")
     })?;
@@ -177,7 +183,7 @@ pub async fn access(
         None => (None, None),
     };
 
-    let (encryption_key, key_id) = get_or_rotate_room_key(&state, &app_id, &board_id).await?;
+    let (encryption_key, key_id) = room_key?;
 
     let time = make_time_claims(TokenType::Realtime, None);
 
@@ -210,6 +216,22 @@ pub async fn access(
             ice_expires_at,
         }),
     ))
+}
+
+async fn board_source_exists(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+) -> Result<(), ApiError> {
+    let storage_root = flow_like_storage::Path::from("apps").join(app_id.to_string());
+    let path = flow_like::flow::board::Board::proto_path(&storage_root, board_id, None);
+    match state.meta_bucket.as_generic().head(&path).await {
+        Ok(_) => Ok(()),
+        Err(flow_like_storage::object_store::Error::NotFound { .. }) => Err(ApiError::NOT_FOUND),
+        Err(error) => Err(ApiError::internal_error(anyhow!(
+            "Failed to check that board {board_id} exists at {path}: {error}"
+        ))),
+    }
 }
 
 // ----------------------------------------------------------------------------

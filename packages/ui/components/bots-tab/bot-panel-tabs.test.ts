@@ -5,6 +5,7 @@ import type {
 	IBot,
 } from "../../state/backend-state/bot-state";
 import {
+	botCalendarReach,
 	botPanelTabs,
 	hasBotWorkspace,
 	shownBotPanelTab,
@@ -32,12 +33,13 @@ const everything: BotCapability[] = [
 ];
 
 describe("the panel's tabs follow the bot's abilities", () => {
-	test("Details always; Files for storage, Data for data_studio, Memory for memory", () => {
+	test("Details always; Files for storage, Data for data_studio, Memory and Calendar for memory", () => {
 		expect(botPanelTabs(row(bot("bot_scout", everything)))).toEqual([
 			"details",
 			"files",
 			"data",
 			"memory",
+			"calendar",
 		]);
 		expect(botPanelTabs(row(bot("bot_scout", ["internet"])))).toEqual([
 			"details",
@@ -53,6 +55,7 @@ describe("the panel's tabs follow the bot's abilities", () => {
 		expect(botPanelTabs(row(bot("bot_scout", ["memory"])))).toEqual([
 			"details",
 			"memory",
+			"calendar",
 		]);
 	});
 
@@ -67,7 +70,7 @@ describe("the panel's tabs follow the bot's abilities", () => {
 			botPanelTabs(
 				row(bot("bot_scout", ["browser_use", "computer_use", "memory"])),
 			),
-		).toEqual(["details", "computer", "memory"]);
+		).toEqual(["details", "computer", "memory", "calendar"]);
 		expect(botPanelTabs(row(bot("bot_scout", ["internet"])))).not.toContain(
 			"computer",
 		);
@@ -76,7 +79,7 @@ describe("the panel's tabs follow the bot's abilities", () => {
 	test("a bot on this computer keeps its workspace; a built-in kept there has none yet", () => {
 		expect(
 			botPanelTabs(row(bot("bot_here", everything, { local: true }))),
-		).toEqual(["details", "files", "data", "memory"]);
+		).toEqual(["details", "files", "data", "memory", "calendar"]);
 		expect(
 			botPanelTabs(
 				row(
@@ -89,7 +92,7 @@ describe("the panel's tabs follow the bot's abilities", () => {
 		).toEqual(["details", "memory"]);
 		expect(
 			botPanelTabs(row(bot("bot_general", everything, { system: "general" }))),
-		).toEqual(["details", "files", "data", "memory"]);
+		).toEqual(["details", "files", "data", "memory", "calendar"]);
 	});
 
 	test("Flux and its copies always remember and have no Files or Data", () => {
@@ -107,7 +110,46 @@ describe("the panel's tabs follow the bot's abilities", () => {
 		expect(botPanelTabs(row(bot("bot_flux_copy", ["flowpilot"])))).toEqual([
 			"details",
 			"memory",
+			"calendar",
 		]);
+	});
+
+	test("Calendar for a calendar, scheduling or memory, never for Flux or a built-in without a workspace", () => {
+		for (const ability of ["calendar", "scheduling"] as const) {
+			expect(botPanelTabs(row(bot("bot_scout", [ability])))).toEqual([
+				"details",
+				"calendar",
+			]);
+		}
+		expect(
+			botPanelTabs(row(bot("bot_scout", ["location", "internet"]))),
+		).toEqual(["details"]);
+		expect(
+			botPanelTabs(
+				row(bot("bot_flux", ["flowpilot", "calendar"], { system: "flux" })),
+			),
+		).toEqual(["details", "memory"]);
+		expect(
+			botPanelTabs(
+				row(
+					bot("bot_general_here", ["memory"], {
+						system: "general",
+						local: true,
+					}),
+				),
+			),
+		).toEqual(["details", "memory"]);
+	});
+
+	test("the Calendar tab lays over what the bot has", () => {
+		expect(botCalendarReach(bot("bot_scout", ["calendar"]))).toEqual({
+			events: true,
+			tasks: false,
+			memories: false,
+		});
+		expect(
+			botCalendarReach(bot("bot_scout", ["scheduling", "memory"])),
+		).toEqual({ events: false, tasks: true, memories: true });
 	});
 
 	test("without a row: Flux and the Assistant by their defaults, a bot that's gone with Details only", () => {

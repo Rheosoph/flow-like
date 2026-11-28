@@ -1,8 +1,10 @@
 //! What a device receives when it claims a bot turn: the turn's credentials, the bot's run spec
 //! and the hub-resolved models. It resolves the turn like the server's worker does, except that
-//! only hosted models leave the server (a customer provider's Bit carries the owner's
-//! credentials), and the model allowance is reserved here and settled when the device ends the
-//! turn. The device pays no runtime compute: it computes.
+//! only models the device can call leave the server: hosted ones, and the owner's own `custom:*`
+//! models, whose Bit goes with its endpoint and key so the device reaches what only its network
+//! can (a model on the owner's LAN). Each such hand-out is logged. The model allowance is
+//! reserved here and settled when the device ends the turn. The device pays no runtime compute:
+//! it computes.
 
 use crate::{
     bot_host::{
@@ -24,7 +26,7 @@ use crate::{
         },
         bots::{
             owned_bot,
-            runtime::{ChatBot, chat_bot, hosted_bot_model},
+            runtime::{ChatBot, chat_bot, device_bot_model, runs_on_device},
             runtime_token::bot_user_for_turn,
         },
         inbox::active_membership,
@@ -53,8 +55,7 @@ use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, sea_query:
 use std::sync::Arc;
 
 pub(crate) const BOT_DEVICE_MODEL_NOT_HOSTED: &str = "BOT_DEVICE_MODEL_NOT_HOSTED";
-pub(crate) const MODEL_NOT_HOSTED_TEXT: &str =
-    "This bot's model can't run on a device; pick a hosted model in its settings.";
+pub(crate) const MODEL_NOT_HOSTED_TEXT: &str = "This bot's model can't run on a device; pick a hosted model or one connected with your own provider in its settings.";
 pub(crate) const DELIVERY_TTL_SECS: i64 = 60;
 /// Posted after "I can't answer yet: " when the bot's device is shared for deploying.
 pub(crate) const DEVICE_SHARED_TEXT: &str = "the device I run on lets other people deploy to it. My owner can end that access in the device's sharing settings or choose another place for me to run.";
@@ -221,38 +222,58 @@ fn unrunnable(what: &str) -> ApiError {
     ApiError::coded(
         StatusCode::BAD_REQUEST,
         BOT_DEVICE_MODEL_NOT_HOSTED,
-        format!("A device bot runs on hosted models only; {what} is not a hosted model"),
+        format!(
+            "A device bot runs on hosted models or models connected with its owner's own provider; {what} is neither"
+        ),
     )
 }
 
-async fn hosted_bit(
+/// A completion model of the owner's profile that the bot's device can call, with the endpoint
+/// and key of an own-provider model.
+async fn device_bit(
     fls: &Arc<FlowLikeState>,
     profile: &Profile,
     id: &str,
 ) -> Option<flow_like::bit::Bit> {
     let bit = runnable_completion_model(fls, profile, id).await?;
     let provider = bit.try_to_provider()?;
-    is_hosted_provider_name(&provider.provider_name).then_some(bit)
+    runs_on_device(&provider.provider_name).then_some(bit)
 }
 
-/// The bot's vision model when it is a hosted model that reads images. A device turn whose
+/// Logs a model whose own provider key goes to the bot's device with this claim.
+fn log_key_hand_out(bot_id: &str, role: &str, bit: &flow_like::bit::Bit) {
+    let Some(provider) = bit.try_to_provider() else {
+        return;
+    };
+    if is_hosted_provider_name(&provider.provider_name) {
+        return;
+    }
+    tracing::info!(
+        bot_id = %bot_id,
+        bit_id = %bit.id,
+        provider = %provider.provider_name,
+        role,
+        "[bots] handed an own-provider model with its key to the bot's device turn"
+    );
+}
+
+/// The bot's vision model when the device can call it and it reads images. A device turn whose
 /// model cannot see images has them described by it.
 async fn vision_bit(
     fls: &Arc<FlowLikeState>,
     profile: &Profile,
     id: &str,
-) -> Option<serde_json::Value> {
-    let Some(bit) = hosted_bit(fls, profile, id)
+) -> Option<flow_like::bit::Bit> {
+    let bit = device_bit(fls, profile, id)
         .await
-        .filter(flow_like::bit::Bit::is_multimodal)
-    else {
+        .filter(flow_like::bit::Bit::is_multimodal);
+    if bit.is_none() {
         tracing::warn!(
             bit_id = id,
-            "Device bot vision model is not a hosted vision model; its turns' images go to the turn's model unread"
+            "Device bot vision model is not a vision model the device can call; its turns' images go to the turn's model unread"
         );
-        return None;
-    };
-    serde_json::to_value(&bit).ok()
+    }
+    bit
 }
 
 async fn embedding_bit(
@@ -360,7 +381,7 @@ async fn resolve_models(
     access: &crate::routes::ai::global_chat::ProfileModelAccess,
     fls: &Arc<FlowLikeState>,
 ) -> Result<Resolved, ApiError> {
-    let model_id = hosted_bot_model(state, owner, fls, profile, &bot.model).await;
+    let model_id = device_bot_model(state, owner, fls, profile, &bot.model).await;
     if let Some(rejection) = access.rejection(model_id.as_deref()) {
         return Err(rejection);
     }
@@ -381,12 +402,15 @@ async fn resolve_models(
     let provider = selected
         .try_to_provider()
         .ok_or_else(|| ApiError::bad_request("The bot's model is not a completion provider"))?;
-    if !is_hosted_provider_name(&provider.provider_name) {
+    if !runs_on_device(&provider.provider_name) {
         return Err(unrunnable(&format!("'{}'", selected.id)));
     }
+    let bot_id = bot.context.bot_id.as_str();
+    log_key_hand_out(bot_id, "completion", &selected);
     let mut fallbacks = Vec::new();
     for id in bot.model.fallbacks.iter().filter(|id| **id != selected.id) {
-        if let Some(bit) = hosted_bit(fls, profile, id).await {
+        if let Some(bit) = device_bit(fls, profile, id).await {
+            log_key_hand_out(bot_id, "fallback", &bit);
             fallbacks.push(serde_json::to_value(&bit)?);
         }
     }
@@ -410,7 +434,13 @@ async fn resolve_models(
         Some(id) if !id.is_empty() => vision_bit(fls, profile, id).await,
         _ => None,
     };
-    let funding = worker::funding_class(true, embedding.as_ref().map(|_| true));
+    if let Some(bit) = &vision {
+        log_key_hand_out(bot_id, "vision", bit);
+    }
+    let funding = worker::funding_class(
+        is_hosted_provider_name(&provider.provider_name),
+        embedding.as_ref().map(|_| true),
+    );
     Ok(Resolved {
         provider_name: provider.provider_name.clone(),
         funding,
@@ -422,7 +452,7 @@ async fn resolve_models(
             embedding_model_id: memory_model,
             image,
             decision,
-            vision,
+            vision: vision.as_ref().map(serde_json::to_value).transpose()?,
         },
     })
 }
@@ -871,5 +901,101 @@ mod image_tests {
             );
         }
         assert!(device_image(image(BitTypes::Llm, "openai")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod device_model_tests {
+    use super::*;
+    use flow_like::{
+        bit::{Bit, BitModelClassification, BitTypes, LLMParameters},
+        flow_like_model_provider::provider::ModelProvider,
+        profile::ProfileCustomBit,
+        state::FlowLikeConfig,
+        utils::http::HTTPClient,
+    };
+    use flow_like_storage::{files::store::FlowLikeStore, object_store::memory::InMemory};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    const LAN: &str = "http://192.168.1.20:11434/v1";
+
+    fn chat(id: &str, provider_name: &str) -> Bit {
+        Bit {
+            id: id.into(),
+            bit_type: BitTypes::Llm,
+            parameters: serde_json::to_value(LLMParameters {
+                context_length: 32_000,
+                model_classification: BitModelClassification::default(),
+                data_classification: None,
+                provider: ModelProvider {
+                    provider_name: provider_name.into(),
+                    model_id: Some("upstream".into()),
+                    version: None,
+                    api_surface: None,
+                    params: Some(HashMap::from([
+                        ("endpoint".to_string(), json!(LAN)),
+                        ("api_key".to_string(), json!("owner-key")),
+                    ])),
+                },
+            })
+            .unwrap(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_device_calls_hosted_models_and_its_owners_own_providers_only() {
+        for provider in [
+            "hosted",
+            "hosted:openrouter",
+            "custom:openai",
+            "custom:ollama",
+            "Custom:LMStudio",
+        ] {
+            assert!(runs_on_device(provider), "{provider}");
+        }
+        for provider in [
+            "custom:claude-code",
+            "custom:codex",
+            "custom:github-copilot",
+            "custom:microsoft-copilot",
+            "Local",
+            "MLX",
+            "device",
+            "openai",
+            "",
+        ] {
+            assert!(!runs_on_device(provider), "{provider}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_own_provider_model_reaches_the_device_with_its_endpoint_and_key() {
+        let bits = [
+            chat("lan", "custom:ollama"),
+            chat("agent", "custom:claude-code"),
+            chat("local", "Local"),
+            chat("hosted", "hosted:openrouter"),
+        ];
+        let profile = Profile {
+            bits: bits.iter().map(|bit| bit.id.clone()).collect(),
+            custom_bits: bits.into_iter().map(ProfileCustomBit).collect(),
+            ..Default::default()
+        };
+        let fls = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(InMemory::new()))),
+            HTTPClient::new_without_refetch(),
+        ));
+        let lan = device_bit(&fls, &profile, "lan").await.unwrap();
+        let params = &lan.parameters["provider"]["params"];
+        assert_eq!(
+            (params["endpoint"].as_str(), params["api_key"].as_str()),
+            (Some(LAN), Some("owner-key"))
+        );
+        assert!(device_bit(&fls, &profile, "hosted").await.is_some());
+        for id in ["agent", "local", "missing"] {
+            assert!(device_bit(&fls, &profile, id).await.is_none(), "{id}");
+        }
     }
 }

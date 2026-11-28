@@ -1,16 +1,13 @@
 use crate::{
-    ensure_any_permission,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, column_reader},
-    state::AppState,
+    ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, routes::app::db::ScopeParams, state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like_storage::databases::graph::{GraphStore, SubgraphNode, lancegraph};
+use flow_like_query::graph::GraphOperation;
+use flow_like_storage::databases::graph::SubgraphNode;
 use utoipa::ToSchema;
 
 #[derive(Debug, serde::Deserialize, ToSchema)]
@@ -32,9 +29,11 @@ pub struct SearchNodesPayload {
     request_body = SearchNodesPayload,
     responses(
         (status = 200, description = "Matching graph nodes", body = Vec<Object>),
-        (status = 400, description = "Bad request"),
+        (status = 400, description = "Bad request, or the search failed"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 503, description = "The query service is unavailable"),
+        (status = 504, description = "The search ran out of time")
     ),
     security(
         ("bearer_auth" = []),
@@ -61,16 +60,20 @@ pub async fn search_nodes(
         RolePermissions::ReadDatabase
     );
 
-    let (connection, overlay) =
-        super::load_scoped_overlay(&state, &user, &app_id, &overlay_id, &scope).await?;
-    let store = lancegraph::LanceGraphStore::new_for(
-        connection,
-        overlay,
-        None,
-        column_reader(&permission, &scope),
+    let results = super::read_overlay(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &overlay_id,
+        &scope,
+        |overlay| GraphOperation::Search {
+            limit: payload.limit.unwrap_or(overlay.default_limit),
+            overlay: Box::new(overlay),
+            query: payload.query,
+        },
     )
     .await?;
-    let results = store.search_nodes(&payload.query, payload.limit).await?;
 
     Ok(Json(results))
 }

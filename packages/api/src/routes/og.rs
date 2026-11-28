@@ -1,9 +1,14 @@
 use axum::{Json, Router, extract::Query, routing::get};
+use flow_like::flow_like_model_provider::egress::ProviderEgress;
 use flow_like_types::reqwest;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::{error::ApiError, state::AppState};
+use crate::{
+    error::ApiError,
+    media_links::{guarded_client, server_link_egress},
+    state::AppState,
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/", get(fetch_og_metadata))
@@ -197,7 +202,15 @@ fn html_decode(s: &str) -> String {
 pub async fn fetch_og_metadata(
     Query(params): Query<OgQuery>,
 ) -> Result<Json<OgMetadata>, ApiError> {
-    let url = params.url.trim().to_string();
+    fetch_preview(&params.url, server_link_egress())
+        .await
+        .map(Json)
+}
+
+/// Anyone can call `/og`, so the target must pass `egress` on the URL, at every DNS
+/// resolution and on every redirect hop; server-side that means public HTTPS only.
+async fn fetch_preview(raw: &str, egress: ProviderEgress) -> Result<OgMetadata, ApiError> {
+    let url = raw.trim();
 
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err(ApiError::bad_request(
@@ -205,21 +218,26 @@ pub async fn fetch_og_metadata(
         ));
     }
 
-    let parsed = reqwest::Url::parse(&url).map_err(|_| ApiError::bad_request("Invalid URL"))?;
+    let parsed = reqwest::Url::parse(url).map_err(|_| ApiError::bad_request("Invalid URL"))?;
 
     if parsed.host_str().is_none() {
         return Err(ApiError::bad_request("URL must have a valid host"));
     }
 
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .timeout(REQUEST_TIMEOUT)
-        .user_agent("Mozilla/5.0 (compatible; FlowLikeBot/1.0)")
-        .build()
-        .map_err(|e| ApiError::internal(format!("HTTP client error: {e}")))?;
+    egress
+        .check_url(&parsed)
+        .map_err(|_| ApiError::bad_request("Only public HTTPS URLs can be previewed"))?;
+
+    let client = guarded_client(
+        egress,
+        reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .user_agent("Mozilla/5.0 (compatible; FlowLikeBot/1.0)"),
+    )
+    .map_err(|e| ApiError::internal(format!("HTTP client error: {e}")))?;
 
     let response = client
-        .get(&url)
+        .get(parsed)
         .header("Accept", "text/html")
         .send()
         .await
@@ -239,13 +257,13 @@ pub async fn fetch_og_metadata(
         .unwrap_or("");
 
     if !content_type.contains("text/html") && !content_type.contains("application/xhtml") {
-        return Ok(Json(OgMetadata {
+        return Ok(OgMetadata {
             title: None,
             description: None,
             image: None,
             site_name: None,
             favicon: None,
-        }));
+        });
     }
 
     let bytes = crate::http_bounds::read_prefix(response, MAX_BODY_SIZE).await?;
@@ -258,7 +276,7 @@ pub async fn fetch_og_metadata(
         &body
     };
 
-    Ok(Json(parse_og_tags(head_section)))
+    Ok(parse_og_tags(head_section))
 }
 
 #[cfg(test)]
@@ -266,7 +284,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn intranet_previews_keep_working_without_reading_the_full_body() {
+    async fn local_previews_stop_reading_at_the_prefix_limit() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -291,15 +309,43 @@ mod tests {
         });
         let response = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            fetch_og_metadata(Query(OgQuery {
-                url: format!("http://{address}/dashboard"),
-            })),
+            fetch_preview(&format!("http://{address}/dashboard"), ProviderEgress::Open),
         )
         .await
         .unwrap()
         .unwrap();
         assert_eq!(response.title.as_deref(), Some("Internal dashboard"));
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn server_previews_refuse_internal_targets_before_connecting() {
+        use crate::media_links::tests::{ok, serve};
+
+        let (address, served) = serve(ok("<head><title>Internal</title></head>")).await;
+        for url in [
+            format!("http://{address}/"),
+            format!("https://{address}/"),
+            "https://169.254.169.254/latest/meta-data/".to_string(),
+            "https://[fd00:ec2::254]/latest/meta-data/".to_string(),
+            "https://metadata.google.internal/computeMetadata/v1/".to_string(),
+            "https://localhost/".to_string(),
+            "https://[::1]/".to_string(),
+            "https://10.0.0.5/".to_string(),
+            "https://192.168.1.1/".to_string(),
+            "https://2130706433/".to_string(),
+            "http://example.com/".to_string(),
+        ] {
+            let Err(error) = fetch_preview(&url, ProviderEgress::Public).await else {
+                panic!("{url} must be refused");
+            };
+            assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST, "{url}");
+        }
+        assert_eq!(
+            served.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no refused preview reaches the network"
+        );
     }
 
     #[test]

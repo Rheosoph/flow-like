@@ -6,7 +6,7 @@ use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
     bot_message::MessageBody,
     bot_notify::reply_is_proactive,
-    bot_turn::{MAX_HOPS, TurnAudience},
+    bot_turn::{RoomLine, TurnAudience, hands_over, hop_limit, talking_with},
     inbox::{
         ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, ReactionEvent, TranscriptBody,
         TriggerBody, is_tombstone, net_reactions,
@@ -51,11 +51,40 @@ pub struct Waiting {
     /// The message names the bot, replies to it, or is in a direct conversation; otherwise the
     /// bot reads along and may stay silent.
     pub addressed: bool,
+    /// The bot turns the message's discussion may reach: a person's `body.discussion`, or what a
+    /// bot's message carries on in `body.discussion_hops`; `None`: the default budget. The reply
+    /// carries it on.
+    pub discussion_hops: Option<u32>,
+}
+
+/// Which of a person's room messages that neither name the bot nor reply to it wake the bot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadAlong {
+    /// Every one: the bot decides whether to answer.
+    Every,
+    /// One that continues the person's exchange with the bot ([`talking_with`]), all the room
+    /// limit `mentioned_only` leaves.
+    Exchange,
+    /// None, while the bot waits for a participant's answer.
+    Off,
+}
+
+impl ReadAlong {
+    pub fn of(mentioned_only: bool) -> Self {
+        if mentioned_only {
+            Self::Exchange
+        } else {
+            Self::Every
+        }
+    }
 }
 
 struct Message<'a> {
     entry: &'a InboxEntry,
     body: Option<MessageBody>,
+    /// Live "New topic" markers newer than the message: messages with the same count share a
+    /// topic.
+    topic: usize,
 }
 
 impl Message<'_> {
@@ -90,12 +119,18 @@ fn bot_acknowledgement(message: &Message) -> bool {
 }
 
 fn messages(entries: &[InboxEntry]) -> Vec<Message<'_>> {
+    let mut topic = 0;
     entries
         .iter()
-        .filter(|entry| entry.kind.wakes_bot() || entry.kind == InboxEntryKind::Transcript)
-        .map(|entry| Message {
-            entry,
-            body: parse_body(entry),
+        .filter_map(|entry| {
+            if entry.kind == InboxEntryKind::Topic && !is_tombstone(&entry.envelope) {
+                topic += 1;
+            }
+            (entry.kind.wakes_bot() || entry.kind == InboxEntryKind::Transcript).then(|| Message {
+                entry,
+                body: parse_body(entry),
+                topic,
+            })
         })
         .filter(|message| !is_approval_entry(message))
         .filter(|message| {
@@ -169,6 +204,44 @@ fn hops_of(message: &Message, bot_sender: bool) -> u32 {
     }
 }
 
+/// The bot turns the discussion `message` belongs to may reach: what a person's message allows
+/// (`body.discussion`), or what a bot's message carries on (`body.discussion_hops`); `None`: the
+/// default budget.
+fn discussion_budget(message: &Message, bot_sender: bool) -> Option<u32> {
+    let body = message.body.as_ref()?;
+    if bot_sender {
+        body.discussion_hops
+    } else {
+        body.discussion.and_then(|grant| grant.hops())
+    }
+}
+
+/// Whether `message` still wakes `bot_id` after the bot turns behind it: a bot's room message
+/// that hands it the word ([`hands_over`]) gets its discussion's budget, anything else the hop
+/// limit ([`hop_limit`]).
+fn within_hops(
+    kind: ConversationKind,
+    bot_id: &str,
+    message: &Message,
+    messages: &[Message],
+    bot_sender: bool,
+) -> bool {
+    let handed_over = bot_sender
+        && message.body.as_ref().is_some_and(|body| {
+            hands_over(kind, body, bot_id, replies_to(message, bot_id, messages))
+        });
+    hops_of(message, bot_sender) <= hop_limit(handed_over, discussion_budget(message, bot_sender))
+}
+
+/// Whether `message` replies to a message `bot_id` sent.
+fn replies_to(message: &Message, bot_id: &str, messages: &[Message]) -> bool {
+    message.reply_to().is_some_and(|target| {
+        messages.iter().any(|candidate| {
+            candidate.entry.message_id == target && candidate.entry.sender_id == bot_id
+        })
+    })
+}
+
 fn is_host_reply(message_id: &str) -> bool {
     HOST_REPLY_PREFIXES
         .iter()
@@ -216,20 +289,18 @@ fn addressed(
         return body.mentions.is_empty() || body.mentions.iter().any(|mention| mention == bot_id);
     }
     body.mentions.iter().any(|mention| mention == bot_id)
-        || body.reply_to.as_deref().is_some_and(|target| {
-            messages.iter().any(|candidate| {
-                candidate.entry.message_id == target && candidate.entry.sender_id == bot_id
-            })
-        })
+        || (!body.rests_discussion() && replies_to(message, bot_id, messages))
 }
 
 /// The newest message of someone else that `bot_id` has yet to answer, from `entries` (newest
 /// first). Direct conversations always wake the bot; in a group it wakes when the bot is
-/// mentioned or replied to, and for a person's message also when the bot reads along (unless
-/// `mentioned_only`). A message of a bot counts at least one hop and none beyond [`MAX_HOPS`]
-/// wakes anyone. Edits, topics, reactions, member events, tombstones and messages sent before
-/// `not_before` are no trigger. A bot with a decision model (`has_decision_model`) also reads
-/// along with spoken call transcripts; without one it would answer every utterance.
+/// mentioned or replied to, and for a person's message also when the bot reads along; with
+/// `mentioned_only` only when the message continues the person's exchange with the bot
+/// ([`ReadAlong::Exchange`]). A message of a bot counts at least one hop, and none past the hop
+/// limit wakes anyone ([`within_hops`]). Edits, topics, reactions, member events, tombstones and
+/// messages sent before `not_before` are no trigger. A bot with a decision model
+/// (`has_decision_model`) also reads along with spoken call transcripts; without one it would
+/// answer every utterance.
 pub fn waiting(
     kind: ConversationKind,
     bot_id: &str,
@@ -244,25 +315,55 @@ pub fn waiting(
         entries,
         not_before,
         None,
-        mentioned_only,
+        ReadAlong::of(mentioned_only),
         has_decision_model,
     )
 }
 
+/// Whether the person's message `from[0]` wakes `bot_id` though it doesn't address it; `from`
+/// runs from the message to older ones.
 fn reads_along(
     kind: ConversationKind,
-    message: &Message,
-    mentioned_only: bool,
+    bot_id: &str,
+    from: &[Message],
+    read_along: ReadAlong,
     has_decision_model: bool,
 ) -> bool {
+    let message = &from[0];
     kind == ConversationKind::Group
-        && !mentioned_only
         && message.entry.sender_id == flow_like_local_bots::LOCAL_OWNER_ID
         && match message.entry.kind {
             InboxEntryKind::Message => true,
             InboxEntryKind::Transcript => has_decision_model,
             _ => false,
         }
+        && match read_along {
+            ReadAlong::Every => true,
+            ReadAlong::Exchange => continues_exchange(bot_id, from),
+            ReadAlong::Off => false,
+        }
+}
+
+/// Whether `from[0]` continues its sender's exchange with `bot_id` ([`talking_with`]), read from
+/// the live messages of its topic; `from` runs from the message to older ones.
+fn continues_exchange(bot_id: &str, from: &[Message]) -> bool {
+    let topic = from[0].topic;
+    let mut lines: Vec<RoomLine<'_>> = from
+        .iter()
+        .take_while(|message| message.topic == topic)
+        .filter(|message| !message.deleted())
+        .map(|message| RoomLine {
+            message_id: &message.entry.message_id,
+            sender_id: &message.entry.sender_id,
+            mentions: message
+                .body
+                .as_ref()
+                .map_or(&[], |body| body.mentions.as_slice()),
+            reply_to: message.reply_to(),
+        })
+        .collect();
+    lines.reverse();
+    talking_with(&lines) == Some(bot_id)
 }
 
 /// [`waiting`] that leaves the messages an interactive chat holds to that chat.
@@ -272,7 +373,7 @@ pub fn waiting_held(
     entries: &[InboxEntry],
     not_before: DateTime<FixedOffset>,
     hold: Option<Hold>,
-    mentioned_only: bool,
+    read_along: ReadAlong,
     has_decision_model: bool,
 ) -> Option<Waiting> {
     let parked = parked_turns(entries, bot_id);
@@ -280,7 +381,8 @@ pub fn waiting_held(
     let unanswered = answered_upto(&messages, bot_id);
     messages[..unanswered]
         .iter()
-        .find(|message| {
+        .enumerate()
+        .find(|(at, message)| {
             let sender = message.entry.sender_id.as_str();
             let bot_sender = sender != flow_like_local_bots::LOCAL_OWNER_ID;
             sender != bot_id
@@ -290,10 +392,17 @@ pub fn waiting_held(
                 && message.body.is_some()
                 && message.entry.created_at >= not_before
                 && !hold.is_some_and(|hold| hold.keeps(message))
-                && hops_of(message, bot_sender) <= MAX_HOPS
+                && within_hops(kind, bot_id, message, &messages, bot_sender)
                 && (addressed(kind, bot_id, message, &messages)
-                    || reads_along(kind, message, mentioned_only, has_decision_model))
+                    || reads_along(
+                        kind,
+                        bot_id,
+                        &messages[*at..],
+                        read_along,
+                        has_decision_model,
+                    ))
         })
+        .map(|(_, message)| message)
         .filter(|message| {
             !parked.contains(&flow_like_types::bot_turn::turn_id(
                 bot_id,
@@ -301,10 +410,8 @@ pub fn waiting_held(
             ))
         })
         .map(|message| {
-            let hops = hops_of(
-                message,
-                message.entry.sender_id != flow_like_local_bots::LOCAL_OWNER_ID,
-            );
+            let bot_sender = message.entry.sender_id != flow_like_local_bots::LOCAL_OWNER_ID;
+            let hops = hops_of(message, bot_sender);
             let sender = message.entry.sender_id.as_str();
             let requester_id = if kind == ConversationKind::Direct {
                 flow_like_local_bots::LOCAL_OWNER_ID
@@ -319,6 +426,7 @@ pub fn waiting_held(
                 seq: message.entry.seq,
                 hops,
                 proactive: reply_is_proactive(message.entry.kind, hops),
+                discussion_hops: discussion_budget(message, bot_sender),
             }
         })
         .or_else(|| reacted_to(kind, bot_id, entries, not_before))
@@ -352,10 +460,13 @@ pub fn waiting_participant(
             && message.body.is_some()
             && message.entry.created_at >= not_before
             && !hold.is_some_and(|hold| hold.keeps(message))
-            && hops_of(
+            && within_hops(
+                kind,
+                bot_id,
                 message,
+                &messages,
                 participant_id != flow_like_local_bots::LOCAL_OWNER_ID,
-            ) <= MAX_HOPS
+            )
     })?;
     if parked.contains(&flow_like_types::bot_turn::turn_id(
         bot_id,
@@ -363,10 +474,8 @@ pub fn waiting_participant(
     )) {
         return None;
     }
-    let hops = hops_of(
-        message,
-        participant_id != flow_like_local_bots::LOCAL_OWNER_ID,
-    );
+    let bot_sender = participant_id != flow_like_local_bots::LOCAL_OWNER_ID;
+    let hops = hops_of(message, bot_sender);
     Some(Waiting {
         message_id: message.entry.message_id.clone(),
         seq: message.entry.seq,
@@ -375,6 +484,7 @@ pub fn waiting_participant(
         requester_id: participant_id.to_owned(),
         audience: TurnAudience::of(kind),
         addressed: addressed(kind, bot_id, message, &messages),
+        discussion_hops: discussion_budget(message, bot_sender),
     })
 }
 
@@ -443,6 +553,7 @@ fn reacted_to(
             requester_id: flow_like_local_bots::LOCAL_OWNER_ID.to_string(),
             audience: TurnAudience::of(kind),
             addressed: true,
+            discussion_hops: None,
         })
         .next()
 }

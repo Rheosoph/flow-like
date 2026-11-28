@@ -75,9 +75,13 @@ export interface IForkPreviewResponse {
 	max_file_count: number;
 	/** Whether the fork fits both caps *after* the owner's policy is applied. */
 	within_limits: boolean;
-	/** The source owner's policy. Display-only for the forker. */
-	fork_policy: IForkPolicy;
-	size_breakdown: IForkSizeBreakdown;
+	/**
+	 * The source owner's policy. Display-only for the forker. Absent when the
+	 * caller can neither fork the app nor see it, and on hubs that predate it.
+	 */
+	fork_policy?: IForkPolicy;
+	/** Absent under the same conditions as `fork_policy`. */
+	size_breakdown?: IForkSizeBreakdown;
 	/** Bytes actually copied once the policy is applied. */
 	selected_size_bytes: number;
 	/** Objects actually copied once the policy is applied. */
@@ -122,13 +126,34 @@ export interface IBlockedPackage {
 	request_pending: boolean;
 }
 
-export interface IMetaBlob {
-	relative_path: string;
-	/** Base64-encoded bytes. Most entries are compressed app artifacts
-	 * (proto for boards/events/templates/metadata, JSON for widgets/pages);
-	 * `media/...` entries are raw bytes and should be written to local
-	 * content storage. */
-	data_b64: string;
+/** One file of a fork transfer and the single signed request that moves it. */
+export interface ISignedFile {
+	/** Path relative to the app root. */
+	path: string;
+	url: string;
+	/** Headers the request has to carry (Azure uploads need `x-ms-blob-type`). */
+	headers?: Record<string, string>;
+	size?: number | null;
+}
+
+/** One page of an offline fork's content files. */
+export interface IOfflineForkFilesPage {
+	files: ISignedFile[];
+	/** Files on this page the owner's fork policy keeps out. */
+	skipped: number;
+	/** Pass as `after` for the next page; absent on the last one. */
+	next?: string | null;
+	expires_at: string;
+}
+
+export interface IUploadUrlsResponse {
+	files: ISignedFile[];
+	expires_at: string;
+}
+
+export interface IAdoptUploadResponse {
+	adopted: number;
+	remaining: boolean;
 }
 
 /**
@@ -162,37 +187,26 @@ export interface IForkReport {
 export interface IBeginOfflineForkResponse {
 	new_app_id: string;
 	fork_session_id: string;
+	/** The app being forked; its content files come page by page from
+	 * `GET apps/{source_app_id}/fork/offline/files?seed={new_app_id}`. */
+	source_app_id: string;
 	/**
-	 * Remapped + secret-stripped inline artifacts (manifest, boards,
-	 * events, widgets, templates, pages, and DB-backed metadata
-	 * files, plus app metadata media). Each entry's `data_b64` is the
-	 * exact bytes that would have been written to disk on a destination
-	 * — the desktop decodes and writes it under
-	 * `apps/{new_app_id}/{relative_path}`.
+	 * Signed downloads of the re-keyed, secret-stripped artifacts
+	 * (manifest, boards, events, widgets, templates, pages, DB-backed
+	 * metadata files and app metadata media), each written under
+	 * `apps/{new_app_id}/{path}`.
 	 */
-	meta_blobs: IMetaBlob[];
-	/**
-	 * Bucket-relative prefix of the **source** content store (e.g.
-	 * `apps/{src_app_id}`). The desktop pulls metadata/, upload/,
-	 * storage/ from there directly, translating
-	 * `metadata/{widgets|templates|pages}/{src_id}/...` segments
-	 * client-side via `id_map` before writing locally.
-	 */
-	source_content_prefix: string;
-	/** Scoped read credentials for `source_content_prefix`. Opaque
-	 * blob the desktop hands to the Tauri `apply_fork_bundle` command. */
-	shared_credentials: unknown;
-	expires_at?: string | null;
+	meta_files: ISignedFile[];
+	/** When the signed downloads stop working. */
+	expires_at: string;
 	remote_token_sites: IRemoteTokenSite[];
 	report: IForkReport;
 	/** Files in the source content prefix flagged as suspicious — only
 	 * populated when the deployment has a meta/content store-split
 	 * misconfiguration. Show as a warning. */
 	content_store_leaks?: string[];
-	/** The source owner's policy — display only. */
+	/** The source owner's policy — display only; the hub already applied it. */
 	fork_policy: IForkPolicy;
-	/** Prefixes under `source_content_prefix` the desktop must not mirror. */
-	content_exclude_prefixes: string[];
 	/** Tables to create empty locally for a schema-only database fork. */
 	db_table_schemas: IForkTableSchema[];
 }
@@ -207,8 +221,24 @@ export interface IForkBundleSummary {
 	total_object_count: number;
 }
 
+/** Every id of a local app, so the server can mint the uploaded app's ids itself. */
+export interface IUploadIdInventory {
+	app_id: string;
+	boards: string[];
+	nodes: string[];
+	pins: string[];
+	layers: string[];
+	events: string[];
+	pages: string[];
+	widgets: string[];
+	templates: string[];
+}
+
 export interface IBeginOnlineForkBody {
 	source_app_id?: string | null;
+	id_inventory?: IUploadIdInventory;
+	/** The local app's own lineage seeds: empty when it is no fork, null when unknown. */
+	fork_id_seeds?: string[] | null;
 	summary: IForkBundleSummary;
 	language?: string;
 }
@@ -218,9 +248,6 @@ export interface IBeginOnlineForkResponse {
 	project_limit_notice?: string | null;
 	new_app_id: string;
 	fork_session_id: string;
-	upload_path: string;
-	shared_credentials: unknown;
-	expiration?: string | null;
 }
 
 export interface IFinalizeOnlineForkBody {

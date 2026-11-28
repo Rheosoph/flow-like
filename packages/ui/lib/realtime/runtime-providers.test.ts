@@ -452,6 +452,38 @@ describe("shared provider lifecycle", () => {
 		expect(polls(fetcher)).toHaveLength(count + 1);
 	});
 
+	test("safety replays over a live provider back off while empty and start over on a wakeup", async () => {
+		let callbacks!: RealtimeProviderCallbacks;
+		const open = vi.fn<RealtimeProviderOpener>(async (_transport, events) => {
+			callbacks = events;
+			return { close() {} };
+		});
+		const fetcher = vi.fn<RealtimeFetch>(async (url) =>
+			String(url).endsWith("/connect") ? grant(3_600) : empty(),
+		);
+		const runtime = create(fetcher, open, longLease);
+		port(runtime, "first").subscribe();
+		await vi.advanceTimersByTimeAsync(2);
+		const nextGap = async () => {
+			const before = polls(fetcher).length;
+			let waited = 0;
+			while (polls(fetcher).length === before && waited < 600_000) {
+				await vi.advanceTimersByTimeAsync(1_000);
+				waited += 1_000;
+			}
+			return waited;
+		};
+		const gaps: number[] = [];
+		for (let i = 0; i < 6; i++) gaps.push(await nextGap());
+		expect(gaps).toEqual([30_000, 60_000, 120_000, 240_000, 300_000, 300_000]);
+
+		const count = polls(fetcher).length;
+		callbacks.wakeup({ protocol_version: 1, kind: "invalidate", nonce: "w" });
+		await vi.advanceTimersByTimeAsync(101);
+		expect(polls(fetcher)).toHaveLength(count + 1);
+		expect(await nextGap()).toBe(30_000);
+	});
+
 	test("coalesces wakeups without cancelling an in-flight replay and ignores duplicate nonces", async () => {
 		let callbacks!: RealtimeProviderCallbacks;
 		let finish!: (response: Response) => void;

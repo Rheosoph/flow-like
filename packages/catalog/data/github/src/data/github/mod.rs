@@ -1,6 +1,8 @@
+pub mod app_provider;
 pub mod branches;
 pub mod clone_repo;
 pub mod commits;
+pub mod contributors;
 pub mod create_issue;
 pub mod files;
 pub mod get_repo;
@@ -20,11 +22,13 @@ pub(crate) mod repository;
 pub mod search_code;
 pub mod search_issues;
 pub mod search_repos;
+pub mod security_alerts;
 pub mod workflows;
 
 // Re-export types for external use
 pub use branches::GitHubBranch;
 pub use commits::{GitHubCommit, GitHubCommitAuthor, GitHubCommitStats};
+pub use contributors::{GitHubContributorStats, GitHubContributorWeek};
 pub use files::GitHubFileContent;
 pub use get_user::GitHubUser;
 pub use issues::GitHubIssueComment;
@@ -35,4 +39,7 @@ pub use provider::GitHubProvider;
 pub use pull_requests::{GitHubPullRequestFile, GitHubPullRequestReview};
 pub use releases::{GitHubRelease, GitHubReleaseAsset};
 pub use search_code::GitHubCodeSearchResult;
+pub use security_alerts::{
+    GitHubCodeScanningAlert, GitHubDependabotAlert, GitHubSecretScanningAlert,
+};
 pub use workflows::{GitHubWorkflow, GitHubWorkflowRun};

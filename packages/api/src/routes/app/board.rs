@@ -24,6 +24,7 @@ pub mod render_flowscript;
 pub mod report_run;
 pub mod run_logs;
 pub mod scoring;
+pub mod sealed_commands;
 pub mod secrets;
 pub mod sink_rebind;
 pub mod summaries;
@@ -257,6 +258,36 @@ mod tests {
             item.push('\n');
         }
         items
+    }
+
+    /// A write that pins the board cache also persists what the first Page requests of the new
+    /// revision read (snapshot, prerun authority, contract facts). Without it each of them
+    /// hydrates the whole board on whichever cold instance it reaches.
+    #[test]
+    fn every_seeded_board_revision_prewarms_its_page_contract() {
+        let mut seeds = 0;
+        for path in source_files("src/routes/app/board")
+            .into_iter()
+            .chain(source_files("src/routes/app/page"))
+        {
+            let source = std::fs::read_to_string(&path).expect("readable source file");
+            let body = source
+                .split("\n#[cfg(test)]\nmod tests")
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            for item in items(&body) {
+                for (seed, _) in item.match_indices("seed_board_cache(") {
+                    seeds += 1;
+                    assert!(
+                        item[seed..].contains("prewarm_draft_revision("),
+                        "{} pins the board cache without prewarming the revision's Page contract",
+                        path.display()
+                    );
+                }
+            }
+        }
+        assert!(seeds >= 4, "found only {seeds} board cache seeds");
     }
 
     /// H6: the heartbeat detected a lapsed lease and only logged it. Without an `ensure_held()`

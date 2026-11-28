@@ -6,28 +6,20 @@ import {
 	BellIcon,
 	BellOffIcon,
 	LogOutIcon,
-	MoreHorizontalIcon,
 	PencilIcon,
 	PinIcon,
 	PinOffIcon,
 	StarIcon,
 	Trash2Icon,
+	UsersIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { useSetConversationMuted } from "../../hooks/use-inbox";
 import { useInboxBlocks } from "../../hooks/use-inbox-blocks";
 import { useSetConversationPinned } from "../../hooks/use-inbox-marks";
 import { cn } from "../../lib/utils";
 import type { IConversation } from "../../state/backend-state/inbox-state";
-import { Button } from "../ui/button";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuSeparator,
-	DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
 import { isSelfPrincipal } from "./crew-model";
 import { DeleteConversationDialog } from "./delete-conversation-dialog";
 import { LeaveRoomDialog } from "./leave-room-dialog";
@@ -37,6 +29,7 @@ import {
 	principalBlock,
 } from "./principal-block-action";
 import { RoomSettingsDialog } from "./room-settings-dialog";
+import { type MenuItems, type MenuKit, OptionsDropdown } from "./row-menu";
 
 /** Mute applies to chats with other people; a chat with only your bots never pushes. */
 export function canMuteConversation(conversation: IConversation): boolean {
@@ -56,32 +49,38 @@ function useFailedToast() {
 	};
 }
 
-/**
- * What you can do with a conversation without opening it: pin it to the top of your list, rename
- * a group and change its picture and, with `withMute`, mute it. `onShowStarred` adds your starred
- * messages of it.
- */
-export function ConversationMenu({
-	conversation,
-	defaultTitle,
-	withMute = false,
-	onShowStarred,
-	me,
-	onLeave,
-	blockTarget,
-	className,
-}: Readonly<{
+export interface ConversationMenuOptions {
 	conversation: IConversation;
 	/** What a group is called while it has no name. */
 	defaultTitle?: string;
 	withMute?: boolean;
 	onShowStarred?: () => void;
+	/** Adds the room's members and invitations, for headers too narrow for their own button. */
+	onShowMembers?: () => void;
 	me?: string | null;
 	/** Closes the conversation after leaving or deleting it. */
 	onLeave?: () => void;
 	blockTarget?: BlockTarget;
-	className?: string;
-}>) {
+}
+
+/**
+ * What you can do with a conversation without opening it: pin it to the top of your list, rename
+ * a group and change its picture and, with `withMute`, mute it. `onShowStarred` adds your starred
+ * messages of it. `items` renders into a dropdown or a context menu; `dialogs` must stay mounted.
+ */
+export function useConversationMenu({
+	conversation,
+	defaultTitle,
+	withMute = false,
+	onShowStarred,
+	onShowMembers,
+	me,
+	onLeave,
+	blockTarget,
+}: Readonly<ConversationMenuOptions>): {
+	items: MenuItems;
+	dialogs: ReactNode;
+} {
 	const { t } = useTranslation("bots");
 	const pin = useSetConversationPinned();
 	const mute = useSetConversationMuted();
@@ -101,106 +100,99 @@ export function ConversationMenu({
 		(member) =>
 			member.kind === "user" && isSelfPrincipal(member.principal_id, me),
 	);
-	const label = t("crew.conversationMenu.open", "Conversation options");
-	return (
+	const items = ({ Item, Separator }: MenuKit) => (
 		<>
-			<DropdownMenu>
-				<DropdownMenuTrigger asChild>
-					<Button
-						type="button"
-						variant="ghost"
-						size="icon"
-						className={cn("shrink-0 text-muted-foreground", className)}
-						aria-label={label}
-						title={label}
+			<Item
+				onSelect={() =>
+					pin.mutate(
+						{ conversationId: conversation.id, pinned: !pinned },
+						{ onError: failed },
+					)
+				}
+			>
+				{pinned ? <PinOffIcon aria-hidden /> : <PinIcon aria-hidden />}
+				{pinned
+					? t("crew.marks.unpinConversation", "Unpin from top")
+					: t("crew.marks.pinConversation", "Pin to top")}
+			</Item>
+			{withMute && canMuteConversation(conversation) && (
+				<Item
+					onSelect={() =>
+						mute.mutate(
+							{ conversationId: conversation.id, muted: !muted },
+							{ onError: failed },
+						)
+					}
+				>
+					{muted ? <BellIcon aria-hidden /> : <BellOffIcon aria-hidden />}
+					{muted
+						? t("crew.mute.unmute", "Unmute notifications")
+						: t("crew.mute.mute", "Mute notifications")}
+				</Item>
+			)}
+			{onShowMembers && (
+				<Item onSelect={onShowMembers}>
+					<UsersIcon aria-hidden />
+					{t("roomMembers.open", "Members and invitations")}
+				</Item>
+			)}
+			{onShowStarred && (
+				<Item onSelect={onShowStarred}>
+					<StarIcon aria-hidden />
+					{t("crew.marks.starredTitle", "Starred messages")}
+				</Item>
+			)}
+			{group && (
+				<Item onSelect={() => setEditing(true)}>
+					<PencilIcon aria-hidden />
+					{t("crew.roomSettings.open", "Edit name and picture")}
+				</Item>
+			)}
+			{blockTarget && (
+				<Item
+					disabled={!blocks.data || Boolean(inheritedBlock)}
+					onSelect={() => setBlocking(true)}
+				>
+					<BanIcon aria-hidden />
+					{inheritedBlock
+						? t("crew.blocks.ownerBlocked", "Owner blocked")
+						: existingBlock
+							? t("crew.blocks.unblock", "Unblock")
+							: blockTarget.kind === "bot"
+								? t("crew.blocks.blockBot", "Block bot")
+								: t("crew.blocks.blockUser", "Block user")}
+				</Item>
+			)}
+			{group && self && (
+				<>
+					<Separator />
+					<Item
+						className="text-destructive focus:text-destructive"
+						onSelect={() => setLeaving(true)}
 					>
-						<MoreHorizontalIcon aria-hidden />
-					</Button>
-				</DropdownMenuTrigger>
-				<DropdownMenuContent align="end">
-					<DropdownMenuItem
-						onSelect={() =>
-							pin.mutate(
-								{ conversationId: conversation.id, pinned: !pinned },
-								{ onError: failed },
-							)
-						}
+						<LogOutIcon aria-hidden />
+						{t("crew.leaveRoom.action", "Leave room")}
+					</Item>
+				</>
+			)}
+			{self && (
+				<>
+					{!group && <Separator />}
+					<Item
+						className="text-destructive focus:text-destructive"
+						onSelect={() => setDeleting(true)}
 					>
-						{pinned ? <PinOffIcon aria-hidden /> : <PinIcon aria-hidden />}
-						{pinned
-							? t("crew.marks.unpinConversation", "Unpin from top")
-							: t("crew.marks.pinConversation", "Pin to top")}
-					</DropdownMenuItem>
-					{withMute && canMuteConversation(conversation) && (
-						<DropdownMenuItem
-							onSelect={() =>
-								mute.mutate(
-									{ conversationId: conversation.id, muted: !muted },
-									{ onError: failed },
-								)
-							}
-						>
-							{muted ? <BellIcon aria-hidden /> : <BellOffIcon aria-hidden />}
-							{muted
-								? t("crew.mute.unmute", "Unmute notifications")
-								: t("crew.mute.mute", "Mute notifications")}
-						</DropdownMenuItem>
-					)}
-					{onShowStarred && (
-						<DropdownMenuItem onSelect={onShowStarred}>
-							<StarIcon aria-hidden />
-							{t("crew.marks.starredTitle", "Starred messages")}
-						</DropdownMenuItem>
-					)}
-					{group && (
-						<DropdownMenuItem onSelect={() => setEditing(true)}>
-							<PencilIcon aria-hidden />
-							{t("crew.roomSettings.open", "Edit name and picture")}
-						</DropdownMenuItem>
-					)}
-					{blockTarget && (
-						<DropdownMenuItem
-							disabled={!blocks.data || Boolean(inheritedBlock)}
-							onSelect={() => setBlocking(true)}
-						>
-							<BanIcon aria-hidden />
-							{inheritedBlock
-								? t("crew.blocks.ownerBlocked", "Owner blocked")
-								: existingBlock
-									? t("crew.blocks.unblock", "Unblock")
-									: blockTarget.kind === "bot"
-										? t("crew.blocks.blockBot", "Block bot")
-										: t("crew.blocks.blockUser", "Block user")}
-						</DropdownMenuItem>
-					)}
-					{group && self && (
-						<>
-							<DropdownMenuSeparator />
-							<DropdownMenuItem
-								className="text-destructive focus:text-destructive"
-								onSelect={() => setLeaving(true)}
-							>
-								<LogOutIcon aria-hidden />
-								{t("crew.leaveRoom.action", "Leave room")}
-							</DropdownMenuItem>
-						</>
-					)}
-					{self && (
-						<>
-							{!group && <DropdownMenuSeparator />}
-							<DropdownMenuItem
-								className="text-destructive focus:text-destructive"
-								onSelect={() => setDeleting(true)}
-							>
-								<Trash2Icon aria-hidden />
-								{group
-									? t("crew.deleteConversation.groupAction", "Leave and delete")
-									: t("crew.deleteConversation.action", "Delete conversation")}
-							</DropdownMenuItem>
-						</>
-					)}
-				</DropdownMenuContent>
-			</DropdownMenu>
+						<Trash2Icon aria-hidden />
+						{group
+							? t("crew.deleteConversation.groupAction", "Leave and delete")
+							: t("crew.deleteConversation.action", "Delete conversation")}
+					</Item>
+				</>
+			)}
+		</>
+	);
+	const dialogs = (
+		<>
 			{blocking && blockTarget && (
 				<PrincipalBlockDialog
 					principal={blockTarget}
@@ -234,6 +226,21 @@ export function ConversationMenu({
 					onDelete={onLeave}
 				/>
 			)}
+		</>
+	);
+	return { items, dialogs };
+}
+
+/** The conversation's options behind a "…" button. */
+export function ConversationMenu({
+	className,
+	...options
+}: Readonly<ConversationMenuOptions & { className?: string }>) {
+	const { items, dialogs } = useConversationMenu(options);
+	return (
+		<>
+			<OptionsDropdown items={items} className={className} />
+			{dialogs}
 		</>
 	);
 }

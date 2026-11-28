@@ -12,6 +12,22 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// Default fuel limit: 100 billion instructions.
 pub const DEFAULT_FUEL_LIMIT: u64 = 100_000_000_000;
 
+/// Fuel granted per second of the declared timeout.
+///
+/// Calibration (wasmtime, fuel is one unit per instruction): an Apple M4 Max
+/// executes 1.2e10 to 2.4e10 fuel/s on real guest code (1.4e10/s on a pure
+/// loop); cloud Graviton is estimated at 4e9 to 6e9/s (not measured). 2e10 sits
+/// at the fast end of that range, so on any real host the wall-clock timeout
+/// stays the binding bound and fuel is a deterministic backstop that cannot be
+/// outrun by a slower machine, only by a runaway guest.
+pub const FUEL_PER_SECOND: u64 = 20_000_000_000;
+
+/// Fuel budget for a timeout: `FUEL_PER_SECOND` per whole second, never below
+/// [`DEFAULT_FUEL_LIMIT`] (so short timeouts keep today's budget).
+pub fn fuel_for_timeout(timeout: Duration) -> u64 {
+    DEFAULT_FUEL_LIMIT.max(FUEL_PER_SECOND.saturating_mul(timeout.as_secs()))
+}
+
 /// Resource limits for WASM execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmLimits {
@@ -209,6 +225,17 @@ impl WasmCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fuel_follows_the_timeout_but_never_drops_below_the_default() {
+        assert_eq!(fuel_for_timeout(Duration::ZERO), DEFAULT_FUEL_LIMIT);
+        assert_eq!(fuel_for_timeout(Duration::from_secs(5)), DEFAULT_FUEL_LIMIT);
+        assert_eq!(
+            fuel_for_timeout(Duration::from_secs(300)),
+            6_000_000_000_000
+        );
+        assert_eq!(fuel_for_timeout(Duration::MAX), u64::MAX);
+    }
 
     #[test]
     fn named_capabilities_preserve_compound_flags() {

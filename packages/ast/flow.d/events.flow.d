@@ -12,6 +12,13 @@ declare namespace chat {
     // === Events/Chat ===
 
     /**
+     * Removes the chat's main widget and returns the space to the messages.
+     * @node events_chat_clear_main_widget @alias eventsChatClearMainWidget
+     * @impure has side effects / drives control flow
+     */
+    function clearMainWidget(): void;
+
+    /**
      * Pulls down image, audio, video, and document attachments referenced in the latest chat message
      * @node ai_gen_llm_history_extract_attachments @alias aiGenLlmHistoryExtractAttachments
      * @param history — Chat history whose final message may contain media parts
@@ -73,9 +80,10 @@ declare namespace chat {
      * Pushes a response to the chat
      * @node events_chat_push_response @alias eventsChatPushResponse
      * @param response — Chat Response
+     * @param newMessage (optional) — Start a new message. Later chat pushes belong to this message.
      * @impure has side effects / drives control flow
      */
-    function pushResponse({ response: Struct }): void;
+    function pushResponse({ response: Struct, newMessage?: bool }): void;
 
     /**
      * Pushes a single LLM usage stat to the chat for transparent model usage display
@@ -146,6 +154,16 @@ declare namespace chat {
      * @impure has side effects / drives control flow
      */
     function removeStep({ stepId: int }): void;
+
+    /**
+     * Shows or replaces the chat's main widget beside the messages. Connect an Instantiate Widget reference; element nodes can update the displayed widget.
+     * @node events_chat_set_main_widget @alias eventsChatSetMainWidget
+     * @param elementRef — Widget instance to display (from Instantiate Widget)
+     * @param title (optional) — Title shown above the main widget
+     * @param display (optional) — Open beside the chat, collapse the pane, or maximize it
+     * @impure has side effects / drives control flow
+     */
+    function setMainWidget({ elementRef: Struct, title?: string, display?: string }): void;
 
     // === Events/Chat/Attachments ===
 

@@ -10,6 +10,7 @@ use crate::{
         LocalBotBundle, OpenedSecrets, SecretValue, UpdateBotRequest,
     },
     store::{Json, KeyError, LocalBotStore, STEP_MICROS, now_micros, timestamp},
+    tasks,
     validation::{
         self, BotSettings, MAX_APPS_PER_BOT, MAX_LOCAL_BOTS, MAX_SECRETS_PER_BOT, NAME_MAX_CHARS,
     },
@@ -17,6 +18,7 @@ use crate::{
 use chrono::DateTime;
 use flow_like_types::{
     bot::{BotCapability, BotLocation, BotModelPolicy, BotSystemKind},
+    bot_calendar::CalendarWake,
     bot_restrictions::BotRestrictions,
     create_id,
     data_classification::{DataClassification, DataSensitivity},
@@ -28,7 +30,7 @@ use zeroize::Zeroizing;
 const BOT_COLUMNS: &str = "id, system, preset_id, name, description, instructions, appearance, \
                            model, embedding_model, classification, pii, capabilities, profile_id, \
                            workspace_app_id, created_at, updated_at, stt_model, tts_model, \
-                           image_model, vision_model, subtask_model";
+                           image_model, vision_model, subtask_model, calendar_wake";
 
 const OWNER_ROLE: &str = "owner";
 
@@ -75,6 +77,10 @@ impl StoredBot {
                 },
                 capabilities: validation::stored_capabilities(&capabilities.0),
                 profile_id: row.get("profile_id")?,
+                calendar_wake: row
+                    .get::<_, Option<Json<CalendarWake>>>("calendar_wake")?
+                    .map(|wake| wake.0)
+                    .unwrap_or_default(),
             },
             workspace_app_id: row.get("workspace_app_id")?,
             created_at: row.get("created_at")?,
@@ -112,6 +118,7 @@ impl StoredBot {
             classification: settings.classification,
             capabilities: settings.capabilities,
             profile_id: settings.profile_id,
+            calendar_wake: settings.calendar_wake,
             location: BotLocation::Desktop,
             device_id: None,
             workspace_app_id: self.workspace_app_id,
@@ -128,6 +135,7 @@ struct SettingsColumns {
     model: String,
     classification: Option<&'static str>,
     capabilities: String,
+    calendar_wake: Option<String>,
 }
 
 impl SettingsColumns {
@@ -142,6 +150,9 @@ impl SettingsColumns {
             capabilities: serde_json::to_string(&validation::capability_ids(
                 &settings.capabilities,
             ))?,
+            calendar_wake: (settings.calendar_wake != CalendarWake::default())
+                .then(|| serde_json::to_string(&settings.calendar_wake))
+                .transpose()?,
         })
     }
 }
@@ -150,7 +161,7 @@ pub(crate) fn bot_not_found(bot_id: &str) -> Error {
     Error::not_found(format!("Bot '{bot_id}' not found"))
 }
 
-fn stored_bot(db: &Connection, bot_id: &str) -> Result<Option<StoredBot>> {
+pub(crate) fn stored_bot(db: &Connection, bot_id: &str) -> Result<Option<StoredBot>> {
     Ok(db
         .query_row(
             &format!("SELECT {BOT_COLUMNS} FROM bots WHERE id = ?1"),
@@ -228,9 +239,10 @@ fn insert_bot(db: &Connection, bot: NewBot<'_>, now: i64) -> Result<()> {
     db.execute(
         "INSERT INTO bots (id, system, preset_id, name, description, instructions, appearance,
              model, embedding_model, classification, pii, capabilities, profile_id, created_at,
-             updated_at, stt_model, tts_model, image_model, vision_model, subtask_model)
+             updated_at, stt_model, tts_model, image_model, vision_model, subtask_model,
+             calendar_wake)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15, ?16, ?17,
-             ?18, ?19)",
+             ?18, ?19, ?20)",
         params![
             bot.id,
             bot.system.map(BotSystemKind::as_str),
@@ -251,6 +263,7 @@ fn insert_bot(db: &Connection, bot: NewBot<'_>, now: i64) -> Result<()> {
             settings.image_model,
             settings.vision_model,
             settings.subtask_model,
+            columns.calendar_wake,
         ],
     )?;
     Ok(())
@@ -264,7 +277,8 @@ fn save_settings(db: &Connection, bot_id: &str, settings: &BotSettings, now: i64
         "UPDATE bots SET name = ?2, description = ?3, instructions = ?4, appearance = ?5,
              model = ?6, embedding_model = ?7, classification = ?8, pii = ?9, capabilities = ?10,
              profile_id = ?11, updated_at = MAX(?12, updated_at + ?13), stt_model = ?14,
-             tts_model = ?15, image_model = ?16, vision_model = ?17, subtask_model = ?18
+             tts_model = ?15, image_model = ?16, vision_model = ?17, subtask_model = ?18,
+             calendar_wake = ?19
          WHERE id = ?1",
         params![
             bot_id,
@@ -285,6 +299,7 @@ fn save_settings(db: &Connection, bot_id: &str, settings: &BotSettings, now: i64
             settings.image_model,
             settings.vision_model,
             settings.subtask_model,
+            columns.calendar_wake,
         ],
     )?;
     Ok(())
@@ -341,15 +356,35 @@ pub(crate) fn mark_built_in_used(db: &Connection, bot_id: &str) -> Result<bool> 
     Ok(changed > 0)
 }
 
-/// Assistant and Flux stay; the person's edits of them can be undone instead.
-fn refuse_built_in(bot: &StoredBot) -> Result<()> {
-    match bot.system {
-        Some(kind) => Err(Error::new(
-            codes::BOT_SYSTEM_UNDELETABLE,
-            format!("The built-in bot '{}' can't be deleted", kind.as_str()),
-        )),
-        None => Ok(()),
+/// Whether a delete may take this computer's Assistant or Flux.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuiltInDeletion {
+    /// They stay: this computer's copy may be the person's only one.
+    Refuse,
+    /// The built-ins the signed-in account holds its own of. This computer's copy of one of
+    /// those is a second one and may go; the next list makes a fresh row, which gives way to
+    /// the account's.
+    AccountHolds(Vec<BotSystemKind>),
+}
+
+/// Assistant and Flux stay unless the account holds its own; the person's edits of them can be
+/// undone instead.
+fn refuse_built_in(bot: &StoredBot, built_ins: &BuiltInDeletion) -> Result<()> {
+    let Some(kind) = bot.system else {
+        return Ok(());
+    };
+    if let BuiltInDeletion::AccountHolds(kinds) = built_ins
+        && kinds.contains(&kind)
+    {
+        return Ok(());
     }
+    Err(Error::new(
+        codes::BOT_SYSTEM_UNDELETABLE,
+        format!(
+            "The built-in bot '{}' can't be deleted while it is the only one",
+            kind.as_str()
+        ),
+    ))
 }
 
 /// A change of the bot's apps or secrets moves its `updated_at` like a settings change.
@@ -537,7 +572,7 @@ fn store_secret(
 
 /// Why no key seals a new secret. While secrets are stored, a missing key is never replaced:
 /// a second key would leave them sealed under the lost one for good.
-fn sealing_refused(error: KeyError, stored: i64) -> Error {
+pub(crate) fn sealing_refused(error: KeyError, stored: i64) -> Error {
     let message = match error {
         KeyError::Missing(reason) if stored > 0 => format!(
             "{reason}, so the secrets saved before ({stored} on this device) can't be opened; delete the old secrets first"
@@ -704,19 +739,27 @@ impl LocalBotStore {
             if next == current.settings {
                 return Ok(current.into_bot());
             }
-            save_settings(tx, bot_id, &next, now_micros())?;
+            let now = now_micros();
+            save_settings(tx, bot_id, &next, now)?;
+            if next.calendar_wake != current.settings.calendar_wake {
+                tasks::resolve_events(tx, bot_id, &next.calendar_wake, now)?;
+            }
             changes.bot(bot_id);
             Ok(required_bot(tx, bot_id)?.into_bot())
         })
     }
 
     /// Deletes the bot with its apps, secrets and direct conversations; it leaves its groups.
-    /// Assistant and Flux can't be deleted. Returns the workspace app it had, which only the
-    /// host can delete: hosts call [`Self::delete_bot_with_workspace`].
-    pub(crate) fn delete_bot(&self, bot_id: &str) -> Result<Option<String>> {
+    /// Assistant and Flux go only as `built_ins` allows. Returns the workspace app it had,
+    /// which only the host can delete: hosts call [`Self::delete_bot_with_workspace`].
+    pub(crate) fn delete_bot(
+        &self,
+        bot_id: &str,
+        built_ins: &BuiltInDeletion,
+    ) -> Result<Option<String>> {
         self.write(|tx, changes| {
             let bot = required_bot(tx, bot_id)?;
-            refuse_built_in(&bot)?;
+            refuse_built_in(&bot, built_ins)?;
             inbox::retire_bot(tx, bot_id, changes)?;
             tx.execute("DELETE FROM bots WHERE id = ?1", [bot_id])?;
             changes.bot(bot_id);
@@ -727,10 +770,14 @@ impl LocalBotStore {
 
     /// Fails like [`Self::delete_bot`] would, without deleting; otherwise the bot's workspace
     /// app, if it has one.
-    pub(crate) fn deletable_bot(&self, bot_id: &str) -> Result<Option<String>> {
+    pub(crate) fn deletable_bot(
+        &self,
+        bot_id: &str,
+        built_ins: &BuiltInDeletion,
+    ) -> Result<Option<String>> {
         self.read(|db| {
             let bot = required_bot(db, bot_id)?;
-            refuse_built_in(&bot)?;
+            refuse_built_in(&bot, built_ins)?;
             Ok(bot.workspace_app_id)
         })
     }
@@ -883,7 +930,7 @@ impl LocalBotStore {
             .transpose()?;
         let stored: i64 = self.read(|db| {
             require_bot(db, bot_id)?;
-            Ok(db.query_row("SELECT COUNT(*) FROM bot_secrets", [], |row| row.get(0))?)
+            crate::connectors::sealed_values(db)
         })?;
         let ciphertext = {
             let key = self

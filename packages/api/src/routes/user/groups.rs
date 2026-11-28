@@ -1,5 +1,7 @@
 use crate::{
-    entity::{app_group, app_group_member, membership, role},
+    entity::{
+        app_group, app_group_member, membership, role, sea_orm_active_enums::AppGroupMemberStatus,
+    },
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::{RolePermissions, has_role_permission},
@@ -16,7 +18,7 @@ use sea_orm::{
     get,
     path = "/user/groups",
     tag = "user",
-    description = "List suites (app groups) that any of the caller's apps own or belong to.",
+    description = "List suites (app groups) that any of the caller's apps own or actively belong to. An invited app that has not accepted is shown without name, description and icon unless it is listed in the store or the caller is a member of it.",
     responses(
         (status = 200, description = "Groups across the user's apps", body = [GroupInfo]),
         (status = 401, description = "Unauthorized")
@@ -38,7 +40,7 @@ pub async fn get_user_groups(
         .column(membership::Column::AppId)
         .column(role::Column::Permissions)
         .join(JoinType::InnerJoin, membership::Relation::Role.def())
-        .filter(membership::Column::UserId.eq(user_id))
+        .filter(membership::Column::UserId.eq(&user_id))
         .into_tuple::<(String, i64)>()
         .all(&state.db)
         .await?
@@ -56,10 +58,12 @@ pub async fn get_user_groups(
         return Ok(Json(vec![]));
     }
 
+    // An invitation is not membership: it does not open the suite's members to the invitee.
     let member_group_ids = app_group_member::Entity::find()
         .select_only()
         .column(app_group_member::Column::GroupId)
         .filter(app_group_member::Column::AppId.is_in(app_ids.clone()))
+        .filter(app_group_member::Column::Status.eq(AppGroupMemberStatus::Active))
         .into_query();
 
     let groups = app_group::Entity::find()
@@ -80,5 +84,7 @@ pub async fn get_user_groups(
         .all(&state.db)
         .await?;
 
-    Ok(Json(assemble_groups(&state, groups, members).await?))
+    Ok(Json(
+        assemble_groups(&state, Some(&user_id), groups, members).await?,
+    ))
 }

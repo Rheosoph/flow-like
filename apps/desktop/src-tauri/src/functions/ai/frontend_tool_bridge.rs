@@ -403,15 +403,15 @@ pub struct FrontendToolApproval {
     pub title: String,
     pub description: String,
     pub session_key: String,
-    /// Why a call the owner always allows asks again: [`ASKS_AGAIN_WEB_CONTENT`]. The client then
-    /// skips its standing grants and session memory and offers no "Don't ask again". Named as
-    /// the web chat names it.
+    /// Why a call the owner always allows asks again: [`ASKS_AGAIN_WEB_CONTENT`]. Auto mode does
+    /// not waive it. The client skips its standing grants, session memory and "Don't ask again",
+    /// except the owner's grant for the site of a plain read. Named as the web chat names it.
     #[serde(rename = "asks_again", skip_serializing_if = "Option::is_none")]
     pub asks_again: Option<&'static str>,
 }
 
-/// The run's round read web content first, so the owner's standing grant for a call that reaches
-/// a web destination does not cover it.
+/// The run's round read web content first, so only the owner's grant for the site of a plain read
+/// covers a call that reaches a web destination.
 pub const ASKS_AGAIN_WEB_CONTENT: &str = "web_content";
 
 /// Reply value the frontend pushes for a tool request. A bare value without an `approved`
@@ -1053,7 +1053,8 @@ impl FrontendToolBridge {
                 flow_like_types::bot_message::SECRET_REQUEST_TOOL,
                 flow_like_types::bot_message::ROOM_INVITE_TOOL,
             ]
-            .contains(&tool_name);
+            .contains(&tool_name)
+            && !flow_like::flow::copilot::tool_grants::grant_set_aside(tool_name, arguments);
         matches!(approval.kind.as_str(), "mutating" | "execute")
             && !waived
             && !(tool_name == "database_tool"
@@ -1190,13 +1191,15 @@ impl FrontendToolBridge {
                     Ok(result) => {
                         // Clients refresh their views after durable native mutations. Delivery is
                         // best effort and never part of the operation's success boundary.
-                        crate::utils::emit_to_ui(
-                            &self.app_handle,
-                            "flowpilot://native-tool-completed",
-                            json!({
-                                "toolName": tool_name, "runId": self.context.as_ref().and_then(|context| context.run_id.as_deref()),
-                            }),
-                        );
+                        if super::native_tool_bridge::may_change_views(&tool_name) {
+                            crate::utils::emit_to_ui(
+                                &self.app_handle,
+                                "flowpilot://native-tool-completed",
+                                json!({
+                                    "toolName": tool_name, "runId": self.context.as_ref().and_then(|context| context.run_id.as_deref()),
+                                }),
+                            );
+                        }
                         result
                     }
                     Err(error)

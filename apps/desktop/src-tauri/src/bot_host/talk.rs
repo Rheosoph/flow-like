@@ -11,7 +11,10 @@ use async_trait::async_trait;
 use flow_like::flow::copilot::bot_talk::{
     BotTalkHost, CrewMember, HeadlessPermission, NestedBotTurn, PendingAnswer,
 };
-use flow_like_types::anyhow;
+use flow_like_types::{
+    anyhow,
+    bot_team::{OrgLookup, TeamBrief},
+};
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,11 +27,21 @@ pub(crate) struct AccountTalkHost {
     gate: Option<Arc<ApprovalGate>>,
     callee: Mutex<Option<String>>,
     reply_id: Mutex<Option<String>>,
+    /// The team brief the last roster read carried, with the id of the bot it was read for.
+    brief: Mutex<Option<(String, Option<TeamBrief>)>>,
 }
 
 #[derive(Deserialize)]
 struct Roster {
     members: Vec<CrewMember>,
+    #[serde(default)]
+    team: Option<TeamBrief>,
+}
+
+#[derive(Deserialize)]
+struct OrgAnswer {
+    #[serde(default)]
+    lookup: Option<OrgLookup>,
 }
 
 #[derive(Deserialize)]
@@ -70,7 +83,17 @@ impl AccountTalkHost {
             gate,
             callee: Mutex::default(),
             reply_id: Mutex::default(),
+            brief: Mutex::default(),
         }
+    }
+
+    async fn fetch_roster(&self, caller: &CrewMember) -> flow_like_types::Result<Roster> {
+        let path = format!(
+            "bots/{}/talk/roster?run_id={}",
+            caller.id,
+            urlencoding::encode(&self.run_id)
+        );
+        self.call(Method::GET, path, None).await
     }
 
     async fn settle_card_answer(
@@ -112,13 +135,46 @@ fn put<T>(cell: &Mutex<Option<T>>, value: T) {
     *cell.lock().unwrap_or_else(|p| p.into_inner()) = Some(value);
 }
 
+/// The brief a roster read cached for `bot_id`, taken out of `cell`. One cached for another bot is
+/// dropped: a roster read to resolve a callee leaves its caller's brief behind.
+fn take_brief(
+    cell: &Mutex<Option<(String, Option<TeamBrief>)>>,
+    bot_id: &str,
+) -> Option<Option<TeamBrief>> {
+    match cell.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        Some((cached_for, brief)) if cached_for == bot_id => Some(brief),
+        _ => None,
+    }
+}
+
 #[async_trait]
 impl BotTalkHost for AccountTalkHost {
     async fn roster(&self, caller: &CrewMember) -> flow_like_types::Result<Vec<CrewMember>> {
-        let roster: Roster = self
-            .call(Method::GET, format!("bots/{}/talk/roster", caller.id), None)
-            .await?;
+        let roster = self.fetch_roster(caller).await?;
+        put(&self.brief, (caller.id.clone(), roster.team));
         Ok(roster.members)
+    }
+
+    async fn team_brief(&self, caller: &CrewMember) -> flow_like_types::Result<Option<TeamBrief>> {
+        match take_brief(&self.brief, &caller.id) {
+            Some(brief) => Ok(brief),
+            None => Ok(self.fetch_roster(caller).await?.team),
+        }
+    }
+
+    async fn org_lookup(
+        &self,
+        caller: &CrewMember,
+        query: &str,
+    ) -> flow_like_types::Result<Option<OrgLookup>> {
+        let path = format!(
+            "bots/{}/talk/org?run_id={}&q={}",
+            caller.id,
+            urlencoding::encode(&self.run_id),
+            urlencoding::encode(query)
+        );
+        let answer: OrgAnswer = self.call(Method::GET, path, None).await?;
+        Ok(answer.lookup)
     }
 
     async fn has_grant(&self, from: &CrewMember, to: &CrewMember) -> flow_like_types::Result<bool> {
@@ -208,5 +264,33 @@ impl BotTalkHost for AccountTalkHost {
             Status::Pending => Err(PendingAnswer(answer.text).into()),
             Status::Failed => Err(anyhow!("{}", answer.text)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn brief(bot_name: &str) -> TeamBrief {
+        TeamBrief {
+            bot_name: bot_name.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_cached_brief_serves_only_the_bot_it_was_read_for_and_only_once() {
+        let cell = Mutex::default();
+        put(&cell, ("patch".to_string(), Some(brief("Patch"))));
+        assert_eq!(take_brief(&cell, "sentinel"), None);
+        assert_eq!(take_brief(&cell, "patch"), None);
+
+        put(&cell, ("patch".to_string(), Some(brief("Patch"))));
+        let taken = take_brief(&cell, "patch").flatten().unwrap();
+        assert_eq!(taken.bot_name, "Patch");
+        assert_eq!(take_brief(&cell, "patch"), None);
+
+        put(&cell, ("scout".to_string(), None));
+        assert_eq!(take_brief(&cell, "scout"), Some(None));
     }
 }

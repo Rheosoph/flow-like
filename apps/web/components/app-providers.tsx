@@ -5,12 +5,14 @@ import {
 	QueryClient,
 	QueryClientProvider,
 } from "@flow-like/flow-like-ui";
+import { GuideProvider } from "@flow-like/flow-like-ui/components/guide/guide-provider";
 import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
 import { TooltipProvider } from "@flow-like/flow-like-ui/components/ui/tooltip";
 import { GlobalUpgradeDialog } from "@flow-like/flow-like-ui/components/upgrade/upgrade-dialog";
 import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
+import { applyCatalogQueryDefaults } from "@flow-like/flow-like-ui/lib/catalog-query";
 import { runIDBCleanup } from "@flow-like/flow-like-ui/lib/idb-cleanup";
 import {
 	cleanupLegacyQueryCacheBlob,
@@ -81,6 +83,7 @@ const queryClient = new QueryClient({
 		},
 	},
 });
+applyCatalogQueryDefaults(queryClient);
 
 function NetworkAwareProvider({ children }: { children: React.ReactNode }) {
 	const isOnline = useNetworkStatus();
@@ -140,6 +143,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
 																<GlobalChatOverlay />
 																<BotDen />
 																<GlobalUpgradeDialog />
+																<GuideProvider />
 															</TelemetryProvider>
 														</SpotlightWrapper>
 													</ExecutionEngineProviderComponent>

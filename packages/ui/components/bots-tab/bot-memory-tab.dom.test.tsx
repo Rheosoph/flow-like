@@ -12,6 +12,7 @@ import { BotHistoryPanel } from "./bot-history-panel";
 const mocks = vi.hoisted(() => ({
 	listFacts: vi.fn(),
 	forgetFact: vi.fn(),
+	listEntities: vi.fn(),
 	segments: vi.fn(),
 	jump: vi.fn(),
 	topic: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("sonner", () => ({ toast: mocks.toast }));
 vi.mock("../../state/global-chat/bot-memory-facts", () => ({
 	listBotFacts: mocks.listFacts,
 	forgetBotFact: mocks.forgetFact,
+	listBotEntities: mocks.listEntities,
 }));
 vi.mock("../../state/global-chat/bot-inbox", () => ({
 	botHasInboxHistory: mocks.hasHistory,
@@ -149,6 +151,7 @@ beforeEach(() => {
 		if (typeof mock === "function" && "mockReset" in mock) mock.mockReset();
 	}
 	mocks.hasHistory.mockReturnValue(true);
+	mocks.listEntities.mockResolvedValue([]);
 	host = document.createElement("div");
 	document.body.append(host);
 	root = createRoot(host);

@@ -1,4 +1,5 @@
 use crate::{
+    bot_host::cap::DEFAULT_OTHERS_DAILY_TURNS,
     entity::{bot, json_types::StringList},
     routes::profile::deserialize_nullable,
 };
@@ -6,6 +7,7 @@ use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     Value,
     bot::{BotCapability, BotExecutionMode, BotLocation, BotModelPolicy, BotSystemKind},
+    bot_calendar::CalendarWake,
     data_classification::{DataClassification, DataSensitivity},
 };
 use sea_orm::ActiveValue::Set;
@@ -66,6 +68,16 @@ pub struct Bot {
     pub execution_mode: BotExecutionMode,
     /// The managed device a `device` bot runs on.
     pub device_id: Option<String>,
+    /// Whether people who share an app with you find this bot and can invite it into their rooms;
+    /// you accept each invitation. Off by default.
+    pub others_can_invite: bool,
+    /// Turns all people other than you may start on this bot in a day, in rooms, team threads and
+    /// chats together; each of them gets at most 20. 100 by default.
+    pub others_daily_turns: u32,
+    /// Which calendar events wake the bot and how long before they start; off until you or the
+    /// bot switch it on.
+    #[schema(value_type = Object, example = json!({ "enabled": false, "offsets_minutes": [15] }))]
+    pub calendar_wake: CalendarWake,
     /// The `local_id` the bot was moved from a device with (`POST /bots/import`); null for bots
     /// made in the account.
     #[schema(example = "bot_tz4a98xxat96iws9zmbrgj3a")]
@@ -130,6 +142,12 @@ pub struct CreateBotRequest {
     pub execution_mode: Option<BotExecutionMode>,
     /// One of your active managed devices; required for `device` bots.
     pub device_id: Option<String>,
+    /// Let people who share an app with you find and invite the bot; off when omitted.
+    #[serde(default)]
+    pub others_can_invite: Option<bool>,
+    /// Turns all other people may start on the bot in a day, 1 to 5000; 100 when omitted.
+    #[serde(default)]
+    pub others_daily_turns: Option<u32>,
 }
 
 /// Changes to a bot. Omitted fields stay as they are; `null` clears a nullable field.
@@ -188,6 +206,11 @@ pub struct UpdateBotRequest {
     #[serde(default, deserialize_with = "deserialize_nullable")]
     #[schema(value_type = Option<String>)]
     pub device_id: Option<Option<String>>,
+    /// Whether people who share an app with you find the bot and can invite it; you accept each
+    /// invitation.
+    pub others_can_invite: Option<bool>,
+    /// Turns all other people may start on the bot in a day, 1 to 5000.
+    pub others_daily_turns: Option<u32>,
 }
 
 /// Everything an owner can change on a bot, validated and normalized.
@@ -210,6 +233,8 @@ pub(crate) struct BotSettings {
     pub location: BotLocation,
     pub execution_mode: BotExecutionMode,
     pub device_id: Option<String>,
+    pub others_can_invite: bool,
+    pub others_daily_turns: u32,
 }
 
 impl BotSettings {
@@ -241,6 +266,11 @@ impl BotSettings {
             location: BotLocation::parse(&row.location).unwrap_or_default(),
             execution_mode: stored_execution_mode(row),
             device_id: row.device_id.clone(),
+            others_can_invite: row.others_can_invite.unwrap_or(false),
+            others_daily_turns: row
+                .others_daily_turns
+                .and_then(|turns| u32::try_from(turns).ok())
+                .unwrap_or(DEFAULT_OTHERS_DAILY_TURNS),
         }
     }
 
@@ -271,6 +301,14 @@ impl BotSettings {
             ("location", self.location != next.location),
             ("execution_mode", self.execution_mode != next.execution_mode),
             ("device_id", self.device_id != next.device_id),
+            (
+                "others_can_invite",
+                self.others_can_invite != next.others_can_invite,
+            ),
+            (
+                "others_daily_turns",
+                self.others_daily_turns != next.others_daily_turns,
+            ),
         ]
         .into_iter()
         .filter_map(|(field, changed)| changed.then_some(field))
@@ -299,6 +337,9 @@ impl BotSettings {
         row.location = Set(location_column(self.location));
         row.execution_mode = Set(Some(self.execution_mode.as_str().to_ascii_uppercase()));
         row.device_id = Set(self.device_id.clone());
+        row.others_can_invite = Set(Some(self.others_can_invite));
+        row.others_daily_turns = Set((self.others_daily_turns != DEFAULT_OTHERS_DAILY_TURNS)
+            .then(|| i32::try_from(self.others_daily_turns).unwrap_or(i32::MAX)));
         Ok(())
     }
 }
@@ -306,6 +347,7 @@ impl BotSettings {
 impl From<bot::Model> for Bot {
     fn from(row: bot::Model) -> Self {
         let settings = BotSettings::from_row(&row);
+        let calendar_wake = crate::bot_host::calendar_tasks::wake_of(&row);
         Self {
             system: row.system_key.as_deref().and_then(BotSystemKind::parse),
             preset_id: row.preset_id,
@@ -326,6 +368,9 @@ impl From<bot::Model> for Bot {
             location: settings.location,
             execution_mode: settings.execution_mode,
             device_id: settings.device_id,
+            others_can_invite: settings.others_can_invite,
+            others_daily_turns: settings.others_daily_turns,
+            calendar_wake,
             import_key: row.import_key,
             id: row.id,
             owner_id: row.owner_id,

@@ -46,7 +46,7 @@ once_cell = "1.21.3"
 futures.workspace = true
 
 # Heavy execution dependencies — only compiled with the `execute` feature.
-flow-like-wasm = { workspace = true, optional = true }
+flow-like-wasm = { workspace = true, optional = true, features = ["execution", "component-model"] }
 # Workspace wasmtime versions — deduplicates with packages/wasm.
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }

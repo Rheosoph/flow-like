@@ -9,6 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use flow_like_types::Result;
+use flow_like_types::bot_calendar::{CalendarWake, UpdateCalendarWake};
 use flow_like_types::bot_task::{
     BotTask, CreateBotTask, MIN_CRON_INTERVAL_SECS, TaskKind, TaskSchedule, UpdateBotTask,
 };
@@ -41,6 +42,28 @@ pub trait Scheduler: Send + Sync {
     async fn update(&self, _task_id: &str, _request: UpdateBotTask) -> Result<Option<BotTask>> {
         Err(flow_like_types::anyhow!(
             "Changing a scheduled task is not available on this host"
+        ))
+    }
+
+    /// Whether the turn this scheduler is bound to runs in the owner's own chat with the bot,
+    /// where its calendar may be read and changed. A scheduler bound to no turn (a host's
+    /// calendar sync) answers `true`.
+    async fn in_owner_chat(&self) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// The bot's calendar wake-up settings.
+    async fn calendar_wake(&self) -> Result<CalendarWake> {
+        Err(flow_like_types::anyhow!(
+            "Calendar wake-ups are not available on this host"
+        ))
+    }
+
+    /// Saves a change to the bot's calendar wake-up settings, re-plans the wake-ups of all its
+    /// event tasks, and returns the settings now in effect.
+    async fn set_calendar_wake(&self, _update: UpdateCalendarWake) -> Result<CalendarWake> {
+        Err(flow_like_types::anyhow!(
+            "Calendar wake-ups are not available on this host"
         ))
     }
 }
@@ -128,7 +151,7 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: LIST_TASKS,
-            description: "List your scheduled tasks with their next run time, soonest first. A task with a `conversation` fires in that group or chat; the others fire in your owner's chat.",
+            description: "List your scheduled tasks with their next run time, soonest first. A task with a `conversation` fires in that group or chat; the others fire in your owner's chat. Calendar events are not tasks: `calendar_list` shows them.",
             capability: Some(CAPABILITY),
             module: "schedule",
             approval: Approval::None,
@@ -159,7 +182,7 @@ pub fn specs() -> Vec<ToolSpec> {
     ]
 }
 
-fn scheduler(env: &dyn ToolEnv) -> ToolResult<Arc<dyn Scheduler>> {
+pub(crate) fn scheduler(env: &dyn ToolEnv) -> ToolResult<Arc<dyn Scheduler>> {
     env.scheduler().ok_or_else(|| {
         ToolError::new(
             code::FAILED,
@@ -220,6 +243,8 @@ pub fn request_from(args: ScheduleTaskArgs) -> ToolResult<CreateBotTask> {
         title: args.title,
         enabled: None,
         monitoring: args.monitoring,
+        place: None,
+        event: None,
     })
 }
 
@@ -276,6 +301,8 @@ pub fn update_from(args: UpdateTaskArgs) -> ToolResult<(String, UpdateBotTask)> 
         title: args.title,
         enabled: args.enabled,
         monitoring: args.monitoring,
+        place: None,
+        event: None,
     };
     if request == UpdateBotTask::default() {
         return Err(ToolError::invalid(
@@ -286,7 +313,7 @@ pub fn update_from(args: UpdateTaskArgs) -> ToolResult<(String, UpdateBotTask)> 
 }
 
 fn task_json(task: &BotTask) -> serde_json::Value {
-    json!({
+    let mut value = json!({
         "id": task.id,
         "title": task.title,
         "monitoring": task.monitoring,
@@ -299,7 +326,32 @@ fn task_json(task: &BotTask) -> serde_json::Value {
         "last_run_at": task.last_run_at,
         "enabled": task.enabled,
         "created_by": task.created_by,
-    })
+    });
+    if let Some(object) = value.as_object_mut() {
+        if let Some(place) = &task.place {
+            object.insert("place".into(), json!(place));
+        }
+        if let Some(event) = &task.event {
+            object.insert("event".into(), json!(event));
+        }
+    }
+    value
+}
+
+/// Refuses a change to a calendar event through the task tools; the calendar tools keep events.
+async fn refuse_event(scheduler: &dyn Scheduler, task_id: &str, instead: &str) -> ToolResult<()> {
+    let is_event = scheduler
+        .list()
+        .await
+        .map_err(|error| ToolError::new(code::FAILED, error.to_string()))?
+        .iter()
+        .any(|task| task.id == task_id && task.kind == TaskKind::Event);
+    if is_event {
+        return Err(ToolError::invalid(format!(
+            "'{task_id}' is a calendar event, not a task; use {instead}"
+        )));
+    }
+    Ok(())
 }
 
 pub async fn schedule_task(env: &dyn ToolEnv, args: ScheduleTaskArgs) -> ToolResult<ToolOutput> {
@@ -317,10 +369,13 @@ pub async fn schedule_task(env: &dyn ToolEnv, args: ScheduleTaskArgs) -> ToolRes
 }
 
 pub async fn list_tasks(env: &dyn ToolEnv, _args: ListTasksArgs) -> ToolResult<ToolOutput> {
-    let tasks = scheduler(env)?
+    let tasks: Vec<BotTask> = scheduler(env)?
         .list()
         .await
-        .map_err(|error| ToolError::new(code::FAILED, error.to_string()))?;
+        .map_err(|error| ToolError::new(code::FAILED, error.to_string()))?
+        .into_iter()
+        .filter(|task| task.kind != TaskKind::Event)
+        .collect();
     Ok(ToolOutput::new(json!({
         "count": tasks.len(),
         "tasks": tasks.iter().map(task_json).collect::<Vec<_>>(),
@@ -332,7 +387,9 @@ pub async fn cancel_task(env: &dyn ToolEnv, args: CancelTaskArgs) -> ToolResult<
     if task_id.is_empty() {
         return Err(ToolError::invalid("'task_id' is empty"));
     }
-    let cancelled = scheduler(env)?
+    let scheduler = scheduler(env)?;
+    refuse_event(scheduler.as_ref(), task_id, "calendar_delete").await?;
+    let cancelled = scheduler
         .cancel(task_id)
         .await
         .map_err(|error| ToolError::new(code::FAILED, error.to_string()))?;
@@ -348,7 +405,9 @@ pub async fn cancel_task(env: &dyn ToolEnv, args: CancelTaskArgs) -> ToolResult<
 
 pub async fn update_task(env: &dyn ToolEnv, args: UpdateTaskArgs) -> ToolResult<ToolOutput> {
     let (task_id, request) = update_from(args)?;
-    let task = scheduler(env)?
+    let scheduler = scheduler(env)?;
+    refuse_event(scheduler.as_ref(), &task_id, "calendar_update").await?;
+    let task = scheduler
         .update(&task_id, request)
         .await
         .map_err(|error| ToolError::new(code::FAILED, error.to_string()))?
@@ -398,6 +457,8 @@ mod tests {
                 created_by: TaskCreator::Bot,
                 created_at: Utc::now().to_rfc3339(),
                 conversation: None,
+                place: request.place.clone(),
+                event: request.event.clone(),
             };
             self.tasks.lock().unwrap().push(task.clone());
             Ok(task)
@@ -577,6 +638,59 @@ mod tests {
         assert_eq!(changed.status, crate::Status::Ok, "{:?}", changed.error);
         assert_eq!(changed.result["task"]["instruction"], "b");
         assert_eq!(changed.result["task"]["enabled"], false);
+    }
+
+    #[tokio::test]
+    async fn calendar_events_are_kept_by_the_calendar_tools_not_the_task_tools() {
+        let scheduler = Arc::new(FakeScheduler::default());
+        let env = env_with(scheduler.clone()).await;
+        call(
+            &env,
+            SCHEDULE_TASK,
+            json!({ "instruction": "a", "in_minutes": 5 }),
+        )
+        .await;
+        scheduler
+            .create(CreateBotTask {
+                kind: Some(TaskKind::Event),
+                title: Some("Dentist".into()),
+                event: Some(flow_like_types::bot_calendar::TaskEvent {
+                    starts_at: "2030-01-01T10:00:00Z".into(),
+                    ends_at: None,
+                    all_day: false,
+                    location: None,
+                    wake: None,
+                    wake_offsets: Vec::new(),
+                    external: None,
+                    link: None,
+                }),
+                ..CreateBotTask::default()
+            })
+            .await
+            .unwrap();
+        let listed = call(&env, LIST_TASKS, json!({})).await;
+        assert_eq!(listed.result["count"], 1);
+        assert_eq!(listed.result["tasks"][0]["id"], "t1");
+        let changed = call(
+            &env,
+            UPDATE_TASK,
+            json!({ "task_id": "t2", "enabled": false }),
+        )
+        .await;
+        let error = changed.error.expect("refused");
+        assert_eq!(error.code, code::INVALID_ARGS);
+        assert!(error.message.contains("calendar_update"));
+        let cancelled = call(&env, CANCEL_TASK, json!({ "task_id": "t2" })).await;
+        assert!(
+            cancelled
+                .error
+                .expect("refused")
+                .message
+                .contains("calendar_delete")
+        );
+        assert!(scheduler.updated.lock().unwrap().is_empty());
+        let event = task_json(&scheduler.tasks.lock().unwrap()[1]);
+        assert_eq!(event["event"]["starts_at"], "2030-01-01T10:00:00Z");
     }
 
     #[tokio::test]

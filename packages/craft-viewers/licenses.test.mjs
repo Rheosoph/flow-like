@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	cpSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -14,10 +15,12 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import {
-	assertNoBrandArtwork,
 	archiveGitSource,
+	assertNoBrandArtwork,
 	bundleLicenses,
+	chunkSourceArchive,
 	parseDependencyTree,
+	renderLicenseIndex,
 	selectLicense,
 	selectNoticeOverride,
 	verifyUnmodifiedSource,
@@ -128,6 +131,7 @@ test("license choices preserve required additional terms and choose permissive a
 	assert.equal(selectLicense("Apache-2.0 OR GPL-2.0-only"), "Apache-2.0");
 	assert.equal(selectLicense("MIT OR Apache-2.0"), "MIT");
 	assert.equal(selectLicense("MPL-2.0"), "MPL-2.0");
+	assert.equal(selectLicense("CC-BY-4.0"), "CC-BY-4.0");
 	assert.equal(selectLicense("(MIT OR Apache-2.0) AND IJG"), "MIT AND IJG");
 	assert.equal(
 		selectLicense("(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0"),
@@ -187,22 +191,28 @@ test("local proc-macro dependencies retain their source directory", () => {
 	}
 });
 
-test("dependency parsing rejects unrecognized lines and conflicting package identities", () => {
+test("dependency parsing retains source variants and rejects conflicting metadata for one identity", () => {
 	assert.throws(
 		() => parseDependencyTree("unexpected Cargo output"),
 		/Cannot identify/,
 	);
-	assert.throws(
-		() =>
-			parseDependencyTree(
-				"fixture v1.0.0 (/one)\tMIT\t\nfixture v1.0.0 (/two)\tMIT\t",
-			),
-		/Multiple sources|conflict/i,
+	assert.equal(
+		parseDependencyTree(
+			"fixture v1.0.0 (/one)\tMIT\t\nfixture v1.0.0 (/two)\tApache-2.0\t",
+		).length,
+		2,
 	);
 	assert.throws(
 		() =>
 			parseDependencyTree(
 				"fixture v1.0.0\tMIT\t\nfixture v1.0.0\tApache-2.0\t",
+			),
+		/conflict|metadata/i,
+	);
+	assert.throws(
+		() =>
+			parseDependencyTree(
+				"fixture v1.0.0 (/same)\tMIT\thttps://one\nfixture v1.0.0 (/same)\tMIT\thttps://two",
 			),
 		/conflict|metadata/i,
 	);
@@ -236,7 +246,7 @@ test("MPL source verification rejects changed, removed, added files and wrong ar
 });
 
 test(
-	"bundle publishes exact MPL source with accessible, escaped notices",
+	"bundle publishes exact MPL source and links to complete notice files",
 	{ skip: process.platform === "win32" },
 	(t) => {
 		const fixture = bundleFixture(t);
@@ -248,6 +258,9 @@ test(
 		assert.equal(pkg.checksum, fixture.hash);
 		const source = join(fixture.output, "licenses", pkg.sourceArchive);
 		assert.deepEqual(readFileSync(source), readFileSync(fixture.archive));
+		assert.equal(pkg.sourceArchiveSha256, fixture.hash);
+		assert.equal(pkg.sourceArchiveByteLength, readFileSync(source).length);
+		assert.equal(pkg.sourceArchiveParts, undefined);
 		assert.ok(
 			pkg.notices.some((path) => path.endsWith("upstream/symphonia/LICENSE")),
 		);
@@ -259,14 +272,172 @@ test(
 		assert.ok(html.includes(`href="${pkg.sourceArchive}"`));
 		assert.match(html, /Editor &lt;test&gt;/);
 		assert.doesNotMatch(html, /<script\b/i);
-		assert.match(html, /&lt;script&gt;/);
-		assert.match(html, /&lt;SCRIPT &gt;/);
-		assert.match(html, /&lt;ScRiPt\/x&gt;/);
-		assert.match(html, /Mozilla Public License Version 2\.0/);
+		assert.doesNotMatch(html, /<pre>/);
+		for (const notice of pkg.notices) {
+			assert.ok(html.includes(`href="${notice}"`));
+		}
+		const notice = pkg.notices.find((path) => path.endsWith("/LICENSE.txt"));
+		assert.deepEqual(
+			readFileSync(join(fixture.output, "licenses", notice)),
+			readFileSync(join(fixture.base, "LICENSE")),
+		);
+		assert.match(
+			readFileSync(
+				join(
+					fixture.output,
+					"licenses",
+					pkg.notices.find((path) => path.endsWith("/symphonia/LICENSE")),
+				),
+				"utf8",
+			),
+			/Mozilla Public License Version 2\.0/,
+		);
 		assert.equal(
 			JSON.parse(readFileSync(join(fixture.output, "licenses/manifest.json")))
 				.packages.length,
 			2,
+		);
+	},
+);
+
+test("large dependency catalogs keep notices and source archives accessible in a compact index", () => {
+	const packages = Array.from({ length: 400 }, (_, index) => ({
+		name: `library-${index}`,
+		version: "1.0.0",
+		license: "MIT",
+		selectedLicense: "MIT",
+		source: "git+https://example.com/source#abc",
+		notices: Array.from(
+			{ length: 20 },
+			(_, notice) => `dependencies/library-${index}/notice-${notice}.txt`,
+		),
+		...(index === 0
+			? {
+					sourceArchive: "sources/exact-source.tar.gz",
+					obligations: "Keep <copyright> & attribution.",
+				}
+			: {}),
+	}));
+	const html = renderLicenseIndex(
+		{
+			target: "wasm32-unknown-unknown",
+			upstreamFiles: ["LICENSE-MIT"],
+			packages,
+		},
+		{
+			label: "Editor <test>",
+			repository: "https://example.com/editor.git",
+			revision: "a".repeat(40),
+		},
+	);
+	assert.ok(Buffer.byteLength(html) < 2 * 1024 * 1024);
+	assert.match(html, /Keep &lt;copyright&gt; &amp; attribution\./);
+	assert.match(html, /download href="sources\/exact-source.tar.gz"/);
+	assert.ok(html.includes('href="LICENSE-MIT"'));
+	for (const pkg of packages) {
+		for (const path of pkg.notices) assert.ok(html.includes(`href="${path}"`));
+	}
+	assert.doesNotMatch(html, /<pre>|<script\b/i);
+});
+
+test(
+	"oversized source archives split losslessly and the published commands reconstruct and verify them",
+	{ skip: process.platform === "win32" },
+	(t) => {
+		const directory = mkdtempSync(join(tmpdir(), "craft-source-parts-"));
+		t.after(() => rmSync(directory, { recursive: true, force: true }));
+		const archive = "sources/source's archive.tar.gz";
+		const bytes = Buffer.alloc(25 * 1024 * 1024 + 17);
+		for (let offset = 0; offset < bytes.length; offset += 1024 * 1024)
+			bytes.fill(
+				offset / (1024 * 1024),
+				offset,
+				Math.min(offset + 1024 * 1024, bytes.length),
+			);
+		put(join(directory, archive), bytes);
+		const metadata = chunkSourceArchive(directory, archive);
+		assert.equal(existsSync(join(directory, archive)), false);
+		assert.equal(metadata.sourceArchiveByteLength, bytes.length);
+		assert.equal(metadata.sourceArchiveSha256, checksum(bytes));
+		assert.equal(metadata.sourceArchiveParts.length, 4);
+		const parts = metadata.sourceArchiveParts.map((part) => {
+			const data = readFileSync(join(directory, part.path));
+			assert.equal(data.length, part.byteLength);
+			assert.ok(data.length <= 8 * 1024 * 1024);
+			assert.equal(checksum(data), part.sha256);
+			return data;
+		});
+		assert.deepEqual(Buffer.concat(parts), bytes);
+		const html = renderLicenseIndex(
+			{
+				target: "wasm32-unknown-unknown",
+				upstreamFiles: [],
+				packages: [
+					{
+						name: "source",
+						version: "1.0.0",
+						license: "MPL-2.0",
+						selectedLicense: "MPL-2.0",
+						source: "git+https://example.com/source#abc",
+						notices: [],
+						sourceArchive: archive,
+						...metadata,
+					},
+				],
+			},
+			{ repository: "https://example.com/editor", revision: "a".repeat(40) },
+		);
+		assert.ok(Buffer.byteLength(html) < 25 * 1024 * 1024);
+		assert.ok(
+			!html.includes(
+				`href="${archive.split("/").map(encodeURIComponent).join("/")}"`,
+			),
+		);
+		for (const part of metadata.sourceArchiveParts)
+			assert.ok(
+				html.includes(
+					`download href="${part.path.split("/").map(encodeURIComponent).join("/")}"`,
+				),
+			);
+		const encoded = html.match(/<pre>([\s\S]*?)<\/pre>/)?.[1];
+		assert.ok(encoded);
+		const entities = {
+			"&amp;": "&",
+			"&lt;": "<",
+			"&gt;": ">",
+			"&quot;": '"',
+			"&#39;": "'",
+		};
+		const command = encoded.replace(
+			/&(?:amp|lt|gt|quot|#39);/g,
+			(entity) => entities[entity],
+		);
+		const downloaded = join(directory, "downloaded");
+		mkdirSync(downloaded);
+		for (const part of metadata.sourceArchiveParts)
+			cpSync(
+				join(directory, part.path),
+				join(downloaded, part.path.split("/").at(-1)),
+			);
+		assert.match(
+			execFileSync("sh", ["-c", command], {
+				cwd: downloaded,
+				encoding: "utf8",
+			}),
+			/: OK/,
+		);
+		assert.deepEqual(
+			readFileSync(join(downloaded, archive.split("/").at(-1))),
+			bytes,
+		);
+		put(
+			join(downloaded, metadata.sourceArchiveParts[0].path.split("/").at(-1)),
+			Buffer.from("corrupt"),
+		);
+		assert.throws(
+			() =>
+				execFileSync("sh", ["-c", command], { cwd: downloaded, stdio: "pipe" }),
+			/Command failed/,
 		);
 	},
 );
@@ -484,4 +655,215 @@ test("Git source archives include the pinned source and refuse modified checkout
 		() => archiveGitSource(source, revision, output),
 		/modified source/,
 	);
+});
+
+test("same-version Git revisions retain their own notices and exact MPL source archives", (t) => {
+	const fixture = bundleFixture(t, {
+		name: "shared-library",
+		version: "0.1.0",
+	});
+	const repository = join(fixture.directory, "git-original");
+	mkdirSync(repository);
+	const git = (...args) =>
+		execFileSync("git", args, { cwd: repository, encoding: "utf8" }).trim();
+	git("init", "--quiet");
+	put(
+		join(repository, "Cargo.toml"),
+		'[package]\nname = "shared-library"\nversion = "0.1.0"\nlicense = "MPL-2.0"\n',
+	);
+	const revisions = [];
+	const checkouts = [];
+	for (const label of ["First", "Second"]) {
+		put(join(repository, "LICENSE"), `${label} source license\n`);
+		put(
+			join(repository, "src/lib.rs"),
+			`pub const SOURCE: &str = "${label}";\n`,
+		);
+		git("add", ".");
+		git(
+			"-c",
+			"commit.gpgsign=false",
+			"-c",
+			"user.name=License test",
+			"-c",
+			"user.email=license-test@example.invalid",
+			"commit",
+			"--quiet",
+			"-m",
+			label,
+		);
+		const revision = git("rev-parse", "HEAD");
+		const checkout = join(
+			fixture.env.CARGO_HOME,
+			"git/checkouts/library",
+			revision.slice(0, 7),
+		);
+		cpSync(repository, checkout, { recursive: true });
+		revisions.push(revision);
+		checkouts.push(checkout);
+	}
+	const origin = "https://example.com/shared-library?branch=main";
+	put(
+		join(fixture.source, "Cargo.lock"),
+		revisions
+			.map(
+				(revision) =>
+					`[[package]]\nname = "shared-library"\nversion = "0.1.0"\nsource = "git+${origin}#${revision}"\n`,
+			)
+			.join("\n"),
+	);
+	const rows = revisions.map(
+		(revision) =>
+			`shared-library v0.1.0 (${origin}#${revision.slice(0, 7)})\tMPL-2.0\thttps://example.com/shared-library`,
+	);
+	fixture.env.CRAFT_TEST_DEPENDENCIES = `${rows.join("\n")}\n${rows[0]} (*)\n`;
+	const manifest = bundleLicenses(fixture.args);
+	assert.equal(manifest.packages.length, 2);
+	assert.equal(new Set(manifest.packages.map((pkg) => pkg.notices[0])).size, 2);
+	assert.equal(
+		new Set(manifest.packages.map((pkg) => pkg.sourceArchive)).size,
+		2,
+	);
+	for (const [index, revision] of revisions.entries()) {
+		const pkg = manifest.packages.find(
+			(pkg) => pkg.source === `git+${origin}#${revision}`,
+		);
+		const label = index === 0 ? "First" : "Second";
+		assert.equal(
+			readFileSync(join(fixture.output, "licenses", pkg.notices[0]), "utf8"),
+			`${label} source license\n`,
+		);
+		const archive = join(fixture.output, "licenses", pkg.sourceArchive);
+		const bytes = readFileSync(archive);
+		assert.equal(pkg.sourceArchiveSha256, checksum(bytes));
+		assert.equal(pkg.sourceArchiveByteLength, bytes.length);
+		assert.equal(pkg.sourceArchiveParts, undefined);
+		const paths = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" })
+			.trim()
+			.split("\n");
+		const lib = paths.find((path) => path.endsWith("src/lib.rs"));
+		assert.equal(
+			execFileSync("tar", ["-xOzf", archive, lib], { encoding: "utf8" }),
+			`pub const SOURCE: &str = "${label}";\n`,
+		);
+	}
+	put(join(checkouts[1], "src/lib.rs"), "changed source\n");
+	assert.throws(() => bundleLicenses(fixture.args), /modified source/);
+});
+
+test("validated local source overrides retain original Git provenance and their exact notices", (t) => {
+	const fixture = bundleFixture(t, {
+		name: "craft-audio",
+		version: "0.1.0",
+		license: "MIT",
+	});
+	const local = join(fixture.source, "host-dependencies/craft-audio");
+	put(
+		join(local, "Cargo.toml"),
+		'[package]\nname = "craft-audio"\nversion = "0.1.0"\nlicense = "MIT"\n',
+	);
+	put(join(local, "LICENSE-MIT"), "Pinned audio notice\n");
+	put(join(local, "src/lib.rs"), "// browser PCM changes\n");
+	const origin = `git+https://github.com/storytold/craft-libs?rev=${"b".repeat(40)}#${"b".repeat(40)}`;
+	fixture.env.CRAFT_TEST_DEPENDENCIES = `craft-audio v0.1.0 (${local})\tMIT\thttps://github.com/storytold/craft-libs\n`;
+	const args = {
+		...fixture.args,
+		sourceOverrides: [
+			{ name: "craft-audio", version: "0.1.0", source: origin, path: local },
+		],
+	};
+	const manifest = bundleLicenses(args);
+	const pkg = manifest.packages[0];
+	assert.equal(pkg.source, origin);
+	assert.equal(pkg.modified, true);
+	assert.equal(pkg.location, undefined);
+	assert.deepEqual(pkg.notices, [
+		"dependencies/craft-audio-0.1.0/LICENSE-MIT.txt",
+	]);
+	assert.equal(
+		readFileSync(join(fixture.output, "licenses", pkg.notices[0]), "utf8"),
+		"Pinned audio notice\n",
+	);
+	assert.match(
+		readFileSync(join(fixture.output, "licenses/index.html"), "utf8"),
+		/Locally modified/,
+	);
+	assert.throws(
+		() =>
+			bundleLicenses({
+				...args,
+				sourceOverrides: [...args.sourceOverrides, ...args.sourceOverrides],
+			}),
+		/Invalid validated source override/,
+	);
+	fixture.env.CRAFT_TEST_DEPENDENCIES =
+		fixture.env.CRAFT_TEST_DEPENDENCIES.replace("\tMIT\t", "\tMPL-2.0\t");
+	assert.throws(() => bundleLicenses(args), /exact modified\/path MPL source/);
+});
+
+test("crates from one Git checkout share a single copy of its notices", (t) => {
+	const fixture = bundleFixture(t, { name: "craft-a", version: "0.1.0" });
+	const repository = join(fixture.directory, "craft-libs");
+	const git = (...args) =>
+		execFileSync("git", args, { cwd: repository, encoding: "utf8" }).trim();
+	put(join(repository, "LICENSE-MIT"), "Workspace notice\n");
+	put(join(repository, "crates/b/NOTICE"), "Crate b notice\n");
+	put(join(repository, "crates/a/src/lib.rs"), "\n");
+	git("init", "--quiet");
+	git("add", ".");
+	git(
+		"-c",
+		"commit.gpgsign=false",
+		"-c",
+		"user.name=License test",
+		"-c",
+		"user.email=license-test@example.invalid",
+		"commit",
+		"--quiet",
+		"-m",
+		"workspace",
+	);
+	const revision = git("rev-parse", "HEAD");
+	cpSync(
+		repository,
+		join(
+			fixture.env.CARGO_HOME,
+			"git/checkouts/craft-libs-fixture",
+			revision.slice(0, 7),
+		),
+		{ recursive: true },
+	);
+	const origin = `https://github.com/example/craft-libs.git?rev=${revision}`;
+	put(
+		join(fixture.source, "Cargo.lock"),
+		["craft-a", "craft-b"]
+			.map(
+				(name) =>
+					`[[package]]\nname = "${name}"\nversion = "0.1.0"\nsource = "git+${origin}#${revision}"\n`,
+			)
+			.join("\n"),
+	);
+	fixture.env.CRAFT_TEST_DEPENDENCIES = ["craft-a", "craft-b"]
+		.map(
+			(name) =>
+				`${name} v0.1.0 (${origin}#${revision.slice(0, 7)})\tMIT OR Apache-2.0\thttps://github.com/example/craft-libs\n`,
+		)
+		.join("");
+	const manifest = bundleLicenses(fixture.args);
+	const shared = `dependencies/git/craft-libs-${revision.slice(0, 12)}`;
+	const [a, b] = manifest.packages;
+	assert.deepEqual(a.notices, [
+		`${shared}/LICENSE-MIT.txt`,
+		`${shared}/crates/b/NOTICE.txt`,
+	]);
+	assert.deepEqual(b.notices, a.notices);
+	assert.equal(
+		readFileSync(join(fixture.output, "licenses", a.notices[1]), "utf8"),
+		"Crate b notice\n",
+	);
+	for (const name of ["craft-a-0.1.0", "craft-b-0.1.0"])
+		assert.equal(
+			existsSync(join(fixture.output, "licenses/dependencies", name)),
+			false,
+		);
 });

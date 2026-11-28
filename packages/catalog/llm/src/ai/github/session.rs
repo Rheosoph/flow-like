@@ -188,6 +188,14 @@ impl NodeLogic for CopilotSessionBuilderNode {
             .await
             .unwrap_or_default();
 
+        super::ensure_no_local_mcp_servers(context.execution_environment(), &mcp_servers)?;
+        for agent in &custom_agents {
+            super::ensure_no_local_mcp_servers(
+                context.execution_environment(),
+                &agent.mcp_servers,
+            )?;
+        }
+
         let system_msg_config = if system_message.is_empty() {
             None
         } else {
@@ -318,6 +326,13 @@ impl NodeLogic for CopilotCreateSessionNode {
         context.log_message("Creating Copilot session...", LogLevel::Info);
 
         let sdk_config = if let Some(cfg) = config {
+            super::ensure_no_local_mcp_servers(context.execution_environment(), &cfg.mcp_servers)?;
+            for agent in &cfg.custom_agents {
+                super::ensure_no_local_mcp_servers(
+                    context.execution_environment(),
+                    &agent.mcp_servers,
+                )?;
+            }
             let mut session_config = SessionConfig {
                 model: cfg.model,
                 streaming: cfg.streaming,

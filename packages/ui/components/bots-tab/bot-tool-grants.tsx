@@ -38,7 +38,7 @@ function AutoApproveSwitch({
 				<p className="text-xs text-muted-foreground">
 					{t(
 						"panel.grants.auto.description",
-						"{{name}} acts without asking you first. Deleting data, changing settings and sending data to a site after reading the web still ask.",
+						"{{name}} acts without asking you first. Deleting data, changing settings and, after reading the web, sending data to a site or reading from one you haven't allowed still ask.",
 						{ name },
 					)}
 				</p>
@@ -60,7 +60,7 @@ export function BotToolGrants({
 	bot,
 	name,
 }: Readonly<{ bot: IBot; name: string }>) {
-	const { t } = useTranslation("bots");
+	const { t, i18n } = useTranslation("bots");
 	const grants = useBotToolGrants(bot.id);
 	const grantLabel = useGrantLabel(
 		grants.data?.map((grant) => grant.scope) ?? [],
@@ -116,7 +116,9 @@ export function BotToolGrants({
 												"panel.grants.expires",
 												"Lapses on {{date}} if unused",
 												{
-													date: new Date(grant.expires_at).toLocaleDateString(),
+													date: new Date(grant.expires_at).toLocaleDateString(
+														i18n.resolvedLanguage ?? i18n.language,
+													),
 												},
 											)}
 										</span>

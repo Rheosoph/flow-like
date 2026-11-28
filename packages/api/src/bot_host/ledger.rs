@@ -22,10 +22,10 @@ use flow_like_types::{
     bot::BotLocation,
     bot_turn::{
         BotTurn, ERROR_BATCHED, ERROR_BOT_DELETED, ERROR_HOST_LOST, ERROR_QUEUE_EXPIRED,
-        ERROR_SILENT, INTERACTIVE_GRACE_SECS, LEASE_SECS, MAX_ATTEMPTS, MAX_HOPS,
-        MAX_RUNNING_PER_OWNER, QUEUED_EXPIRY_SECS, STORED_CANCELLED, STORED_DESKTOP, STORED_DEVICE,
-        STORED_DONE, STORED_FAILED, STORED_QUEUED, STORED_RUNNING, STORED_SERVER, STORED_WAITING,
-        TurnAudience, TurnHostKind, TurnStatus, reply_message_id, turn_id,
+        ERROR_SILENT, INTERACTIVE_GRACE_SECS, LEASE_SECS, MAX_ATTEMPTS, MAX_RUNNING_PER_OWNER,
+        QUEUED_EXPIRY_SECS, STORED_CANCELLED, STORED_DESKTOP, STORED_DEVICE, STORED_DONE,
+        STORED_FAILED, STORED_QUEUED, STORED_RUNNING, STORED_SERVER, STORED_WAITING, TurnAudience,
+        TurnHostKind, TurnStatus, reply_message_id, turn_id,
     },
     inbox::{ConversationEncryption, ConversationKind, InboxEntryKind},
 };
@@ -77,13 +77,16 @@ pub(crate) fn host_kind_of(location: BotLocation) -> TurnHostKind {
 }
 
 /// Whether the message wakes the bot: only messages and spoken transcripts, not one the bot
-/// sent itself, not past
-/// [`MAX_HOPS`] bot turns, and in a group only when it names the bot or replies to it, or when a
-/// person wrote it and the bot reads along ([`BotRecipient::read_along`]). A person's reaction
-/// wakes only the bot whose message it reacts to, and in a group not one limited to mentions.
-/// Transcript deliveries set `read_along` only for bots with a decision model.
+/// sent itself, not past the hop limit ([`BotDelivery::hop_limit`]: more for a bot's room message
+/// that hands it the word), and in a group only when it names the bot or replies to it,
+/// or when a person wrote it and the bot reads along ([`BotRecipient::read_along`]). A person's
+/// reaction wakes only the bot whose message it reacts to, and in a group not one limited to
+/// mentions. Transcript deliveries set `read_along` only for bots with a decision model.
 pub(crate) fn queues_turn(delivery: &BotDelivery, recipient: &BotRecipient) -> bool {
-    if recipient.bot_id == delivery.sender_id || recipient.hops > MAX_HOPS {
+    if delivery.team_addressed
+        || recipient.bot_id == delivery.sender_id
+        || recipient.hops > delivery.hop_limit(recipient)
+    {
         return false;
     }
     match delivery.kind {
@@ -118,7 +121,54 @@ impl BotRecipient {
 pub(crate) struct Waking<'a> {
     pub recipient: &'a BotRecipient,
     pub requester_id: String,
+    /// The person whose message started the chain the turn belongs to: the requester of their
+    /// own message, the chain's origin for a bot's ([`BotDelivery::chain_origin`]).
+    pub origin_id: String,
+    /// The bot turns the chain's discussion may reach ([`BotDelivery::discussion_hops`]).
+    pub discussion_hops: Option<u32>,
     pub audience: TurnAudience,
+}
+
+/// What a message carries on from the chain of bot turns behind it.
+#[derive(Debug, Default)]
+pub(crate) struct Chain {
+    /// The person whose message started it.
+    pub origin: Option<String>,
+    /// The bot turns a person allowed its discussion to reach; `None`: the default budget.
+    pub discussion_hops: Option<u32>,
+}
+
+/// The chain behind a message `sender` wrote as a turn's reply, where `reply_to` names that
+/// turn's trigger: the turn's origin and discussion budget. A turn queued before origins were
+/// recorded gives its requester when a person woke it. Empty when no such turn exists.
+pub(crate) async fn chain_of<C: ConnectionTrait>(
+    db: &C,
+    sender: &str,
+    reply_to: Option<&str>,
+) -> Result<Chain, DbErr> {
+    let Some(trigger) = reply_to else {
+        return Ok(Chain::default());
+    };
+    let turn: Option<(Option<String>, Option<String>, i32, Option<i32>)> =
+        bot_turn::Entity::find_by_id(turn_id(sender, trigger))
+            .select_only()
+            .columns([
+                bot_turn::Column::OriginId,
+                bot_turn::Column::RequesterId,
+                bot_turn::Column::Hops,
+                bot_turn::Column::DiscussionHops,
+            ])
+            .into_tuple()
+            .one(db)
+            .await?;
+    Ok(
+        turn.map_or_else(Chain::default, |(origin, requester, hops, discussion)| {
+            Chain {
+                origin: origin.or(requester.filter(|_| hops == 0)),
+                discussion_hops: discussion.and_then(|hops| u32::try_from(hops).ok()),
+            }
+        }),
+    )
 }
 
 /// Whose request the message is: its sender, except that another bot of the owner in the owner's
@@ -147,8 +197,14 @@ async fn waking_of<'a, C: ConnectionTrait>(
 ) -> Result<Vec<Waking<'a>>, DbErr> {
     let mut waking = Vec::with_capacity(recipients.len());
     for recipient in recipients {
+        let requester_id = requester_of(db, delivery, &recipient.owner_id).await?;
         waking.push(Waking {
-            requester_id: requester_of(db, delivery, &recipient.owner_id).await?,
+            origin_id: delivery
+                .chain_origin
+                .clone()
+                .unwrap_or_else(|| requester_id.clone()),
+            discussion_hops: delivery.discussion_hops,
+            requester_id,
             audience: TurnAudience::of(delivery.conversation_kind),
             recipient,
         });
@@ -226,6 +282,10 @@ fn queued_row(
         error_code: Set(None),
         hops: Set(i32::try_from(recipient.hops).unwrap_or(i32::MAX)),
         requester_id: Set(Some(waking.requester_id.clone())),
+        origin_id: Set(Some(waking.origin_id.clone())),
+        discussion_hops: Set(waking
+            .discussion_hops
+            .map(|hops| i32::try_from(hops).unwrap_or(i32::MAX))),
         audience: Set(waking.audience.stored().to_string()),
         status_text: Set(None),
         unprompted: Set(recipient.unprompted().then_some(true)),
@@ -256,13 +316,16 @@ pub(crate) async fn enqueue_in<C: ConnectionTrait>(
     delivery: &BotDelivery,
     now: DateTime<FixedOffset>,
 ) -> Result<u64, ApiError> {
+    if delivery.team_addressed {
+        return Ok(0);
+    }
     let wait_routing = super::decision_wait::routing(db, delivery, now).await?;
     let mut waking: Vec<&BotRecipient> = delivery
         .recipients
         .iter()
         .filter(|recipient| {
             recipient.bot_id != delivery.sender_id
-                && recipient.hops <= MAX_HOPS
+                && recipient.hops <= delivery.hop_limit(recipient)
                 && wait_routing
                     .get(&recipient.bot_id)
                     .copied()
@@ -281,6 +344,7 @@ pub(crate) async fn enqueue_in<C: ConnectionTrait>(
     {
         waking.retain(|recipient| !on_server(recipient));
     }
+    let waking = super::team_gate::admit(db, delivery.conversation_kind, waking, now).await?;
     let waking = super::cap::admit(db, waking, now).await?;
     let waking = waking_of(db, delivery, waking).await?;
     let entry = waking.first().map(|first| {
@@ -339,6 +403,9 @@ pub(crate) fn turn_json(turn: &bot_turn::Model, batched: Vec<String>) -> BotTurn
         reply_message_id: turn.reply_message_id.clone(),
         error_code: turn.error_code.clone(),
         hops: u32::try_from(turn.hops).unwrap_or(0),
+        discussion_hops: turn
+            .discussion_hops
+            .and_then(|hops| u32::try_from(hops).ok()),
         owner_id: turn.owner_id.clone(),
         requester_id: turn.requester_id.clone(),
         requester_name: None,

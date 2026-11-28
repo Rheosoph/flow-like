@@ -1063,17 +1063,28 @@ pub(super) struct Storage {
     pub(super) ttl: Duration,
 }
 
+/// Whose request-files area a message's files go to.
+#[derive(Clone, Copy)]
+pub(super) enum FileOwner<'a> {
+    Sink(&'a event_sink::Model),
+    /// A bot's owner, by user id.
+    Subject(&'a str),
+}
+
 /// The run's request-files area in the Tmp store, owned like the sink's other runs.
 async fn storage(
     state: &AppState,
-    sink: &event_sink::Model,
+    owner: FileOwner<'_>,
     app_id: &str,
 ) -> Result<Storage, ApiError> {
     let master = state.master_credentials().await?;
     let store = master.to_store_type(StoreType::Tmp).await?;
-    let subject = crate::mail_ingress::sink_owner(state, sink)
-        .await?
-        .unwrap_or_else(|| format!("sink:{}", sink.id));
+    let subject = match owner {
+        FileOwner::Sink(sink) => crate::mail_ingress::sink_owner(state, sink)
+            .await?
+            .unwrap_or_else(|| format!("sink:{}", sink.id)),
+        FileOwner::Subject(subject) => subject.to_owned(),
+    };
     Ok(Storage {
         store,
         prefix: temporary_prefixes(&subject, app_id).0,
@@ -1087,12 +1098,12 @@ impl<'a> Fetcher<'a> {
     async fn prepare(
         state: &AppState,
         c: &'a Connection,
-        sink: &event_sink::Model,
+        owner: FileOwner<'_>,
         run: &'a str,
         deadline: Instant,
         needs_token: bool,
     ) -> Result<Self, &'static str> {
-        let storage = storage(state, sink, &c.app_id).await.map_err(|error| {
+        let storage = storage(state, owner, &c.app_id).await.map_err(|error| {
             tracing::warn!(connection_id = %c.id, %error, "Could not prepare storage for Teams files");
             STORE_FAILED
         })?;
@@ -1194,7 +1205,7 @@ fn not_downloaded(connection_id: &str, index: usize, (kind, host): &(&str, Strin
 pub(super) async fn collect(
     state: &AppState,
     c: &Connection,
-    sink: &event_sink::Model,
+    owner: FileOwner<'_>,
     run: &str,
     candidates: Vec<Candidate>,
     deadline: Instant,
@@ -1218,7 +1229,7 @@ pub(super) async fn collect(
     });
     let prepared = tokio::time::timeout_at(
         deadline,
-        Fetcher::prepare(state, c, sink, run, deadline, needs_token),
+        Fetcher::prepare(state, c, owner, run, deadline, needs_token),
     )
     .await
     .unwrap_or(Err(TIMED_OUT));
@@ -1254,7 +1265,7 @@ pub(super) async fn collect(
 pub(super) async fn resign(
     state: &AppState,
     c: &Connection,
-    sink: &event_sink::Model,
+    owner: FileOwner<'_>,
     refs: &[Value],
     current: &[FileEntry],
     deadline: Instant,
@@ -1262,7 +1273,7 @@ pub(super) async fn resign(
     if refs.is_empty() {
         return Vec::new();
     }
-    match tokio::time::timeout_at(deadline, storage(state, sink, &c.app_id)).await {
+    match tokio::time::timeout_at(deadline, storage(state, owner, &c.app_id)).await {
         Ok(Ok(storage)) => sign_stored(&c.id, &storage, refs, current, deadline).await,
         Ok(Err(error)) => {
             tracing::warn!(connection_id = %c.id, %error, "Could not prepare storage to re-sign earlier Teams files");

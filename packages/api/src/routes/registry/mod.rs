@@ -6,6 +6,7 @@ pub mod comments;
 pub mod download;
 pub mod hash_check;
 mod index;
+pub mod invitations;
 pub mod join_queue;
 pub mod metadata;
 pub mod prerun_check;
@@ -186,6 +187,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/package/{package_id}/users/{user_id}",
             patch(users::update_user_permission).delete(users::remove_user),
+        )
+        .route(
+            "/package/{package_id}/invitations",
+            get(invitations::list_package_invitations),
+        )
+        .route(
+            "/package/{package_id}/invitations/{invitation_id}",
+            delete(invitations::revoke_invitation),
         )
         .route(
             "/package/{package_id}/access",

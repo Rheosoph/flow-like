@@ -58,41 +58,48 @@ fn set_background_file_protection(path: &std::path::Path) -> std::io::Result<()>
 
 #[cfg(all(not(test), not(target_os = "android")))]
 fn cipher(hub: &str, create: bool) -> Result<XChaCha20Poly1305, String> {
-    let entry = keyring::Entry::new(SERVICE, blake3::hash(hub.as_bytes()).to_hex().as_str())
-        .map_err(|_| "Cannot open the system credential store")?;
-    let secret = match entry.get_secret() {
-        Ok(secret) => Zeroizing::new(secret),
-        Err(keyring::Error::NoEntry) if create => {
-            let secret = Zeroizing::new(XChaCha20Poly1305::generate_key(&mut OsRng).to_vec());
-            #[cfg(not(target_os = "ios"))]
-            entry
-                .set_secret(&secret)
-                .map_err(|_| "Cannot save the authentication encryption key")?;
-            #[cfg(target_os = "ios")]
-            {
-                use security_framework::{
-                    access_control::{ProtectionMode, SecAccessControl},
-                    passwords::{PasswordOptions, set_generic_password_options},
-                };
-                let account = blake3::hash(hub.as_bytes()).to_hex().to_string();
-                let mut options = PasswordOptions::new_generic_password(SERVICE, &account);
-                // Background execution can resume after the first device unlock. The key
-                // remains on this device and never enters an iCloud keychain backup.
-                let access = SecAccessControl::create_with_protection(
-                    Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly),
-                    0,
-                )
-                .map_err(|_| "Cannot configure background authentication storage")?;
-                options.set_access_control(access);
-                set_generic_password_options(&secret, options)
-                    .map_err(|_| "Cannot save the authentication encryption key")?;
-            }
-            secret
+    static KEYS: crate::keychain_cache::KeychainCache = crate::keychain_cache::KeychainCache::new();
+    let account = blake3::hash(hub.as_bytes()).to_hex();
+    let secret = KEYS.read(&account, || {
+        let entry = keyring::Entry::new(SERVICE, &account)
+            .map_err(|_| "Cannot open the system credential store")?;
+        match entry.get_secret() {
+            Ok(secret) => Ok(Some(Zeroizing::new(secret))),
+            Err(keyring::Error::NoEntry) if create => new_key(&account).map(Some),
+            Err(_) => Err("The system credential store is unavailable or locked".to_owned()),
         }
-        Err(_) => return Err("The system credential store is unavailable or locked".into()),
-    };
+    })?;
+    let secret = secret.ok_or("The system credential store is unavailable or locked")?;
     XChaCha20Poly1305::new_from_slice(&secret)
         .map_err(|_| "Invalid authentication encryption key".into())
+}
+
+#[cfg(all(not(test), not(target_os = "android")))]
+fn new_key(account: &str) -> Result<Zeroizing<Vec<u8>>, String> {
+    let secret = Zeroizing::new(XChaCha20Poly1305::generate_key(&mut OsRng).to_vec());
+    #[cfg(not(target_os = "ios"))]
+    keyring::Entry::new(SERVICE, account)
+        .and_then(|entry| entry.set_secret(&secret))
+        .map_err(|_| "Cannot save the authentication encryption key")?;
+    #[cfg(target_os = "ios")]
+    {
+        use security_framework::{
+            access_control::{ProtectionMode, SecAccessControl},
+            passwords::{PasswordOptions, set_generic_password_options},
+        };
+        let mut options = PasswordOptions::new_generic_password(SERVICE, account);
+        // Background execution can resume after the first device unlock. The key
+        // remains on this device and never enters an iCloud keychain backup.
+        let access = SecAccessControl::create_with_protection(
+            Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly),
+            0,
+        )
+        .map_err(|_| "Cannot configure background authentication storage")?;
+        options.set_access_control(access);
+        set_generic_password_options(&secret, options)
+            .map_err(|_| "Cannot save the authentication encryption key")?;
+    }
+    Ok(secret)
 }
 
 #[cfg(all(not(test), not(target_os = "android")))]

@@ -72,6 +72,10 @@ async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str, deleted: 
         image_model: Set(None),
         vision_model: Set(None),
         subtask_model: Set(None),
+        calendar_wake: Set(None),
+        calendar_synced_at: Set(None),
+        others_can_invite: Set(None),
+        others_daily_turns: Set(None),
     }
     .insert(db)
     .await

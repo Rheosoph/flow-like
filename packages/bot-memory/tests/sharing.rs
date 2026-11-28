@@ -87,6 +87,8 @@ async fn remember(session: &MemorySession, id: &str, role: Role, text: &str) -> 
             evidence_seq: None,
             kind: Some("knowledge".into()),
             subject: Some(id.to_string()),
+            object: None,
+            relation: None,
             valid_from: None,
             valid_to: None,
         },

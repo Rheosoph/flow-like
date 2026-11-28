@@ -20,6 +20,7 @@ use flow_like_bot_tools::{
 use flow_like_bot_tools_host::AppAccess;
 use flow_like_types::{
     Result, anyhow,
+    bot_calendar::{CalendarWake, UpdateCalendarWake},
     bot_skill::{BotSkill, CreateBotSkill, SkillSource, SkillStatus},
     bot_task::{BotTask, CreateBotTask, UpdateBotTask},
 };
@@ -71,7 +72,8 @@ impl OwnerNotifier for HubNotifier {
     }
 }
 
-pub struct HubScheduler(pub BotRoutes);
+/// The bot's tasks on the hub, for the turn `BotRoutes` names; the second field is the bot's owner.
+pub struct HubScheduler(pub BotRoutes, pub String);
 
 #[async_trait]
 impl Scheduler for HubScheduler {
@@ -84,6 +86,8 @@ impl Scheduler for HubScheduler {
             "instruction": request.instruction,
             "title": request.title,
             "monitoring": request.monitoring,
+            "place": request.place,
+            "event": request.event,
         });
         let created = self
             .0
@@ -126,6 +130,52 @@ impl Scheduler for HubScheduler {
         serde_json::from_value(updated)
             .map(Some)
             .map_err(|error| anyhow!("The hub sent an unusable task: {error}"))
+    }
+
+    async fn in_owner_chat(&self) -> Result<bool> {
+        let Some(conversation_id) = &self.0.conversation_id else {
+            return Ok(false);
+        };
+        let conversation = self
+            .0
+            .hub
+            .read(
+                &format!("inbox/conversations/{conversation_id}"),
+                Vec::new(),
+            )
+            .await
+            .map_err(|failure| {
+                anyhow!("Reading conversation '{conversation_id}' failed: {failure}")
+            })?;
+        Ok(flow_like_bot_host::memory::hub_owner_chat(
+            &conversation,
+            &self.0.bot_id,
+            &self.1,
+        ))
+    }
+
+    async fn calendar_wake(&self) -> Result<CalendarWake> {
+        let wake = self
+            .0
+            .hub
+            .read(&self.0.path("calendar"), Vec::new())
+            .await
+            .map_err(|failure| anyhow!("Reading the calendar settings failed: {failure}"))?;
+        serde_json::from_value(wake)
+            .map_err(|error| anyhow!("The hub sent unusable calendar settings: {error}"))
+    }
+
+    async fn set_calendar_wake(&self, update: UpdateCalendarWake) -> Result<CalendarWake> {
+        let body = serde_json::to_value(&update)
+            .map_err(|error| anyhow!("The calendar change could not be sent: {error}"))?;
+        let saved = self
+            .0
+            .hub
+            .put(&self.0.path("calendar"), Vec::new(), body)
+            .await
+            .map_err(|failure| anyhow!("Changing the calendar settings failed: {failure}"))?;
+        serde_json::from_value(saved)
+            .map_err(|error| anyhow!("The hub sent unusable calendar settings: {error}"))
     }
 
     async fn cancel(&self, task_id: &str) -> Result<bool> {
@@ -618,6 +668,7 @@ impl flow_like_bot_tools::RoomInvites for HubRooms {
     async fn invite(
         &self,
         person: &flow_like_bot_tools::InviteTarget,
+        reason: &str,
     ) -> Result<flow_like_bot_tools::InviteOutcome> {
         let room = self
             .0
@@ -628,7 +679,11 @@ impl flow_like_bot_tools::RoomInvites for HubRooms {
         match self
             .0
             .hub
-            .write(&path, Vec::new(), json!({ "person": person.value() }))
+            .write(
+                &path,
+                Vec::new(),
+                json!({ "person": person.value(), "reason": reason }),
+            )
             .await
         {
             Ok(reply) => flow_like_bot_tools::rooms::hub_reply(&reply),
@@ -1032,7 +1087,7 @@ mod tests {
                 "instruction":"Check the report", "title":"Report", "enabled":true,
                 "monitoring":monitoring, "created_by":"bot", "created_at":"2026-11-08T12:00:00Z"
             }))]);
-            let task = HubScheduler(routes(&calls))
+            let task = HubScheduler(routes(&calls), "owner".into())
                 .create(CreateBotTask {
                     kind: Some(flow_like_types::bot_task::TaskKind::Cron),
                     cron: Some("0 9 * * *".into()),
@@ -1060,7 +1115,7 @@ mod tests {
             "created_at":"2026-11-08T12:00:00Z"
         });
         let calls = Calls::answering(vec![Ok(json!({ "tasks": [task.clone()] })), Ok(task)]);
-        let changed = HubScheduler(routes(&calls))
+        let changed = HubScheduler(routes(&calls), "owner".into())
             .update(
                 "task1",
                 flow_like_types::bot_task::UpdateBotTask {

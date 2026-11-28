@@ -68,12 +68,16 @@ pub async fn media_store(state: &AppState) -> Option<FlowLikeStore> {
         .ok()
 }
 
-fn app_media(app_id: &str) -> FlowPath {
+pub(crate) fn app_media(app_id: &str) -> FlowPath {
     FlowPath::from("media").join("apps").join(app_id)
 }
 
 /// Per owner, the `Meta` row in `language`, else English, else the first by language code.
-fn best_meta<F>(metas: Vec<meta::Model>, language: &str, owner: F) -> HashMap<String, meta::Model>
+pub(crate) fn best_meta<F>(
+    metas: Vec<meta::Model>,
+    language: &str,
+    owner: F,
+) -> HashMap<String, meta::Model>
 where
     F: Fn(&meta::Model) -> Option<&String>,
 {

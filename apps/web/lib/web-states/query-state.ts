@@ -1,11 +1,16 @@
 import type {
 	CreateSavedQueryPayload,
 	CreateStudioForecastPayload,
+	CrossAppSqlPayload,
+	CrossAppSqlResult,
 	ExecuteSqlPayload,
 	ExecuteSqlResult,
 	IQueryState,
 	SavedQuery,
 	SavedStudioForecast,
+	SqlParameterOptions,
+	SqlParameterOptionsRequest,
+	SqlQueryDescription,
 	StudioForecastPayload,
 	StudioForecastResult,
 	StudioForecastSummary,
@@ -99,6 +104,61 @@ export class WebQueryState implements IQueryState {
 	): Promise<ExecuteSqlResult> {
 		return apiPost<ExecuteSqlResult>(
 			`apps/${appId}/db/queries/execute${scopeQuery(userScoped)}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async executeCrossAppSql(
+		payload: CrossAppSqlPayload,
+	): Promise<CrossAppSqlResult> {
+		return apiPost<CrossAppSqlResult>(
+			"user/data/query",
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async describeCrossAppSql(
+		payload: Pick<CrossAppSqlPayload, "sql" | "sources">,
+	): Promise<SqlQueryDescription> {
+		return apiPost<SqlQueryDescription>(
+			"user/data/query/describe",
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async crossAppSqlParameterOptions(
+		payload: Pick<CrossAppSqlPayload, "sources"> & SqlParameterOptionsRequest,
+	): Promise<SqlParameterOptions> {
+		return apiPost<SqlParameterOptions>(
+			"user/data/query/options",
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async describeSql(
+		appId: string,
+		payload: Pick<ExecuteSqlPayload, "sql" | "surface" | "overlay_id">,
+		userScoped?: boolean,
+	): Promise<SqlQueryDescription> {
+		return apiPost<SqlQueryDescription>(
+			`apps/${appId}/db/queries/describe${scopeQuery(userScoped)}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async sqlParameterOptions(
+		appId: string,
+		payload: Pick<ExecuteSqlPayload, "surface" | "overlay_id"> &
+			SqlParameterOptionsRequest,
+		userScoped?: boolean,
+	): Promise<SqlParameterOptions> {
+		return apiPost<SqlParameterOptions>(
+			`apps/${appId}/db/queries/options${scopeQuery(userScoped)}`,
 			payload,
 			this.backend.auth,
 		);

@@ -173,8 +173,24 @@ backend-runtime-local
 backend-runtime-docker
 api-remote-catalog
 api-aws-catalog
-api-aws-forecasting
+query-forecasting
 api-local-ml-catalog
+core-copilot
+execution-queue
+backend-audit-aws
+backend-audit-azure
+backend-audit-gcp
+backend-compiler-lambda
+backend-compiler-ecs
+backend-compiler-k8s
+backend-event-bridge
+backend-media-transformer
+backend-gcp-maintenance
+backend-gcp-scheduler
+backend-azure-scheduler
+backend-aws-file-tracker
+backend-aws-query
+backend-aws-api
 EOF
 }
 
@@ -319,8 +335,24 @@ if [ "${#BOUNDARIES[@]}" -eq 0 ]; then
         backend-runtime-docker
         api-remote-catalog
         api-aws-catalog
-        api-aws-forecasting
+        query-forecasting
         api-local-ml-catalog
+        core-copilot
+        execution-queue
+        backend-audit-aws
+        backend-audit-azure
+        backend-audit-gcp
+        backend-compiler-lambda
+        backend-compiler-ecs
+        backend-compiler-k8s
+        backend-event-bridge
+        backend-media-transformer
+        backend-gcp-maintenance
+        backend-gcp-scheduler
+        backend-azure-scheduler
+        backend-aws-file-tracker
+        backend-aws-query
+        backend-aws-api
     )
 fi
 
@@ -454,6 +486,8 @@ configure_boundary() {
         core-flow-metadata)
             CHECK_ARGS=(--package flow-like --no-default-features --features flow-metadata)
             FORBIDDEN=(
+                flow-like-bot-memory
+                flow-like-bot-tools
                 lancedb
                 lance
                 lance-core
@@ -470,7 +504,65 @@ configure_boundary() {
             )
             FEATURE_PACKAGE="flow-like"
             REQUIRED_FEATURES=(flow-metadata)
-            FORBIDDEN_FEATURES=(flow flow-runtime)
+            FORBIDDEN_FEATURES=(flow flow-runtime copilot)
+            ;;
+        core-copilot)
+            CHECK_ARGS=(--package flow-like --no-default-features --features copilot)
+            REQUIRED=(flow-like-editor flow-like-bot-memory flow-like-bot-tools)
+            FEATURE_PACKAGE="flow-like-editor"
+            REQUIRED_FEATURES=(copilot)
+            ;;
+        execution-queue)
+            CHECK_ARGS=(--package flow-like-execution-queue --features redis)
+            FORBIDDEN=(flow-like-api flow-like flow-like-runtime flow-like-types image lancedb datafusion kube azure_identity)
+            REQUIRED=(redis flow-like-types-contracts)
+            ;;
+        backend-audit-aws|backend-audit-azure|backend-audit-gcp)
+            DEPENDENCY_ONLY=1
+            case "$boundary" in
+                backend-audit-aws) CHECK_ARGS=(--package aws-audit-worker) ;;
+                backend-audit-azure) CHECK_ARGS=(--package flow-like-audit-worker --features azure) ;;
+                backend-audit-gcp) CHECK_ARGS=(--package flow-like-audit-worker --features gcp) ;;
+            esac
+            FORBIDDEN=(flow-like-api flow-like flow-like-runtime flow-like-editor flow-like-types image lancedb lance datafusion wasmtime async-stripe aws-sdk-sso aws-sdk-ssooidc aws-sdk-signin)
+            REQUIRED=(flow-like-audit sea-orm)
+            ;;
+        backend-compiler-lambda|backend-compiler-ecs|backend-compiler-k8s)
+            DEPENDENCY_ONLY=1
+            case "$boundary" in
+                backend-compiler-lambda) CHECK_ARGS=(--package aws-compiler-lambda) ;;
+                backend-compiler-ecs) CHECK_ARGS=(--package aws-compiler-ecs) ;;
+                backend-compiler-k8s) CHECK_ARGS=(--package k8s-compiler) ;;
+            esac
+            FORBIDDEN=(flow-like-api flow-like flow-like-runtime flow-like-editor flow-like-types flow-like-model-provider image lancedb lance datafusion aws-sdk-sso aws-sdk-ssooidc aws-sdk-signin)
+            REQUIRED=(flow-like-compiler wasmtime cranelift-codegen)
+            ;;
+        backend-event-bridge)
+            DEPENDENCY_ONLY=1
+            CHECK_ARGS=(--package aws-event-bridge)
+            FORBIDDEN=(flow-like-types image rav1e ravif exr libwebp-sys lancedb datafusion aws-sdk-sso aws-sdk-ssooidc aws-sdk-signin)
+            REQUIRED=(aws-sdk-scheduler)
+            ;;
+        backend-media-transformer)
+            DEPENDENCY_ONLY=1
+            CHECK_ARGS=(--package media-transformer)
+            FORBIDDEN=(rav1e ravif exr aws-sdk-sso aws-sdk-ssooidc aws-sdk-signin)
+            REQUIRED=(image webp)
+            ;;
+        backend-gcp-maintenance|backend-gcp-scheduler|backend-azure-scheduler)
+            DEPENDENCY_ONLY=1
+            CHECK_ARGS=(--package "${boundary#backend-}")
+            FORBIDDEN=(flow-like-db sea-orm sqlx sqlx-postgres lancedb datafusion image)
+            ;;
+        backend-aws-file-tracker|backend-aws-query|backend-aws-api)
+            DEPENDENCY_ONLY=1
+            case "$boundary" in
+                backend-aws-file-tracker) CHECK_ARGS=(--package file-tracker) ;;
+                *) CHECK_ARGS=(--package "${boundary#backend-}") ;;
+            esac
+            FORBIDDEN=(aws-sdk-sso aws-sdk-ssooidc aws-sdk-signin)
+            FEATURE_PACKAGE="aws-config"
+            FORBIDDEN_FEATURES=(sso credentials-login credentials-process)
             ;;
         core-flow)
             # Dependency-only compatibility guard. The historical `flow`
@@ -888,38 +980,41 @@ configure_boundary() {
                 backend-runtime-local) CHECK_ARGS=(--package local-runtime) ;;
                 backend-runtime-docker) CHECK_ARGS=(--package docker-compose-runtime) ;;
             esac
-            FORBIDDEN=("${AUTOMATION_EXECUTE_PACKAGES[@]}" flow-like-browser)
-            REQUIRED=(flow-like-executor flow-like-catalog-onnx)
+            FORBIDDEN=("${AUTOMATION_EXECUTE_PACKAGES[@]}" flow-like-browser flow-like-api flow-like flow-like-editor)
+            REQUIRED=(flow-like-executor flow-like-catalog-onnx flow-like-execution-queue)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(local-runtime-ml local-runtime server package-onnx local-ml ml-inference local-only-metadata)
             ;;
         api-remote-catalog)
             # Azure and GCP APIs publish the same catalog as their remote-only
             # executors, so clients never receive ONNX nodes and see automation
-            # only as offline metadata.
+            # only as offline metadata. Forecasts run on the query service, so
+            # the API links no Burn engine.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package azure-api --package gcp-api)
-            FORBIDDEN=(flow-like-catalog-onnx "${AUTOMATION_EXECUTE_PACKAGES[@]}" ort face_id wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn-cuda burn-rocm)
-            REQUIRED=(flow-like-ml-forecast burn burn-flex)
+            FORBIDDEN=(flow-like-catalog-onnx "${AUTOMATION_EXECUTE_PACKAGES[@]}" ort face_id wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn burn-flex burn-cuda burn-rocm)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(remote-metadata package-std package-data package-web runtime-catalog local-only-metadata)
             FORBIDDEN_FEATURES=(package-onnx local-ml portable-execute ml-inference)
             ;;
         api-aws-catalog)
             # AWS APIs advertise ONNX metadata to match their local-ML
-            # executors. Data Studio uses CPU forecasting without ONNX execution.
+            # executors. Data Studio forecasts run on the query service, so the
+            # API links no Burn engine.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package aws-api --package aws-api-ecs)
-            FORBIDDEN=("${AUTOMATION_EXECUTE_PACKAGES[@]}" ort ort-sys face_id tract-tflite wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn-cuda burn-rocm)
-            REQUIRED=(flow-like-catalog-onnx flow-like-ml-forecast burn burn-flex)
+            FORBIDDEN=("${AUTOMATION_EXECUTE_PACKAGES[@]}" ort ort-sys face_id tract-tflite wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn burn-flex burn-cuda burn-rocm)
+            REQUIRED=(flow-like-catalog-onnx)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(server-local-metadata remote-metadata package-onnx runtime-catalog local-only-metadata)
             FORBIDDEN_FEATURES=(local-ml portable-execute ml-inference)
             ;;
-        api-aws-forecasting)
-            # Keep Lambda isolated: ECS feature unification must not hide a missing runtime.
+        query-forecasting)
+            # The query service runs Data Studio forecasts on the CPU engine. Check
+            # the Lambda alone so the container's feature unification cannot hide
+            # a missing runtime.
             DEPENDENCY_ONLY=1
-            CHECK_ARGS=(--package aws-api)
+            CHECK_ARGS=(--package aws-query)
             FORBIDDEN=(ort ort-sys wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn-cuda burn-rocm)
             REQUIRED=(flow-like-ml-forecast burn burn-flex)
             FEATURE_PACKAGE="flow-like-catalog-ml"
@@ -929,10 +1024,12 @@ configure_boundary() {
         api-local-ml-catalog)
             # Local, Kubernetes, and Docker APIs mirror executors that support
             # local ONNX and list desktop automation only as offline metadata.
+            # Only the local API links the forecast engine, through its
+            # in-process query service.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package local-api --package k8s-api --package docker-compose-api)
             FORBIDDEN=(ort ort-sys face_id tract-tflite "${AUTOMATION_EXECUTE_PACKAGES[@]}" flow-like-browser wgpu cudarc cubecl-cuda cubecl-hip cubecl-wgpu burn-cuda burn-rocm)
-            REQUIRED=(flow-like-catalog-onnx flow-like-ml-forecast burn burn-flex)
+            REQUIRED=(flow-like-catalog-onnx)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(executor-local-metadata server-local-metadata remote-metadata package-onnx runtime-catalog local-only-metadata)
             FORBIDDEN_FEATURES=(local-ml portable-execute ml-inference)

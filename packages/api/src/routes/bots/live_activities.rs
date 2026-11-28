@@ -451,6 +451,8 @@ mod tests {
             error_code: Set(None),
             hops: Set(0),
             requester_id: Set(None),
+            origin_id: Set(None),
+            discussion_hops: Set(None),
             audience: Set("OWNER".into()),
             status_text: Set(None),
             unprompted: Set(None),

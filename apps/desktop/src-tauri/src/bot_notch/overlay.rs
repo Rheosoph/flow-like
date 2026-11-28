@@ -39,6 +39,8 @@ pub(super) async fn ensure(app: &AppHandle, geometry: &Geometry) -> Result<Webvi
         .resizable(false)
         .skip_taskbar(true)
         .visible_on_all_workspaces(true)
+        // macOS sets its own level above the menu bar in `configure_window`.
+        .always_on_top(cfg!(not(target_os = "macos")))
         .focusable(true)
         .accept_first_mouse(true)
         .visible(false)
@@ -60,10 +62,6 @@ pub(super) async fn ensure(app: &AppHandle, geometry: &Geometry) -> Result<Webvi
     })
     .await?
     .map_err(|error| format!("Configuring the bot notch window failed: {error}"))?;
-    #[cfg(not(target_os = "macos"))]
-    window
-        .set_always_on_top(true)
-        .map_err(|error| format!("Raising the bot notch window failed: {error}"))?;
     Ok(window)
 }
 
@@ -88,5 +86,43 @@ pub(super) fn hide(window: &WebviewWindow) {
     let _ = window.set_ignore_cursor_events(true);
     if let Err(error) = window.hide() {
         tracing::warn!(%error, "Bot notch: hiding the window failed");
+    }
+}
+
+/// Keeps the overlay in front on Windows. Being always on top from creation is not enough there:
+/// the overlay was seen behind the window a bot sat on and behind maximized windows, so it goes
+/// back to the top of the always-on-top windows each time another window comes to the front.
+#[cfg(windows)]
+pub(super) struct Stacking {
+    overlay: isize,
+    foreground: isize,
+}
+
+#[cfg(windows)]
+impl Stacking {
+    /// Reads the window handle on the main thread: asked from a worker, tauri blocks that worker
+    /// until the main thread answers.
+    pub(super) async fn of(app: &AppHandle, window: &WebviewWindow) -> Option<Self> {
+        let window = window.clone();
+        let overlay = super::on_main(app, move || window.hwnd().map(|hwnd| hwnd.0 as isize))
+            .await
+            .ok()?
+            .ok()?;
+        Some(Self {
+            overlay,
+            foreground: 0,
+        })
+    }
+
+    pub(super) fn keep_on_top(&mut self) {
+        use flow_like_catalog_automation::computer::native;
+        let foreground = native::foreground_window();
+        if foreground == self.foreground {
+            return;
+        }
+        self.foreground = foreground;
+        if !native::raise_topmost(self.overlay) {
+            tracing::debug!("Bot notch: raising the overlay over the other windows failed");
+        }
     }
 }

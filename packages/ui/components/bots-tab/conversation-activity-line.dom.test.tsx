@@ -46,6 +46,7 @@ const said = (el: HTMLElement | null | undefined) =>
 async function line(
 	bots: { botId: string; status: "queued" | "running" | "waiting" }[],
 	typing: string[],
+	drafting?: ReadonlySet<string>,
 ) {
 	const { createRoot } = await import("react-dom/client");
 	const { ConversationActivityLine } = await import(
@@ -65,7 +66,12 @@ async function line(
 			createElement(
 				QueryClientProvider,
 				{ client },
-				createElement(ConversationActivityLine, { bots, typing, directory }),
+				createElement(ConversationActivityLine, {
+					bots,
+					typing,
+					drafting,
+					directory,
+				}),
 			),
 		);
 	});
@@ -86,6 +92,18 @@ describe("ConversationActivityLine", () => {
 		expect(said(await line([{ botId: "momo", status: "waiting" }], []))).toBe(
 			"Momo is waiting for approval",
 		);
+	});
+
+	test("does not announce a bot whose reply shows as a live bubble", async () => {
+		const el = await line(
+			[
+				{ botId: "momo", status: "running" },
+				{ botId: "scout", status: "queued" },
+			],
+			[],
+			new Set(["momo", "scout"]),
+		);
+		expect(said(el)).toBe("Waiting for Scout");
 	});
 
 	test("names one or two typists and folds more", async () => {

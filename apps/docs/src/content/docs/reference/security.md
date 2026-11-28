@@ -229,12 +229,21 @@ remote references, including jobs queued by older producers.
 
 ### Untrusted downloads and uploads
 
-Open Graph previews retain support for public and intranet HTTP/HTTPS URLs,
-environment proxies and up to five redirects. They read at most 512 KiB,
-matching the existing parsing limit without first buffering the entire page.
-OAuth discovery and JWKS fetches retain configured HTTP, private-network and
-proxy endpoints. Malformed bearer tokens are rejected before fetching keys;
-accepted tokens still require signature and claim validation.
+Open Graph previews fetch public HTTPS URLs only. The address is checked on the
+URL, when its name resolves and on each of up to five redirects, and proxy
+settings are ignored. They read at most 512 KiB, matching the existing parsing
+limit without first buffering the entire page.
+
+An inbound endpoint with `oauth_bearer` authentication fetches the OAuth
+discovery document and JWKS its author configured. That identity provider must
+be a public HTTPS host unless the operator vouches for its host: the
+platform's own OpenID provider, the configured OAuth providers, and the hosts
+listed in `IDENTITY_PROVIDER_HOSTS` (separated by commas or spaces). Those
+hosts keep configured HTTP, private-network and proxy endpoints; loopback,
+link-local and metadata addresses stay refused. A document is read up to
+4 MiB, and a failed fetch is not repeated for 30 seconds. Malformed bearer
+tokens are rejected before fetching keys; accepted tokens still require
+signature and claim validation.
 
 Temporary files, registry artifacts, and metadata media
 upload directly to object storage using signed URLs. The API handles signing
@@ -275,7 +284,11 @@ use governed by available memory, disk and existing format and compiler limits.
 
 Server runs never receive the key of a private (`custom:*`) Bit. Executors
 reach the private Bits of a run's profile through the API's model relay, which
-loads the Bit for its owner and calls the provider itself. Subscription Bits
+loads the Bit for its owner and calls the provider itself. A Bit that a board
+builds itself, with a provider node's own key and endpoint, is called by the
+executor directly, with the reach of its HTTP nodes: private address ranges are
+allowed and host-plane addresses are refused. Those calls follow no redirect and
+ignore proxy settings. Subscription Bits
 (Claude Code, Codex, GitHub Copilot and Microsoft 365 Copilot) run only on
 their owner's desktop. The API's calls to private model endpoints use
 guarded egress: public HTTPS only, unless the operator sets
@@ -314,13 +327,17 @@ does not resolve is refused with the same message as one on a refused address.
 
 Global chat fetches attachment links the same way: from the installation's own
 storage, or over public HTTPS with a timeout and a size cap enforced while
-reading. Other attachment downloads retain their existing network behavior,
-including server-local services and proxies. Identity, attachment and Open
-Graph fetches can therefore reach destinations allowed by the deployment
-network. Open Graph
-destinations come directly from callers; attachment URLs can also originate
-from tenant-controlled data. Network isolation remains necessary where those
-callers must not reach server-local services.
+reading. A bot or assistant turn that runs in the API follows the same rule
+for the image links it views and for the media a model call downloads: the
+installation's own storage, or public HTTPS on every redirect. Setting
+`CUSTOM_MODEL_EGRESS=private` restores the reach of HTTP nodes for those
+downloads.
+
+Flows keep the reach of the executor's network. HTTP, socket and database
+nodes, and the Extract Attachments node, refuse host-plane addresses and no
+other, so a flow reaches private address ranges. Network isolation of the
+executors remains necessary where flow authors must not reach services on that
+network.
 
 Compiler jobs retain their existing size, concurrency and timeout settings.
 A timeout ends the async job but cannot stop native compilation that has already

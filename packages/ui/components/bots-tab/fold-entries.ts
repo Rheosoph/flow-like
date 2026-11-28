@@ -10,6 +10,9 @@ import type {
 	IInboxApprovalSecret,
 	IInboxAttachmentPart,
 	IInboxDesktopTarget,
+	IInboxDiscussionGrant,
+	IInboxDiscussionOutcome,
+	IInboxDiscussionProposal,
 	IInboxEntry,
 	IInboxFileHandle,
 	IInboxUiPart,
@@ -23,6 +26,15 @@ import {
 } from "./approval-entry";
 import { noteRefOf } from "./bot-note-entry";
 import { isSelfPrincipal } from "./crew-model";
+import {
+	readDiscussionGrant,
+	readDiscussionProposal,
+} from "./discussion-proposal-model";
+import {
+	readDiscussionHops,
+	readDiscussionOutcome,
+	readHops,
+} from "./discussion-thread-model";
 import {
 	type UserContextCardData,
 	userContextRequestOf,
@@ -53,6 +65,7 @@ export interface ConversationApprovalItem {
 	afterWebContent: boolean;
 	secret?: IInboxApprovalSecret;
 	invite?: IInboxApprovalInvite;
+	picture?: IInboxFileHandle;
 }
 
 /** A bot's request to run a call, with the owner's answer once there is one. */
@@ -70,6 +83,8 @@ export interface ConversationApproval {
 	room?: string;
 	secret?: IInboxApprovalSecret;
 	invite?: IInboxApprovalInvite;
+	/** A picture the bot asks to show in the room. */
+	picture?: IInboxFileHandle;
 	configurationChanges?: Record<string, unknown>;
 	/** On a card for one call: its standing grant was set aside after web content. */
 	afterWebContent?: boolean;
@@ -103,6 +118,7 @@ function conversationApproval(
 		configurationChanges: approval.configuration_changes,
 		...(approval.secret ? { secret: approval.secret } : {}),
 		...(approval.invite ? { invite: approval.invite } : {}),
+		...(approval.picture ? { picture: approval.picture } : {}),
 		...(approval.after_web_content ? { afterWebContent: true } : {}),
 		...(approval.items
 			? {
@@ -115,6 +131,7 @@ function conversationApproval(
 						afterWebContent: item.after_web_content === true,
 						...(item.secret ? { secret: item.secret } : {}),
 						...(item.invite ? { invite: item.invite } : {}),
+						...(item.picture ? { picture: item.picture } : {}),
 					})),
 				}
 			: {}),
@@ -211,6 +228,8 @@ export interface ConversationMessage {
 	usageStats?: IChatUsageStat[];
 	replyTo?: string;
 	mentions: string[];
+	/** Teams a `#Team` request went to, by team id. */
+	teams?: string[];
 	errorCode?: string;
 	attachments?: IInboxAttachmentPart[];
 	/** App widgets on the message, inline or as stored documents. */
@@ -220,6 +239,16 @@ export interface ConversationMessage {
 	userContextDerived?: boolean;
 	userContextDerivedFrom?: string;
 	note?: IBotNoteRef;
+	/** A bot's request for a longer discussion between the bots here. */
+	discussionProposal?: IInboxDiscussionProposal;
+	/** A person's permission for that: the rounds the bots it wakes may discuss. */
+	discussion?: IInboxDiscussionGrant;
+	/** A bot message's bot turns behind it: its place in a discussion. */
+	hops?: number;
+	/** The bot turns the discussion a bot's message belongs to may reach. */
+	discussionHops?: number;
+	/** How the discussion a bot's message ended went. */
+	discussionOutcome?: IInboxDiscussionOutcome;
 	/** The window or browser tab the sender pointed the bot at. */
 	pointedAt?: IInboxDesktopTarget;
 	/** Recipients of the email this message was sent as. */
@@ -252,9 +281,14 @@ export interface ConversationRoomEvent {
 	by: string;
 }
 
-export type TriggerSource = "schedule" | "webhook" | "email" | "event";
+export type TriggerSource =
+	| "schedule"
+	| "webhook"
+	| "email"
+	| "event"
+	| "channel";
 
-/** Work that woke a bot: a schedule firing, a webhook, an email or an event. */
+/** Work that woke a bot: a schedule firing, a webhook, an email, an event or a chat message from outside. */
 export interface ConversationTrigger {
 	type: "trigger";
 	id: string;
@@ -286,8 +320,25 @@ export interface ConversationBotAsk {
 	question: string;
 }
 
-/** A line between messages: what woke a bot, or one bot asking another. */
-export type ConversationNote = ConversationTrigger | ConversationBotAsk;
+/** A team lead's answer to a `#Team` request, copied into the chat the request came from. */
+export interface ConversationTeamAnswer {
+	type: "team_answer";
+	id: string;
+	createdAt: string;
+	time: number;
+	teamId: string;
+	leadId: string;
+	threadId: string;
+	requestMessageId: string;
+	replyMessageId: string;
+	text: string;
+}
+
+/** A line between messages: what woke a bot, one bot asking another, or a team's answer. */
+export type ConversationNote =
+	| ConversationTrigger
+	| ConversationBotAsk
+	| ConversationTeamAnswer;
 
 /** A call someone started, with how it ended once its last person left. */
 export interface ConversationCall {
@@ -409,6 +460,7 @@ const TRIGGER_SOURCES: readonly string[] = [
 	"webhook",
 	"email",
 	"event",
+	"channel",
 ];
 
 function fileHandle(value: unknown): IInboxFileHandle | undefined {
@@ -462,10 +514,31 @@ function botAskEvent(entry: IInboxEntry): ConversationBotAsk | null {
 	};
 }
 
+function teamAnswerEvent(entry: IInboxEntry): ConversationTeamAnswer | null {
+	const body = plainBody(entry);
+	if (body?.type !== "team_answer") return null;
+	const teamId = text(body.team_id);
+	const threadId = text(body.thread_id);
+	if (!teamId || !threadId) return null;
+	return {
+		type: "team_answer",
+		id: entry.message_id,
+		createdAt: entry.created_at,
+		time: entryTime(entry),
+		teamId,
+		leadId: text(body.lead_id) ?? "",
+		threadId,
+		requestMessageId: text(body.request_message_id) ?? "",
+		replyMessageId: text(body.reply_message_id) ?? "",
+		text: text(body.text) ?? "",
+	};
+}
+
 /** The note a trigger or activity entry shows as; null for anything else or a body it can't read. */
 export function noteOf(entry: IInboxEntry): ConversationNote | null {
 	if (entry.kind === "trigger") return triggerEvent(entry);
-	if (entry.kind === "activity") return botAskEvent(entry);
+	if (entry.kind === "activity")
+		return botAskEvent(entry) ?? teamAnswerEvent(entry);
 	return null;
 }
 
@@ -612,6 +685,17 @@ export function foldInboxEntries(
 			const contextRequest = userContextRequestOf(entry);
 			const mailedTo = mailedToOf(entry);
 			const note = noteRefOf(entry);
+			const discussionProposal = readDiscussionProposal(
+				plainBody(entry)?.discussion_proposal,
+			);
+			const discussion = readDiscussionGrant(plainBody(entry)?.discussion);
+			const hops = readHops(plainBody(entry)?.hops);
+			const discussionHops = readDiscussionHops(
+				plainBody(entry)?.discussion_hops,
+			);
+			const discussionOutcome = readDiscussionOutcome(
+				plainBody(entry)?.discussion_outcome,
+			);
 			const pointedAt = pointedAtOf(entry);
 			const ui = uiPartsOf(entry);
 			const rawUsage = plainBody(entry)?.usage_stats;
@@ -620,6 +704,7 @@ export function foldInboxEntries(
 						.map(readUsageStat)
 						.filter((stat): stat is IChatUsageStat => stat !== null)
 				: [];
+			const teams = stringsOf(plainBody(entry)?.teams);
 			const message: ConversationMessage = {
 				type: "message",
 				id: entry.message_id,
@@ -630,6 +715,7 @@ export function foldInboxEntries(
 				content: inboxMessageContent(entry),
 				...(usageStats.length > 0 ? { usageStats } : {}),
 				mentions: mentionsOf(entry),
+				...(teams.length > 0 ? { teams } : {}),
 				...(contextRequest ? { userContext: { request: contextRequest } } : {}),
 				...(typeof plainBody(entry)?.user_context_derived === "string"
 					? {
@@ -645,6 +731,11 @@ export function foldInboxEntries(
 				...(ui.length > 0 ? { ui } : {}),
 				...(replyTo ? { replyTo } : {}),
 				...(note ? { note } : {}),
+				...(discussionProposal ? { discussionProposal } : {}),
+				...(discussion ? { discussion } : {}),
+				...(hops ? { hops } : {}),
+				...(discussionHops ? { discussionHops } : {}),
+				...(discussionOutcome ? { discussionOutcome } : {}),
 				...(pointedAt ? { pointedAt } : {}),
 				...(mailedTo.length > 0 ? { mailedTo } : {}),
 				...(approval
@@ -762,7 +853,11 @@ export function groupConversationItems(
 			blocks.push({ type: "room", key: `room:${item.id}`, event: item });
 			continue;
 		}
-		if (item.type === "trigger" || item.type === "bot_ask") {
+		if (
+			item.type === "trigger" ||
+			item.type === "bot_ask" ||
+			item.type === "team_answer"
+		) {
 			group = undefined;
 			blocks.push({ type: "note", key: `note:${item.id}`, note: item });
 			continue;

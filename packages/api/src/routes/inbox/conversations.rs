@@ -160,10 +160,13 @@ pub(super) fn member_row(
         invited_by: Set(None),
         invited_at: Set(None),
         accepted_at: Set(None),
+        invite_reason: Set(None),
         hidden_at: Set(None),
         cleared_at: Set(None),
         cleared_legacy_at: Set(None),
         cleared_seq: Set(None),
+        unread_count: Set(None),
+        last_entry_id: Set(None),
     }
 }
 
@@ -218,7 +221,7 @@ pub(crate) async fn start_direct_as<C: ConnectionTrait>(
             kind: PrincipalKind::User,
         };
         let recipient = if request {
-            invitations::pending_row(&id, other, &creator.id, now)
+            invitations::pending_row(&id, other, &creator.id, None, now)
         } else {
             member_row(&id, other, Some(&creator.id), now)
         };
@@ -300,9 +303,19 @@ pub(crate) async fn start_exchange<C: ConnectionTrait>(
     Ok(id)
 }
 
+const EXCHANGE_KEY_PREFIX: &str = "exchange:";
+
 /// The key under which a pair of bots has its exchange.
 pub(crate) fn exchange_key(low: &str, high: &str) -> String {
-    format!("exchange:{low}:{high}")
+    format!("{EXCHANGE_KEY_PREFIX}{low}:{high}")
+}
+
+/// Whether the conversation is the exchange two bots of one owner ask each other in.
+pub(crate) fn is_exchange(conversation: &conversation::Model) -> bool {
+    conversation
+        .direct_key
+        .as_deref()
+        .is_some_and(|key| key.starts_with(EXCHANGE_KEY_PREFIX))
 }
 
 /// How a person's direct conversation with their own bot is encrypted: end to end while the bot

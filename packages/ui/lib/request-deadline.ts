@@ -91,6 +91,10 @@ function routeTimeoutMs(parts: readonly string[], method: string): number {
 		) {
 			return DATA_REQUEST_TIMEOUT_MS;
 		}
+		// Connects to the external database and lists its tables.
+		if (section === "data-sources" && action === "check") {
+			return DATA_REQUEST_TIMEOUT_MS;
+		}
 		if (section !== undefined && DATA_APP_SECTIONS.has(section)) {
 			return DATA_REQUEST_TIMEOUT_MS;
 		}

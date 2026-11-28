@@ -30,8 +30,8 @@ mod fetch;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub(crate) use fetch::fetch_get;
 use fetch::{ReadError, pinned_client, read_capped};
+pub(crate) use fetch::{fetch_get, fetch_get_as};
 
 pub const WEB_REQUEST: &str = "web_request";
 
@@ -147,6 +147,17 @@ pub fn grant_scopes(args: &Value) -> Option<Vec<String>> {
             .map(|name| format!("web:{site}:secret:{name}")),
     );
     Some(scopes)
+}
+
+/// Whether `scope` is the plain read scope of a site, `web:<site>:read`: not a private-network
+/// read, a write or a secret.
+pub fn is_site_read_scope(scope: &str) -> bool {
+    scope
+        .strip_prefix("web:")
+        .and_then(|rest| rest.strip_suffix(":read"))
+        .is_some_and(|site| {
+            !site.is_empty() && !site.ends_with(":private") && !site.contains(":secret")
+        })
 }
 
 fn query_text(url: &Url) -> String {

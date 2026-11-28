@@ -1,27 +1,34 @@
-//! File-size accounting for released content, the Azure port of
-//! `apps/backend/aws/file-tracker`.
+//! File-size accounting for released content on Azure.
 //!
-//! Every `BlobCreated`/`BlobDeleted` under `apps/` and `users/` updates a
-//! per-blob ledger row in the Cosmos `files` container (`pk` = app id) and
-//! applies the size delta to `App.totalSize` (and `User.totalSize` for
-//! user-scoped keys) inside one PostgreSQL transaction. The ledger, not the
-//! event, is the source of the previous size, exactly like the DynamoDB table
-//! on AWS. Two things are stricter than the AWS original: rows carry the Event
-//! Grid `sequencer`, so an out-of-order or duplicate event never regresses the
-//! ledger, and every ledger write is ETag-conditional.
+//! Each `BlobCreated`/`BlobDeleted` under `apps/` and `users/` becomes one observation for the
+//! shared `flow-like-file-accounting` ledger, which settles App, User and payer capacity in
+//! PostgreSQL. Plain blobs carry their Event Grid `sequencer`; Lance datasets are accounted as
+//! one directory row measured by listing the content container. The Cosmos `files` container is
+//! read-only: it supplies the pre-SQL size of an object, or of a dataset's files, once.
 
 use crate::blob_events::BlobEvent;
-use flow_like_azure_data::cosmos::{CosmosClient, CosmosError, MutationOutcome};
-use flow_like_db::{AsDbConflict, DbConflict, DbDialect, RetryPolicy, retry_transaction};
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
-use serde::{Deserialize, Serialize};
+use flow_like_azure_data::cosmos::{CosmosClient, QueryParameter};
+use flow_like_db::DbDialect;
+use flow_like_file_accounting::{
+    Observation, apply_batch, dataset_prefix, measurement_sequencer, normalize_sequencer, observe,
+};
+use flow_like_storage::object_store::{ObjectStore, path::Path};
+use futures_util::TryStreamExt;
+use sea_orm::{DatabaseConnection, DbErr};
+use serde::Deserialize;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 pub const DEFAULT_FILES_CONTAINER: &str = "files";
+
+const DATASET_LISTING_TIMEOUT: Duration = Duration::from_secs(60);
+const LEGACY_PAGE_SIZE: i32 = 1_000;
 
 pub struct FileTrackingContext {
     pub cosmos: CosmosClient,
     pub files_container: String,
     pub content_container: String,
+    pub store: Arc<dyn ObjectStore>,
     pub database: DatabaseConnection,
     pub dialect: DbDialect,
 }
@@ -34,45 +41,11 @@ pub enum FileTrackingError {
     Retryable(&'static str),
 }
 
-/// Ledger row: one per blob, partitioned by app id.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Legacy ledger row: only the fields the baseline import reads.
+#[derive(Debug, Deserialize)]
 struct LedgerDocument {
-    id: String,
-    pk: String,
     sk: String,
     size: i64,
-    user_id: String,
-    etag: String,
-    #[serde(default)]
-    sequencer: String,
-    updated_at: i64,
-    #[serde(rename = "_etag", default, skip_serializing)]
-    cosmos_etag: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct KeyIdentity {
-    user_id: Option<String>,
-    app_id: String,
-}
-
-/// `apps/{app_id}/...` or `users/{sub}/apps/{app_id}/...`, mirroring the AWS
-/// parser (which also does not validate the third `apps` segment).
-fn parse_key_identity(key: &str) -> Option<KeyIdentity> {
-    let parts: Vec<&str> = key.split('/').collect();
-    match parts.as_slice() {
-        ["apps", app_id, ..] if !app_id.is_empty() => Some(KeyIdentity {
-            user_id: None,
-            app_id: (*app_id).to_string(),
-        }),
-        ["users", user_id, _, app_id, ..] if !user_id.is_empty() && !app_id.is_empty() => {
-            Some(KeyIdentity {
-                user_id: Some((*user_id).to_string()),
-                app_id: (*app_id).to_string(),
-            })
-        }
-        _ => None,
-    }
 }
 
 /// Cosmos ids may not contain `/`, `\`, `?` or `#`; blob keys are paths.
@@ -80,271 +53,164 @@ fn ledger_id(key: &str) -> String {
     blake3::hash(key.as_bytes()).to_hex().to_string()
 }
 
-fn is_stale(existing: &LedgerDocument, incoming: Option<&str>) -> bool {
-    match incoming {
-        Some(sequencer) => {
-            !existing.sequencer.is_empty() && existing.sequencer.as_str() >= sequencer
+fn cosmos_error(error: impl std::fmt::Display) -> DbErr {
+    DbErr::Custom(format!("files ledger request failed: {error}"))
+}
+
+/// `None` for events this worker does not account.
+fn observation_for(
+    event: &BlobEvent,
+    content_container: &str,
+    dataset_sequencer: &str,
+) -> Result<Option<Observation>, FileTrackingError> {
+    let (container, key) = event
+        .container_and_key()
+        .ok_or(FileTrackingError::Permanent("invalid_blob_subject"))?;
+    if container != content_container {
+        tracing::warn!(
+            container,
+            "blob event for a container this worker does not track"
+        );
+        return Ok(None);
+    }
+    // DeviceArchive metadata accounts for these server-owned payloads separately.
+    if key.starts_with("device-archives/") {
+        return Ok(None);
+    }
+    let object_sequencer = if dataset_prefix(key).is_some() {
+        String::new()
+    } else {
+        let raw = event
+            .sequencer
+            .as_deref()
+            .ok_or(FileTrackingError::Permanent("blob_event_without_sequencer"))?;
+        normalize_sequencer(raw)
+            .map_err(|_| FileTrackingError::Permanent("blob_event_without_sequencer"))?
+    };
+    observe(content_container, key, &object_sequencer, dataset_sequencer)
+        .map(Some)
+        .ok_or(FileTrackingError::Permanent("invalid_blob_key_layout"))
+}
+
+async fn legacy_size(
+    cosmos: CosmosClient,
+    files_container: String,
+    app_id: String,
+    key: String,
+) -> Result<i64, DbErr> {
+    cosmos
+        .read_document::<LedgerDocument>(&files_container, &ledger_id(&key), &app_id)
+        .await
+        .map(|row| row.map_or(0, |row| row.size))
+        .map_err(cosmos_error)
+}
+
+async fn legacy_files(
+    cosmos: CosmosClient,
+    files_container: String,
+    app_id: String,
+    prefix: String,
+) -> Result<Vec<(String, i64)>, DbErr> {
+    let parameters = [QueryParameter::new("@prefix", prefix)];
+    let mut rows = Vec::new();
+    let mut continuation: Option<String> = None;
+    loop {
+        let page = cosmos
+            .query_page::<LedgerDocument>(
+                &files_container,
+                "SELECT * FROM c WHERE STARTSWITH(c.sk, @prefix)",
+                &parameters,
+                Some(&app_id),
+                LEGACY_PAGE_SIZE,
+                continuation.as_deref(),
+            )
+            .await
+            .map_err(cosmos_error)?;
+        rows.extend(page.documents.into_iter().map(|row| (row.sk, row.size)));
+        match page.continuation {
+            Some(next) => continuation = Some(next),
+            None => return Ok(rows),
         }
-        None => false,
     }
 }
 
-fn map_cosmos(error: CosmosError) -> FileTrackingError {
-    tracing::warn!(error = %error, "files ledger request failed");
-    FileTrackingError::Retryable("files_ledger_unavailable")
+async fn dataset_size(store: Arc<dyn ObjectStore>, prefix: String) -> Result<i64, DbErr> {
+    // Event keys are the stored, already encoded form; `Path::from` would encode them again.
+    let path = Path::parse(prefix.trim_end_matches('/'))
+        .map_err(|error| DbErr::Custom(format!("dataset prefix {prefix} is invalid: {error}")))?;
+    let listing = async {
+        store
+            .list(Some(&path))
+            .try_fold(0i64, |total, meta| async move {
+                Ok(total.saturating_add(i64::try_from(meta.size).unwrap_or(i64::MAX)))
+            })
+            .await
+    };
+    match tokio::time::timeout(DATASET_LISTING_TIMEOUT, listing).await {
+        Ok(Ok(size)) => Ok(size),
+        Ok(Err(error)) => Err(DbErr::Custom(format!("listing {prefix} failed: {error}"))),
+        Err(_) => Err(DbErr::Custom(format!("listing {prefix} timed out"))),
+    }
 }
 
 pub async fn process(
     ctx: &FileTrackingContext,
     event: &BlobEvent,
 ) -> Result<(), FileTrackingError> {
-    let (container, key) = event
-        .container_and_key()
-        .ok_or(FileTrackingError::Permanent("invalid_blob_subject"))?;
-    if container != ctx.content_container {
-        tracing::warn!(
-            container,
-            "blob event for a container this worker does not track"
-        );
+    let dataset_sequencer = measurement_sequencer(SystemTime::now());
+    let Some(observation) = observation_for(event, &ctx.content_container, &dataset_sequencer)?
+    else {
         return Ok(());
-    }
-    // DeviceArchive metadata accounts for these server-owned payloads separately.
-    if key.starts_with("device-archives/") {
-        return Ok(());
-    }
-    let identity =
-        parse_key_identity(key).ok_or(FileTrackingError::Permanent("invalid_blob_key_layout"))?;
-
-    let delta = if event.is_deletion() {
-        -record_deletion(ctx, &identity.app_id, key, event.sequencer.as_deref()).await?
-    } else {
-        let size = event.content_length.ok_or(FileTrackingError::Permanent(
-            "blob_created_without_content_length",
-        ))?;
-        let previous = record_creation(ctx, &identity, key, size, event).await?;
-        size - previous
     };
+    let created_size = if event.is_deletion() {
+        0
+    } else {
+        event.content_length.ok_or(FileTrackingError::Permanent(
+            "blob_created_without_content_length",
+        ))?
+    };
+    let key = observation.key.clone();
 
-    if delta == 0 {
-        return Ok(());
-    }
-    apply_usage_delta(
+    let results = apply_batch(
         &ctx.database,
         ctx.dialect,
-        identity.user_id.as_deref(),
-        &identity.app_id,
-        delta,
-    )
-    .await
-}
-
-/// Upsert the ledger row and return the previous size (0 if absent or stale).
-async fn record_creation(
-    ctx: &FileTrackingContext,
-    identity: &KeyIdentity,
-    key: &str,
-    size: i64,
-    event: &BlobEvent,
-) -> Result<i64, FileTrackingError> {
-    let id = ledger_id(key);
-    let existing: Option<LedgerDocument> = ctx
-        .cosmos
-        .read_document(&ctx.files_container, &id, &identity.app_id)
-        .await
-        .map_err(map_cosmos)?;
-
-    if let Some(existing) = &existing
-        && is_stale(existing, event.sequencer.as_deref())
-    {
-        tracing::info!(key, "ignoring stale BlobCreated event");
-        return Ok(size);
-    }
-
-    let document = LedgerDocument {
-        id: id.clone(),
-        pk: identity.app_id.clone(),
-        sk: key.to_string(),
-        size,
-        user_id: identity.user_id.clone().unwrap_or_default(),
-        etag: event.etag.clone().unwrap_or_default(),
-        sequencer: event.sequencer.clone().unwrap_or_default(),
-        updated_at: chrono::Utc::now().timestamp(),
-        cosmos_etag: None,
-    };
-
-    let outcome = match &existing {
-        Some(current) => ctx
-            .cosmos
-            .replace_document(
-                &ctx.files_container,
-                &id,
-                &identity.app_id,
-                &document,
-                current.cosmos_etag.as_deref(),
+        std::slice::from_ref(&observation),
+        |observation| {
+            legacy_size(
+                ctx.cosmos.clone(),
+                ctx.files_container.clone(),
+                observation.app_id.clone(),
+                observation.key.clone(),
             )
-            .await
-            .map_err(map_cosmos)?,
-        None => ctx
-            .cosmos
-            .create_document(&ctx.files_container, &identity.app_id, &document)
-            .await
-            .map_err(map_cosmos)?,
-    };
-    match outcome {
-        MutationOutcome::Applied => Ok(existing.map(|row| row.size).unwrap_or(0)),
-        // Another replica moved the row between read and write; a retry re-reads it.
-        MutationOutcome::Conflict
-        | MutationOutcome::PreconditionFailed
-        | MutationOutcome::NotFound => {
-            Err(FileTrackingError::Retryable("files_ledger_write_conflict"))
-        }
-    }
-}
-
-/// Delete the ledger row and return the size it held (0 if absent or stale).
-async fn record_deletion(
-    ctx: &FileTrackingContext,
-    app_id: &str,
-    key: &str,
-    sequencer: Option<&str>,
-) -> Result<i64, FileTrackingError> {
-    let id = ledger_id(key);
-    let Some(existing): Option<LedgerDocument> = ctx
-        .cosmos
-        .read_document(&ctx.files_container, &id, app_id)
-        .await
-        .map_err(map_cosmos)?
-    else {
-        tracing::warn!(key, "no ledger row for deleted blob");
-        return Ok(0);
-    };
-    if is_stale(&existing, sequencer) {
-        tracing::info!(key, "ignoring stale BlobDeleted event");
-        return Ok(0);
-    }
-    match ctx
-        .cosmos
-        .delete_document(
-            &ctx.files_container,
-            &id,
-            app_id,
-            existing.cosmos_etag.as_deref(),
-        )
-        .await
-        .map_err(map_cosmos)?
-    {
-        MutationOutcome::Applied => Ok(existing.size),
-        MutationOutcome::NotFound => Ok(0),
-        MutationOutcome::Conflict | MutationOutcome::PreconditionFailed => {
-            Err(FileTrackingError::Retryable("files_ledger_write_conflict"))
-        }
-    }
-}
-
-/// The user update reads the app update's output, so the app row still locks first.
-const USER_SCOPED_USAGE_SQL: &str = r#"WITH a AS (UPDATE "public"."App" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2 RETURNING 1), u AS (UPDATE "public"."User" SET "totalSize" = "totalSize" + $1 WHERE "id" = $3 AND EXISTS (SELECT 1 FROM a) RETURNING 1) SELECT (SELECT count(*) FROM a) AS "apps", (SELECT count(*) FROM u) AS "users""#;
-
-/// `UPDATE "App" SET "totalSize" = "totalSize" + delta` (and the same for
-/// `"User"` when the key is user-scoped) in one retried transaction; a missing
-/// row is a permanent failure like on AWS. Relative increments keep concurrent
-/// events safe without a read-modify-write, and a lost commit race on this hot
-/// row is re-run by `retry_transaction`; an unknown commit outcome is not,
-/// because applying the delta twice would over-count.
-///
-/// A user-scoped key moves both totals in one statement so the app row lock is
-/// not held across a second round trip. The statement stays inside the
-/// transaction: a missing user must roll the app increment back, and only an
-/// open transaction makes a lost connection safe to re-run.
-async fn apply_usage_delta(
-    database: &DatabaseConnection,
-    dialect: DbDialect,
-    user_id: Option<&str>,
-    app_id: &str,
-    delta: i64,
-) -> Result<(), FileTrackingError> {
-    let app_key = app_id.to_owned();
-    let user_key = user_id.map(str::to_owned);
-    retry_transaction::<_, (), UsageError>(
-        database,
-        dialect,
-        None,
-        &RetryPolicy::default(),
-        move |txn| {
-            let app_id = app_key.clone();
-            let user_id = user_key.clone();
-            Box::pin(async move {
-                let Some(user_id) = user_id else {
-                    let app_rows = txn
-                        .execute_raw(Statement::from_sql_and_values(
-                            DatabaseBackend::Postgres,
-                            r#"UPDATE "public"."App" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2"#,
-                            [delta.into(), app_id.into()],
-                        ))
-                        .await?
-                        .rows_affected();
-                    if app_rows == 0 {
-                        return Err(UsageError::AppNotFound);
-                    }
-                    return Ok(());
-                };
-                let counts = txn
-                    .query_one_raw(Statement::from_sql_and_values(
-                        DatabaseBackend::Postgres,
-                        USER_SCOPED_USAGE_SQL,
-                        [delta.into(), app_id.into(), user_id.into()],
-                    ))
-                    .await?
-                    .ok_or_else(|| DbErr::Custom("usage update returned no row counts".into()))?;
-                if counts.try_get::<i64>("", "apps")? == 0 {
-                    return Err(UsageError::AppNotFound);
+        },
+        |observation| {
+            legacy_files(
+                ctx.cosmos.clone(),
+                ctx.files_container.clone(),
+                observation.app_id.clone(),
+                observation.key.clone(),
+            )
+        },
+        |observation| {
+            let store = ctx.store.clone();
+            let prefix = observation.is_dataset().then(|| observation.key.clone());
+            async move {
+                match prefix {
+                    Some(prefix) => dataset_size(store, prefix).await,
+                    None => Ok(created_size),
                 }
-                if counts.try_get::<i64>("", "users")? == 0 {
-                    return Err(UsageError::UserNotFound);
-                }
-                Ok(())
-            })
+            }
         },
     )
-    .await
-    .map_err(|error| match error {
-        UsageError::AppNotFound => FileTrackingError::Permanent("usage_app_not_found"),
-        UsageError::UserNotFound => FileTrackingError::Permanent("usage_user_not_found"),
-        UsageError::Db(error) => {
-            tracing::warn!(error = %error, app_id, "usage update failed");
-            FileTrackingError::Retryable("usage_database_unavailable")
+    .await;
+
+    match results.into_iter().next() {
+        Some(Ok(())) => Ok(()),
+        Some(Err(failure)) => {
+            tracing::error!(key = %key, error = %failure, "file accounting failed");
+            Err(FileTrackingError::Retryable("file_accounting_failed"))
         }
-    })
-}
-
-#[derive(Debug)]
-enum UsageError {
-    Db(DbErr),
-    AppNotFound,
-    UserNotFound,
-}
-
-impl From<DbErr> for UsageError {
-    fn from(error: DbErr) -> Self {
-        Self::Db(error)
-    }
-}
-
-impl AsDbConflict for UsageError {
-    fn db_conflict(&self) -> Option<DbConflict> {
-        match self {
-            Self::Db(error) => error.db_conflict(),
-            Self::AppNotFound | Self::UserNotFound => None,
-        }
-    }
-}
-
-impl std::fmt::Display for UsageError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Db(error) => write!(f, "{error}"),
-            Self::AppNotFound => f.write_str("app not found"),
-            Self::UserNotFound => f.write_str("user not found"),
-        }
+        None => Err(FileTrackingError::Retryable("file_accounting_failed")),
     }
 }
 
@@ -352,44 +218,90 @@ impl std::fmt::Display for UsageError {
 mod tests {
     use super::*;
 
-    #[test]
-    fn identity_from_app_and_user_keys() {
-        assert_eq!(
-            parse_key_identity("apps/a1/storage/db/x.lance"),
-            Some(KeyIdentity {
-                user_id: None,
-                app_id: "a1".into()
-            })
-        );
-        assert_eq!(
-            parse_key_identity("users/u1/apps/a1/db/x"),
-            Some(KeyIdentity {
-                user_id: Some("u1".into()),
-                app_id: "a1".into()
-            })
-        );
-        assert_eq!(parse_key_identity("media/x.png"), None);
-        assert_eq!(parse_key_identity("users/u1"), None);
-        assert_eq!(parse_key_identity("apps//x"), None);
+    const CONTAINER: &str = "content";
+    const MEASURED: &str = "1a2b3c";
+
+    fn event(key: &str, sequencer: Option<&str>) -> BlobEvent {
+        BlobEvent {
+            id: "e".into(),
+            event_type: crate::blob_events::BLOB_CREATED.into(),
+            subject: format!("/blobServices/default/containers/{CONTAINER}/blobs/{key}"),
+            content_length: Some(10),
+            sequencer: sequencer.map(str::to_owned),
+        }
+    }
+
+    fn observation(
+        key: &str,
+        sequencer: Option<&str>,
+    ) -> Result<Option<Observation>, FileTrackingError> {
+        observation_for(&event(key, sequencer), CONTAINER, MEASURED)
     }
 
     #[test]
-    fn stale_detection_uses_sequencer_order() {
-        let row = LedgerDocument {
-            id: "i".into(),
-            pk: "a".into(),
-            sk: "k".into(),
-            size: 1,
-            user_id: String::new(),
-            etag: String::new(),
-            sequencer: "00000000000004420000000000028963".into(),
-            updated_at: 0,
-            cosmos_etag: None,
-        };
-        assert!(is_stale(&row, Some("00000000000004420000000000028962")));
-        assert!(is_stale(&row, Some("00000000000004420000000000028963")));
-        assert!(!is_stale(&row, Some("00000000000004420000000000028964")));
-        assert!(!is_stale(&row, None));
+    fn plain_blob_uses_normalized_event_sequencer() {
+        let seen = observation("apps/a1/files/x.txt", Some("000000000000ABCD"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(seen.key, "apps/a1/files/x.txt");
+        assert_eq!(seen.app_id, "a1");
+        assert_eq!(seen.sequencer, "abcd");
+        assert_eq!(seen.bucket, CONTAINER);
+        assert!(!seen.is_dataset());
+    }
+
+    #[test]
+    fn dataset_file_becomes_directory_at_measurement_sequencer() {
+        let seen = observation("users/u1/apps/a1/db/t.lance/data/f.lance", Some("0001"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(seen.key, "users/u1/apps/a1/db/t.lance/");
+        assert_eq!(seen.user_id.as_deref(), Some("u1"));
+        assert_eq!(seen.sequencer, MEASURED);
+        assert!(seen.is_dataset());
+    }
+
+    #[test]
+    fn dataset_file_without_sequencer_is_accepted() {
+        let seen = observation("apps/a1/db/t.lance/data/f.lance", None)
+            .unwrap()
+            .unwrap();
+        assert!(seen.is_dataset());
+        assert_eq!(seen.sequencer, MEASURED);
+    }
+
+    #[test]
+    fn plain_blob_without_valid_sequencer_is_permanent() {
+        let expected = Err(FileTrackingError::Permanent("blob_event_without_sequencer"));
+        assert_eq!(observation("apps/a1/x.txt", None).map(|_| ()), expected);
+        assert_eq!(
+            observation("apps/a1/x.txt", Some("zz")).map(|_| ()),
+            expected
+        );
+    }
+
+    #[test]
+    fn bad_layout_is_permanent() {
+        assert_eq!(
+            observation("media/x.png", Some("01")).map(|_| ()),
+            Err(FileTrackingError::Permanent("invalid_blob_key_layout"))
+        );
+    }
+
+    #[test]
+    fn device_archives_and_other_containers_are_skipped() {
+        assert!(
+            observation("device-archives/a.bin", None)
+                .unwrap()
+                .is_none()
+        );
+        let mut other = event("apps/a1/x.txt", Some("01"));
+        other.subject = "/blobServices/default/containers/other/blobs/apps/a1/x.txt".into();
+        assert!(
+            observation_for(&other, CONTAINER, MEASURED)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

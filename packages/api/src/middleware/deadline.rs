@@ -355,6 +355,17 @@ const RULES: &[Rule] = &[
     rule(M::ANY, "/api/v1/admin/forks/orphans/*", Job),
     // Observed optimize max 35.6 s, table read 7.9 s, columns 4.8 s.
     rule(M::ANY, "/api/v1/apps/{app_id}/db/*", Data),
+    // Connects to an external database through the query service and lists its tables.
+    rule(
+        M::POST,
+        "/api/v1/apps/{app_id}/data-sources/{source_id}/check",
+        Data,
+    ),
+    // Home widget SQL across apps on the query service, which stops a query at 50 s.
+    rule(M::POST, "/api/v1/user/data/query", Data),
+    // Planning a statement, or a DISTINCT/MIN-MAX scan for parameter controls.
+    rule(M::POST, "/api/v1/user/data/query/describe", Data),
+    rule(M::POST, "/api/v1/user/data/query/options", Data),
     rule(M::ANY, "/api/v1/apps/{app_id}/graph/*", Data),
     // Observed dashboard max 6.5 s.
     rule(GET_HEAD, "/api/v1/apps/{app_id}/analytics/*", Data),
@@ -387,7 +398,14 @@ const RULES: &[Rule] = &[
     rule(M::POST, "/api/v1/apps/{app_id}/fork", Data),
     rule(M::POST, "/api/v1/apps/fork/online/begin", Data),
     rule(M::POST, "/api/v1/apps/{app_id}/fork/online/finalize", Data),
+    rule(M::POST, "/api/v1/apps/{app_id}/fork/online/adopt", Data),
+    rule(
+        M::POST,
+        "/api/v1/apps/{app_id}/fork/online/upload-urls",
+        Data,
+    ),
     rule(M::POST, "/api/v1/apps/{app_id}/fork/offline/begin", Data),
+    rule(GET_HEAD, "/api/v1/apps/{app_id}/fork/offline/files", Data),
     rule(M::POST, "/api/v1/registry/publish", Data),
     rule(
         M::POST,
@@ -974,7 +992,32 @@ mod tests {
             Data,
             Some(3.348),
         ),
+        (
+            "POST",
+            "/api/v1/apps/{app_id}/db/queries/describe",
+            Data,
+            None,
+        ),
+        (
+            "POST",
+            "/api/v1/apps/{app_id}/db/queries/options",
+            Data,
+            None,
+        ),
         ("GET", "/api/v1/apps/{app_id}/db", Data, None),
+        (
+            "POST",
+            "/api/v1/apps/{app_id}/data-sources/{source_id}/check",
+            Data,
+            None,
+        ),
+        ("GET", "/api/v1/apps/{app_id}/data-sources", Read, None),
+        (
+            "PATCH",
+            "/api/v1/apps/{app_id}/data-sources/{source_id}",
+            Write,
+            None,
+        ),
         (
             "POST",
             "/api/v1/apps/{app_id}/graph/{overlay_id}/cypher",
@@ -1044,6 +1087,24 @@ mod tests {
         ("POST", "/api/v1/apps/{app_id}/fork", Data, Some(4.451)),
         ("POST", "/api/v1/apps/fork/online/begin", Data, None),
         ("GET", "/api/v1/apps/fork/jobs/{job_id}", Read, None),
+        (
+            "POST",
+            "/api/v1/apps/{app_id}/fork/online/adopt",
+            Data,
+            None,
+        ),
+        (
+            "POST",
+            "/api/v1/apps/{app_id}/fork/online/upload-urls",
+            Data,
+            None,
+        ),
+        (
+            "GET",
+            "/api/v1/apps/{app_id}/fork/offline/files",
+            Data,
+            None,
+        ),
         (
             "POST",
             "/api/v1/apps/{app_id}/fork/online/finalize",
@@ -1148,6 +1209,9 @@ mod tests {
             Some(3.801),
         ),
         ("PUT", "/api/v1/user/info", Write, None),
+        ("POST", "/api/v1/user/data/query", Data, None),
+        ("POST", "/api/v1/user/data/query/describe", Data, None),
+        ("POST", "/api/v1/user/data/query/options", Data, None),
         ("TRACE", "/api/v1/apps", Write, None),
     ];
 

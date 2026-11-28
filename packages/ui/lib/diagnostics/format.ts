@@ -132,7 +132,11 @@ function realtimeLines(realtime: RealtimeStatus | null): Line[] {
 		["Live updates granted transport", text(provider?.transport)],
 		[
 			"Live updates runner",
-			realtime.runner === "shared-worker" ? "shared worker" : "this tab",
+			realtime.runner === "shared-worker"
+				? "shared worker"
+				: realtime.runner === "native"
+					? "app process"
+					: "this tab",
 		],
 		[
 			"Live updates last failure",

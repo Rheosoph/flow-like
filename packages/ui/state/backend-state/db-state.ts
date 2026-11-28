@@ -433,13 +433,19 @@ export interface IDatabaseState {
 		appId: string,
 		userScoped?: boolean,
 	): Promise<ITableSummary[]>;
+	/**
+	 * Compacts the table and updates its indexes. With `keepVersions` false it also
+	 * removes unprotected versions older than `olderThanDays` (default 7) and
+	 * resolves to what was removed; otherwise it resolves to null.
+	 */
 	optimize(
 		appId: string,
 		tableName: string,
 		keepVersions?: boolean,
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
-	): Promise<void>;
+		olderThanDays?: number,
+	): Promise<IDatabaseCleanupStats | null>;
 	updateItem(
 		appId: string,
 		tableName: string,

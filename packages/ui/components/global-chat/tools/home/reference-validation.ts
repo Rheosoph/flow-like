@@ -2,8 +2,10 @@ import type { IBackendState } from "../../../../state/backend-state";
 import type { GraphOverlay } from "../../../../state/backend-state/graph-state";
 import type { SavedQuery } from "../../../../state/backend-state/query-state";
 import {
+	HOME_DATA_SQL_MAX_SOURCES,
 	extractHomeQueryParameters,
 	homeDataColumns,
+	homeDataSqlConfigError,
 	homeOntologyColumns,
 	normalizeHomeDataConfig,
 } from "../../../home/home-data-query";
@@ -55,6 +57,15 @@ function referencedAppPaths(layout: IHomeLayout) {
 			HOME_WIDGET_CONFIG_CONTRACTS[
 				widget.type as keyof typeof HOME_WIDGET_CONFIG_CONTRACTS
 			];
+		if (widget.type === "data" && widget.config.sourceKind === "sql") {
+			const sources = Array.isArray(widget.config.sources)
+				? widget.config.sources.slice(0, HOME_DATA_SQL_MAX_SOURCES)
+				: [];
+			sources.forEach((source, sourceIndex) => {
+				if (objectRecord(source) && typeof source.appId === "string")
+					add(source.appId.trim(), `${path}.sources[${sourceIndex}].appId`);
+			});
+		}
 		for (const [fieldName, field] of Object.entries(contract.fields)) {
 			const reference = field.reference;
 			if (
@@ -121,6 +132,46 @@ function dataFieldReferences(widget: IHomeWidget) {
 	return fields;
 }
 
+function validateHomeSqlWidget(widget: IHomeWidget, path: string) {
+	const issues: HomeToolIssue[] = [];
+	const config = normalizeHomeDataConfig(widget.config);
+	const problem = config.sources.length ? homeDataSqlConfigError(config) : null;
+	if (problem)
+		issues.push(issue("error", "home_sql_config_invalid", path, problem));
+	for (const parameter of extractHomeQueryParameters(config.sql)) {
+		if (parameter.startsWith("__home_")) {
+			issues.push(
+				issue(
+					"error",
+					"home_query_parameter_reserved",
+					`${path}.sql`,
+					`SQL uses reserved parameter '${parameter}'.`,
+				),
+			);
+		} else if (!Object.hasOwn(config.queryParams, parameter)) {
+			issues.push(
+				issue(
+					"error",
+					"home_query_parameter_missing",
+					`${path}.queryParams.${parameter}`,
+					`SQL requires parameter '${parameter}'.`,
+				),
+			);
+		}
+	}
+	if (dataFieldReferences(widget).length > 0) {
+		issues.push(
+			issue(
+				"warning",
+				"home_query_result_fields_unverified",
+				path,
+				"Cross-app SQL result fields cannot be verified before the query runs.",
+			),
+		);
+	}
+	return issues;
+}
+
 /** Validate app, event, table, ontology, and saved-query identities used by a canonical layout. */
 export async function validateHomeLayoutReferences(
 	backend: Pick<
@@ -185,6 +236,10 @@ export async function validateHomeLayoutReferences(
 			}
 		}
 
+		if (widget.type === "data" && widget.config.sourceKind === "sql") {
+			issues.push(...validateHomeSqlWidget(widget, path));
+			continue;
+		}
 		if (widget.type !== "data" || !appId || !options.profileAppIds.has(appId)) {
 			continue;
 		}

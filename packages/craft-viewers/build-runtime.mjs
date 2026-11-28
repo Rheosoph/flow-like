@@ -14,24 +14,52 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { wasmLinkerEnvironment } from "../device-crypto/build-web.mjs";
-import { acquireBuildLock } from "./build-lock.mjs";
+import {
+	acquireBuildLockWithInputs,
+	buildCacheConfiguration,
+	buildSwitch,
+	createSourceWriter,
+	writeSourceFile,
+} from "./build-cache.mjs";
+import { createBuildTimings } from "./build-timings.mjs";
 import { ensureWasmBindgen } from "./build-tools.mjs";
 import {
 	assertPinnedLockPackages,
 	assertPlatformMediaDependencies,
 	usesPlatformMedia,
 } from "./codec-policy.mjs";
+import { prepareInventory } from "./inventory-patch.mjs";
 import {
 	assertNoBrandArtwork,
 	bundleLicenses,
 	hashLicenseInputs,
 } from "./licenses.mjs";
+import { initializeWasmStartup, prepareWasmStartup } from "./wasm-startup.mjs";
 
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const root = resolve(suiteDirectory, "../..");
 const id = process.argv[2];
 if (!id || !/^[a-z]+craft$/.test(id))
 	throw new Error("Pass a Craft runtime name.");
+const timings = createBuildTimings({ id });
+timings.phase("prepare");
+const buildCache = buildCacheConfiguration({ root, id });
+const rebuild = buildSwitch(process.env, "CRAFT_REBUILD");
+const skipStage = buildSwitch(process.env, "CRAFT_SKIP_STAGE");
+let cacheHit = false;
+let succeeded = false;
+process.once("exit", () => {
+	try {
+		timings.finish({
+			cached: cacheHit,
+			success: succeeded,
+			cacheMode: buildCache.mode,
+		});
+	} catch (error) {
+		console.error(`Could not write ${id} build timings: ${error.message}`);
+		process.exitCode = 1;
+	}
+});
 const directory = join(suiteDirectory, id);
 const toolchain =
 	process.env.RUSTUP_TOOLCHAIN ||
@@ -45,9 +73,12 @@ let pin = JSON.parse(readFileSync(join(directory, "upstream.json"), "utf8"));
 if (!/^[a-f0-9]{40}$/.test(pin.revision))
 	throw new Error("Craft runtimes must be pinned to an exact Git commit.");
 const cache = join(root, "target/craft-viewers", id);
-const releaseLock = acquireBuildLock({ directory: cache, label: pin.label });
-// An adapter may be updated while an earlier cold build owns this lock.
-// Read its pin and fingerprint only after that build has finished.
+const { fingerprint, releaseLock } = acquireBuildLockWithInputs({
+	directory: cache,
+	label: pin.label,
+	readFingerprint: inputFingerprint,
+});
+// Keep the pin used by this build inside the editor lock.
 pin = JSON.parse(readFileSync(join(directory, "upstream.json"), "utf8"));
 if (!/^[a-f0-9]{40}$/.test(pin.revision))
 	throw new Error("Craft runtimes must be pinned to an exact Git commit.");
@@ -55,21 +86,23 @@ const source =
 	process.env[`CRAFT_SOURCE_${id.toUpperCase()}`] ||
 	join(cache, "source", pin.revision);
 const output = join(cache, "runtime");
-const hash = createHash("sha256").update(toolchain);
-for (const base of [directory, suiteDirectory]) {
-	for (const name of readdirSync(base).sort()) {
-		const path = join(base, name);
-		if (!statSync(path).isFile()) continue;
-		hash.update(path.slice(root.length)).update(readFileSync(path));
+function inputFingerprint() {
+	const hash = createHash("sha256").update(toolchain);
+	for (const base of [directory, suiteDirectory]) {
+		for (const name of readdirSync(base).sort()) {
+			const path = join(base, name);
+			if (!statSync(path).isFile()) continue;
+			hash.update(path.slice(root.length)).update(readFileSync(path));
+		}
 	}
+	for (const name of [
+		"packages/device-crypto/build-web.mjs",
+		"rust-toolchain.toml",
+	])
+		hash.update(name).update(readFileSync(join(root, name)));
+	hashLicenseInputs(hash);
+	return hash.digest("hex");
 }
-for (const name of [
-	"packages/device-crypto/build-web.mjs",
-	"rust-toolchain.toml",
-])
-	hash.update(name).update(readFileSync(join(root, name)));
-hashLicenseInputs(hash);
-const fingerprint = hash.digest("hex");
 const stampPath = join(output, "runtime.json");
 const targets = [
 	`apps/web/public/craft/${id}`,
@@ -89,6 +122,7 @@ function original(path) {
 	return run("git", ["show", `${pin.revision}:${path}`], {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "inherit"],
+		maxBuffer: 32 * 1024 * 1024,
 	});
 }
 
@@ -132,7 +166,8 @@ function stage() {
 	);
 }
 
-if (!cached()) {
+cacheHit = !rebuild && cached();
+if (!cacheHit) {
 	mkdirSync(source, { recursive: true });
 	if (!existsSync(join(source, ".git"))) {
 		run("git", ["init", "--quiet"]);
@@ -172,14 +207,8 @@ if (!cached()) {
 	const { default: prepare } = await import(
 		pathToFileURL(join(directory, "patch.mjs")).href
 	);
-	const write = (path, text) => {
-		mkdirSync(dirname(join(source, path)), { recursive: true });
-		if (
-			!existsSync(join(source, path)) ||
-			readFileSync(join(source, path), "utf8") !== text
-		)
-			writeFileSync(join(source, path), text);
-	};
+	const sourceWriter = createSourceWriter(source);
+	const { write } = sourceWriter;
 	const prepared =
 		(await prepare({
 			source,
@@ -191,6 +220,22 @@ if (!cached()) {
 			run,
 			root,
 		})) || {};
+	prepareWasmStartup({ id, source, write, original });
+	const inventoryOverrides = prepareInventory({
+		id,
+		root,
+		source,
+		original,
+		write,
+		replaceOnce,
+	});
+	if (inventoryOverrides.length) {
+		prepared.reconcileLock = true;
+		prepared.pinnedSourceOverrides = [
+			...(prepared.pinnedSourceOverrides || []),
+			...inventoryOverrides,
+		];
+	}
 
 	const executable = ensureWasmBindgen({
 		root,
@@ -198,15 +243,12 @@ if (!cached()) {
 		env: buildEnvironment,
 		run,
 	});
-	const cargoTarget =
-		process.env[`CRAFT_TARGET_${id.toUpperCase()}`] ||
-		(process.env.CRAFT_BUILD_CONCURRENCY === "1"
-			? join(root, "target/craft-viewers/cargo")
-			: join(cache, "cargo"));
+	const { cargoTarget } = buildCache;
 	const env = {
 		...buildEnvironment,
 		...wasmLinkerEnvironment({
-			directory: join(cache, "linker"),
+			directory: buildCache.linkerDirectory,
+			contentAddressed: buildCache.contentAddressed,
 			env: buildEnvironment,
 		}),
 		CARGO_TARGET_DIR: cargoTarget,
@@ -218,8 +260,15 @@ if (!cached()) {
 	};
 	// Optional system font checkouts would change the runtime without changing its
 	// pin or cache key. This build uses only upstream's bundled, attributed fonts.
-	env.CRAFT_FONTS_DIR = join(root, "target/craft-viewers/bundled-fonts-only");
+	env.CRAFT_FONTS_DIR = join(
+		root,
+		"target/craft-viewers/bundled-fonts-only-v1",
+	);
 	mkdirSync(env.CRAFT_FONTS_DIR, { recursive: true });
+	// Upstream watches these optional manifests even when absent. Empty files keep
+	// the bundled font selection unchanged and give Cargo stable shared inputs.
+	for (const manifest of ["manifest.txt", "latin-manifest.txt"])
+		writeSourceFile(env.CRAFT_FONTS_DIR, `fonts/${manifest}`, "");
 	env.CRAFT_FONTS_REQUIRED = undefined;
 	const installedTargets = run("rustup", ["target", "list", "--installed"], {
 		encoding: "utf8",
@@ -227,6 +276,7 @@ if (!cached()) {
 	});
 	if (!installedTargets.split(/\s+/).includes("wasm32-unknown-unknown"))
 		run("rustup", ["target", "add", "wasm32-unknown-unknown"]);
+	let localPackages = [];
 	if (prepared.reconcileLock) {
 		// Cargo may remove dependency edges, but must keep reviewed versions and
 		// checksums. Always start from the pin so earlier local builds cannot drift.
@@ -244,10 +294,13 @@ if (!cached()) {
 			],
 			{ env, stdio: "pipe" },
 		);
-		assertPinnedLockPackages(
+		localPackages = assertPinnedLockPackages(
 			original("Cargo.lock"),
 			readFileSync(join(source, "Cargo.lock"), "utf8"),
+			{ source, pinnedSourceOverrides: prepared.pinnedSourceOverrides },
 		);
+	} else if (prepared.pinnedSourceOverrides?.length) {
+		throw new Error("Pinned source overrides require lockfile reconciliation.");
 	}
 	if (usesPlatformMedia(id)) {
 		const dependencies = run(
@@ -264,18 +317,26 @@ if (!cached()) {
 				"--prefix",
 				"none",
 				"--format",
-				"{p}",
+				"{p} features=[{f}]",
 				...(prepared.cargoArgs || []),
 			],
 			{ env, encoding: "utf8", stdio: "pipe" },
 		);
-		assertPlatformMediaDependencies(id, dependencies, pin.cargoPackage);
+		assertPlatformMediaDependencies(
+			id,
+			dependencies,
+			pin.cargoPackage,
+			localPackages,
+		);
 	}
+	sourceWriter.finish();
+	timings.phase("compile");
 	run(
 		"cargo",
 		[
 			"build",
 			"--locked",
+			...(process.env.CRAFT_BUILD_REPORT_DIR ? ["--timings"] : []),
 			"--release",
 			"-p",
 			pin.cargoPackage,
@@ -285,6 +346,7 @@ if (!cached()) {
 		],
 		{ env },
 	);
+	timings.phase("package");
 	rmSync(output, { recursive: true, force: true });
 	mkdirSync(output, { recursive: true });
 	run(executable, [
@@ -302,6 +364,7 @@ if (!cached()) {
 	// Pages limits each static asset to 25 MiB. Gzip also keeps the cold load small;
 	// chunks leave room for upstream growth without changing hosting configuration.
 	const wasmPath = join(output, "craft_bg.wasm");
+	initializeWasmStartup({ id, output, moduleName: "craft" });
 	const wasmBytes = readFileSync(wasmPath);
 	assertNoBrandArtwork(source, wasmBytes);
 	const compressed = gzipSync(wasmBytes, { level: 9 });
@@ -358,6 +421,7 @@ if (!cached()) {
 		pin,
 		cargoPackage: pin.cargoPackage,
 		cargoArgs: prepared.cargoArgs || [],
+		sourceOverrides: localPackages,
 		env,
 	});
 	const files = {};
@@ -390,6 +454,23 @@ if (!cached()) {
 		)}\n`,
 	);
 }
-stage();
+timings.phase("stage");
+if (!skipStage) stage();
+else console.log(`${pin.label} prepared without staging public assets.`);
+const built = JSON.parse(readFileSync(stampPath, "utf8"));
+timings.finish({
+	cached: cacheHit,
+	success: true,
+	cacheMode: buildCache.mode,
+	cargoTarget: buildCache.cargoTarget,
+	revision: pin.revision,
+	staged: !skipStage,
+	wasmBytes: built.wasm.byteLength,
+	compressedBytes: built.wasm.parts.reduce(
+		(sum, part) => sum + part.byteLength,
+		0,
+	),
+});
+succeeded = true;
 releaseLock();
 process.removeListener("exit", releaseLock);

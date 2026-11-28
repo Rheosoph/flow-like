@@ -1,7 +1,16 @@
 """Flow-Like Python SDK."""
 
 from .client import FlowLikeClient
-from .bots import Bot, BotApp, BotClassification, BotModelPolicy, BotSecret
+from .bots import (
+    Bot,
+    BotApp,
+    BotClassification,
+    BotMemoryEntity,
+    BotMemoryEvidence,
+    BotMemoryFact,
+    BotModelPolicy,
+    BotSecret,
+)
 from .inbox import (
     Conversation,
     ConversationMember,
@@ -110,6 +119,9 @@ __all__ = [
     "Bot",
     "BotApp",
     "BotClassification",
+    "BotMemoryEntity",
+    "BotMemoryEvidence",
+    "BotMemoryFact",
     "BotModelPolicy",
     "BotSecret",
     "Conversation",

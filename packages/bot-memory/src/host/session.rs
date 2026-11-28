@@ -343,6 +343,7 @@ impl MemorySession {
                     .map(|call| call.model.clone())
                     .or_else(|| self.options.model.clone()),
                 usage: (!stats.calls.is_empty()).then(|| stats.usage.clone()),
+                error: None,
             };
             crate::telemetry::record(&LLMUsageStats {
                 compactions: vec![event],

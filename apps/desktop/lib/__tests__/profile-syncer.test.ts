@@ -392,6 +392,37 @@ test("a cleanup failure still refreshes the profile after a successful pull", as
 	);
 });
 
+test("missing-bit cleanup runs on the first sync and then hourly, not every minute", async () => {
+	const cleanups = () =>
+		mocks.invoke.mock.calls.filter(
+			([command]) => command === "prune_missing_profile_bits",
+		).length;
+	const libraryReads = () =>
+		mocks.fetch.mock.calls.filter(([url]) =>
+			String(url).includes("/api/v1/user/bits?"),
+		).length;
+
+	await act(async () => render());
+	await settle();
+	expect(cleanups()).toBe(1);
+	expect(libraryReads()).toBe(1);
+
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(59 * 60_000);
+	});
+	await settle();
+	expect(pushes().length).toBeGreaterThan(50);
+	expect(cleanups()).toBe(1);
+	expect(libraryReads()).toBe(1);
+
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(60_000);
+	});
+	await settle();
+	expect(cleanups()).toBe(2);
+	expect(libraryReads()).toBe(2);
+});
+
 test("manual saves, profile switches and authentication changes still request synchronization", async () => {
 	await act(async () => render());
 	await settle();

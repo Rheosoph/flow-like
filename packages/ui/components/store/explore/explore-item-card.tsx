@@ -13,6 +13,7 @@ import {
 	useMemo,
 } from "react";
 import { useAssetImage } from "../../../hooks/use-asset-image";
+import { emitGuideEvent } from "../../../lib/guide/guide-events";
 import type { PackageSummary } from "../../../lib/schema/wasm";
 import { cn } from "../../../lib/utils";
 import type { IEventMapping } from "../../interfaces/interfaces";
@@ -67,6 +68,7 @@ export function ExploreLinksProvider({
 			from,
 			appHref,
 			openApp: (appId) => {
+				emitGuideEvent("store:app-opened");
 				void openApp(appId);
 			},
 			isOwned,
@@ -173,6 +175,7 @@ export function ExploreItemLink({
 			href={href}
 			aria-label={label}
 			data-explore-tile={tile}
+			data-guide={item.kind === "app" ? "explore-app" : undefined}
 			className={className}
 			onClick={(event) => {
 				if (item.kind !== "app" || !isPlainClick(event)) return;
@@ -202,6 +205,7 @@ export function ExploreAppLink({
 			href={links.appHref(appId)}
 			aria-label={label}
 			data-explore-app={appId}
+			data-guide="explore-app"
 			className={cn(
 				"block min-w-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
 				className,

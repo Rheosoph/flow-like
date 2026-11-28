@@ -1,40 +1,33 @@
-//! Apply an offline-bundle fork to the local store.
+//! Fork files between this device and a hub, moved only through signed URLs.
 //!
-//! Server side: `POST /apps/{src}/fork/offline/begin` returns:
-//!   - `meta_blobs`: remapped + secret-stripped manifest, boards,
-//!     events, widgets, templates, pages, plus translated DB-backed
-//!     metadata files (base64-encoded compressed bytes) and `media/...`
-//!     raw bytes
-//!   - `source_content_prefix` + `shared_credentials`: scoped read
-//!     access to the *source's* content store prefix (metadata/,
-//!     upload/, storage/)
+//! The hub never hands out a storage credential. It signs one request per
+//! file, picks every object key, and keeps whatever a fork produces on the
+//! way under `tmp/`, which expires on its own.
 //!
-//! This command:
-//!   1. Decodes each inline blob. Meta artifacts are written to the
-//!      desktop's local **meta** store; `metadata/...` blobs are
-//!      written to the local **content** store because local metadata
-//!      readers resolve there. `media/...` blobs are also content.
-//!   2. Builds an `object_store` client from the scoped credentials
-//!      and lists the source content prefix; for each file, copies
-//!      to the desktop's local **content** store, translating any
-//!      `metadata/{widgets|templates|pages}/{src_id}/...` segment
-//!      via `id_map`. Paths under `content_exclude_prefixes` — the
-//!      owner's fork policy — are skipped in both stages. The legacy
-//!      training ledger is device-local and is never mirrored.
-//!   3. Recreates `db_table_schemas` as empty tables in the local
-//!      project database, for schema-only database forks.
+//! Online → offline (`POST /apps/{src}/fork/offline/begin`):
+//!   1. [`apply_fork_bundle`] downloads the re-keyed, secret-stripped meta
+//!      artifacts (manifest, boards, events, widgets, templates, pages,
+//!      DB-backed metadata, app media) into the local stores: meta
+//!      artifacts into the **meta** store, `metadata/...` and `media/...`
+//!      into the **content** store, where local readers resolve them. It
+//!      then recreates `db_table_schemas` as empty tables for schema-only
+//!      database forks.
+//!   2. [`download_fork_files`] writes each page of content files from
+//!      `GET /apps/{src}/fork/offline/files` into the content store. The hub
+//!      already applied the owner's fork policy and the destination paths.
 //!
-//! The desktop's destination app id is **distinct** from the
-//! server-generated `new_app_id` returned by the begin endpoint; the
-//! caller passes whichever they want here. Per-file failures are
-//! non-fatal — collected into the response so the UI can show
-//! "12 files copied, 1 failed".
+//! Offline → online (`POST /apps/fork/online/begin`):
+//!   [`list_local_app_content`] names the files to upload, the hub signs
+//!   uploads into its staging area, and [`upload_local_app_files`] puts
+//!   them. The hub moves them into the app and re-keys them.
+//!
+//! Per-file failures are non-fatal: they are collected into the response so
+//! the UI can show "12 files copied, 1 failed".
 
 use flow_like::flow_like_storage::object_store::ObjectStoreExt;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use flow_like::credentials::SharedCredentials;
 use flow_like::flow_like_storage::{
     Path,
     arrow_schema::Schema,
@@ -45,9 +38,8 @@ use flow_like::flow_like_storage::{
     object_store::ObjectStore,
 };
 use flow_like_types::anyhow;
-use flow_like_types::base64::{self, Engine as _};
 use flow_like_types::storage_paths::is_legacy_training_ledger_path;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use serde::Deserialize;
 use tauri::AppHandle;
 
@@ -57,10 +49,16 @@ use crate::{
     state::{TauriFlowLikeState, TauriSettingsState},
 };
 
+const TRANSFER_CONCURRENCY: usize = 8;
+
+/// One file and the signed request that moves it, as the hub hands it out.
 #[derive(Clone, Debug, Deserialize)]
-pub struct MetaBlobInput {
-    pub relative_path: String,
-    pub data_b64: String,
+pub struct SignedFileInput {
+    /// Path relative to the app root.
+    pub path: String,
+    pub url: String,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -69,35 +67,13 @@ pub struct ApplyForkBundleArgs {
     /// server's `new_app_id` so paths line up across the boundary
     /// (saves a remap pass).
     pub app_id: String,
-    /// Remapped + stripped meta artifacts shipped in the begin
-    /// response body. Each blob's `relative_path` is rooted at
+    /// Signed downloads of the re-keyed meta artifacts, each rooted at
     /// `apps/{app_id}/`.
     #[serde(default)]
-    pub meta_blobs: Vec<MetaBlobInput>,
-    /// Bucket-relative source content prefix (e.g.
-    /// `apps/{src_app_id}`). Paired with `credentials`.
-    pub source_content_prefix: String,
-    /// Scoped read credentials for `source_content_prefix`.
-    pub credentials: Arc<SharedCredentials>,
-    /// `id_map.widgets` / `templates` / `pages` from the begin
-    /// response. Used to translate `metadata/{kind}/{src_id}/...`
-    /// segments to their destination ids when writing locally.
-    /// Other meta paths (upload/, storage/, metadata/{lang}.meta)
-    /// are identity-copied.
-    #[serde(default)]
-    pub widget_id_map: HashMap<String, String>,
-    #[serde(default)]
-    pub template_id_map: HashMap<String, String>,
-    #[serde(default)]
-    pub page_id_map: HashMap<String, String>,
-    /// Source-relative prefixes (rooted at `apps/{src_app_id}/`) the
-    /// owner's fork policy excludes. Applied to both the inline blobs
-    /// and the mirrored source listing.
-    #[serde(default)]
-    pub content_exclude_prefixes: Vec<String>,
+    pub meta_files: Vec<SignedFileInput>,
     /// Arrow schemas of the source's user tables on a schema-only
-    /// database fork. Their `.lance` directories are excluded from the
-    /// mirror; each table is recreated empty locally instead.
+    /// database fork. Their `.lance` directories never arrive; each table
+    /// is recreated empty locally instead.
     #[serde(default)]
     pub db_table_schemas: Vec<ForkTableSchemaInput>,
 }
@@ -113,18 +89,38 @@ pub struct ForkTableSchemaInput {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ApplyForkBundleResponse {
     pub app_id: String,
-    pub meta_blobs_written: u64,
-    pub content_objects_copied: u64,
-    pub content_bytes_copied: u64,
-    pub content_objects_skipped: u64,
+    pub meta_files_written: u64,
     pub db_tables_created: u64,
+    pub failures: Vec<BundleFileFailure>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DownloadForkFilesArgs {
+    pub app_id: String,
+    pub files: Vec<SignedFileInput>,
+    /// Paths a meta artifact already wrote; the staged DB metadata wins
+    /// over a content file with the same path.
+    #[serde(default)]
+    pub skip_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct UploadLocalAppFilesArgs {
+    pub source_app_id: String,
+    pub files: Vec<SignedFileInput>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ForkFilesResponse {
+    pub files_copied: u64,
+    pub bytes_copied: u64,
     pub failures: Vec<BundleFileFailure>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct BundleFileFailure {
-    /// Either `meta:{relative_path}` or `content:{relative_path}` so
-    /// the UI can group failures by transport.
+    /// `meta:{path}`, `content:{path}` or `db:{table}` so the UI can group
+    /// failures by what failed.
     pub kind_and_path: String,
     pub reason: String,
 }
@@ -135,27 +131,18 @@ pub struct LocalAppBundleSummary {
     pub total_object_count: u64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct UploadLocalAppContentArgs {
-    pub source_app_id: String,
-    pub destination_content_prefix: String,
-    pub credentials: Arc<SharedCredentials>,
-}
-
 #[derive(Clone, Debug, serde::Serialize)]
-pub struct UploadLocalAppContentResponse {
-    pub content_objects_copied: u64,
-    pub content_bytes_copied: u64,
-    pub failures: Vec<BundleFileFailure>,
+pub struct LocalContentFile {
+    pub path: String,
+    pub size: u64,
 }
 
-/// Summarizes exactly what [`upload_local_app_content_bundle`] will
-/// push, so the server's cap check at `/fork/online/begin` and its
-/// re-measurement at finalize agree. Meta artifacts are excluded (they
-/// travel through the app-edit endpoints), as is the device-local training
-/// ledger; each relative path is counted once even though the desktop's
-/// meta and content stores share a root, and project-database objects are
-/// left out of the object count.
+/// Summarizes exactly what an upload pushes, so the server's cap check at
+/// `/fork/online/begin` and its re-measurement at finalize agree. Meta
+/// artifacts are excluded (they travel through the app-edit endpoints), as
+/// is the device-local training ledger; each relative path is counted once
+/// even though the desktop's meta and content stores share a root, and
+/// project-database objects are left out of the object count.
 #[tauri::command(async)]
 pub async fn summarize_local_app_bundle(
     app_handle: AppHandle,
@@ -198,92 +185,82 @@ pub async fn summarize_local_app_bundle(
     })
 }
 
+/// The content files an upload of `app_id` pushes. The desktop keeps meta and
+/// content under one root, so meta artifacts (`manifest.app`, `*.board`,
+/// `events/**`, `versions/**`) are left out: they go up through the app-edit
+/// endpoints.
 #[tauri::command(async)]
-pub async fn upload_local_app_content_bundle(
+pub async fn list_local_app_content(
     app_handle: AppHandle,
-    args: UploadLocalAppContentArgs,
-) -> Result<UploadLocalAppContentResponse, TauriFunctionError> {
+    app_id: String,
+) -> Result<Vec<LocalContentFile>, TauriFunctionError> {
+    if app_id.is_empty() {
+        return Err(TauriFunctionError::new("app_id is empty"));
+    }
+    let content_store = TauriFlowLikeState::get_project_storage_store(&app_handle).await?;
+    let entries = summarize_store_prefix(&content_store, &Path::from("apps").join(app_id))
+        .await
+        .map_err(|e| TauriFunctionError::new(&format!("list local content: {e}")))?;
+    Ok(entries
+        .into_iter()
+        .filter(|(path, _)| is_uploaded_content_path(path))
+        .map(|(path, size)| LocalContentFile { path, size })
+        .collect())
+}
+
+/// Put local content files through the hub's signed upload URLs.
+#[tauri::command(async)]
+pub async fn upload_local_app_files(
+    app_handle: AppHandle,
+    args: UploadLocalAppFilesArgs,
+) -> Result<ForkFilesResponse, TauriFunctionError> {
     if args.source_app_id.is_empty() {
         return Err(TauriFunctionError::new("source_app_id is empty"));
     }
-    if args.destination_content_prefix.is_empty() {
-        return Err(TauriFunctionError::new(
-            "destination_content_prefix is empty",
-        ));
-    }
+    let content_store = TauriFlowLikeState::get_project_storage_store(&app_handle).await?;
+    let app_root = Path::from("apps").join(args.source_app_id);
+    let client = transfer_client()?;
 
-    let src_content_store = TauriFlowLikeState::get_project_storage_store(&app_handle).await?;
-    let dst_content_store = args
-        .credentials
-        .to_store(false)
-        .await
-        .map_err(|e| TauriFunctionError::new(&format!("build dst content store: {e}")))?
-        .as_generic();
-
-    let src_prefix = Path::from("apps").join(args.source_app_id);
-    let src_prefix_str = src_prefix.as_ref().to_string();
-    let dst_prefix = parse_storage_path(&args.destination_content_prefix);
-
-    let mut content_objects_copied: u64 = 0;
-    let mut content_bytes_copied: u64 = 0;
-    let mut failures: Vec<BundleFileFailure> = Vec::new();
-    let mut listing = src_content_store.list(Some(&src_prefix));
-
-    loop {
-        let item = match listing.try_next().await {
-            Ok(Some(item)) => item,
-            Ok(None) => break,
-            Err(e) if is_missing_prefix_error(&e) => break,
-            Err(e) => return Err(TauriFunctionError::new(&format!("list local content: {e}"))),
-        };
-        let path_str = item.location.as_ref().to_string();
-        let Some(relative_path) = relative_to_prefix(&path_str, &src_prefix_str) else {
-            continue;
-        };
-        if relative_path.is_empty() {
-            continue;
-        }
-        // The desktop keeps meta and content under one root, so an
-        // unfiltered walk would push `manifest.app`, `*.board`,
-        // `events/**` and `versions/**` into the destination's content
-        // bucket — where nothing reads them, while they still count
-        // against the fork size cap and trip the server's
-        // meta-in-content-store leak detector. Meta artifacts go up
-        // through the app-edit endpoints instead.
-        if !is_uploaded_content_path(&relative_path) {
-            continue;
-        }
-
-        let dst_path = join_object_path(&dst_prefix, &relative_path);
-
-        match copy_one(
-            &src_content_store,
-            &dst_content_store,
-            &item.location,
-            &dst_path,
-        )
-        .await
-        {
-            Ok(bytes) => {
-                content_objects_copied = content_objects_copied.saturating_add(1);
-                content_bytes_copied = content_bytes_copied.saturating_add(bytes);
+    let outcomes: Vec<(String, flow_like_types::Result<u64>)> = futures::stream::iter(args.files)
+        .map(|file| {
+            let content_store = content_store.clone();
+            let app_root = app_root.clone();
+            let client = client.clone();
+            async move {
+                let outcome = upload_from(&client, &content_store, &app_root, &file).await;
+                (file.path, outcome)
             }
-            Err(e) => {
-                failures.push(BundleFileFailure {
-                    kind_and_path: format!("content:{}", relative_path),
-                    reason: e.to_string(),
-                });
-            }
-        }
-    }
-
-    Ok(UploadLocalAppContentResponse {
-        content_objects_copied,
-        content_bytes_copied,
-        failures,
-    })
+        })
+        .buffer_unordered(TRANSFER_CONCURRENCY)
+        .collect()
+        .await;
+    Ok(tally("content", outcomes))
 }
 
+/// Read `file` from under `root` and PUT it.
+async fn upload_from(
+    client: &reqwest::Client,
+    store: &Arc<dyn ObjectStore>,
+    root: &Path,
+    file: &SignedFileInput,
+) -> flow_like_types::Result<u64> {
+    if !is_uploaded_content_path(&file.path) || !is_plain_relative(&file.path) {
+        return Err(anyhow!("not a content file of this app"));
+    }
+    let bytes = store
+        .get(&join_object_path(root, &file.path))
+        .await
+        .map_err(|e| anyhow!("read local file: {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| anyhow!("read local file: {e}"))?;
+    let size = bytes.len() as u64;
+    send_signed(client, reqwest::Method::PUT, file, Some(bytes.to_vec())).await?;
+    Ok(size)
+}
+
+/// Write the re-keyed meta artifacts of an offline fork into the local
+/// stores, recreate schema-only tables and list the app in the profile.
 #[tauri::command(async)]
 pub async fn apply_fork_bundle(
     app_handle: AppHandle,
@@ -291,9 +268,6 @@ pub async fn apply_fork_bundle(
 ) -> Result<ApplyForkBundleResponse, TauriFunctionError> {
     if args.app_id.is_empty() {
         return Err(TauriFunctionError::new("app_id is empty"));
-    }
-    if args.source_content_prefix.is_empty() {
-        return Err(TauriFunctionError::new("source_content_prefix is empty"));
     }
 
     let profile_id = TauriSettingsState::current_profile(&app_handle)
@@ -303,130 +277,41 @@ pub async fn apply_fork_bundle(
     let dst_meta_store = TauriFlowLikeState::get_project_meta_store(&app_handle).await?;
     let dst_content_store = TauriFlowLikeState::get_project_storage_store(&app_handle).await?;
     let dst_app_prefix = Path::from("apps").join(args.app_id.clone());
+    let client = transfer_client()?;
 
-    let mut meta_blobs_written: u64 = 0;
-    let mut content_objects_copied: u64 = 0;
-    let mut content_bytes_copied: u64 = 0;
-    let mut content_objects_skipped: u64 = 0;
-    let mut failures: Vec<BundleFileFailure> = Vec::new();
-    let mut manifest_written = false;
-    let mut inline_content_paths: HashSet<String> = HashSet::new();
-
-    // ---- Stage 1: inline blobs (decode body → local stores) -----
-    for blob in args.meta_blobs {
-        let relative_path = blob.relative_path.trim_matches('/').to_string();
-        // `manifest.app` is never excludable — the check below this loop
-        // hard-errors without it, and no policy prefix can match it.
-        if relative_path != "manifest.app"
-            && is_excluded(&relative_path, &args.content_exclude_prefixes)
-        {
-            content_objects_skipped = content_objects_skipped.saturating_add(1);
-            continue;
-        }
-        let dst_path = join_object_path(&dst_app_prefix, &relative_path);
-        let dst_store = if is_content_blob_path(&relative_path) {
-            &dst_content_store
-        } else {
-            &dst_meta_store
-        };
-        match base64::engine::general_purpose::STANDARD.decode(&blob.data_b64) {
-            Ok(bytes) => {
-                let payload: Vec<u8> = bytes;
-                if let Err(e) = dst_store.put(&dst_path, payload.into()).await {
-                    failures.push(BundleFileFailure {
-                        kind_and_path: format!("inline:{}", blob.relative_path),
-                        reason: format!("local put: {e}"),
-                    });
-                    continue;
+    let manifest_listed = args
+        .meta_files
+        .iter()
+        .any(|file| file.path.trim_matches('/') == "manifest.app");
+    let outcomes: Vec<(String, flow_like_types::Result<u64>)> =
+        futures::stream::iter(args.meta_files)
+            .map(|file| {
+                let store = if is_content_blob_path(file.path.trim_matches('/')) {
+                    dst_content_store.clone()
+                } else {
+                    dst_meta_store.clone()
+                };
+                let dst_app_prefix = dst_app_prefix.clone();
+                let client = client.clone();
+                async move {
+                    let outcome = download_into(&client, &store, &dst_app_prefix, &file).await;
+                    (file.path, outcome)
                 }
-                meta_blobs_written = meta_blobs_written.saturating_add(1);
-                if is_content_blob_path(&relative_path) {
-                    inline_content_paths.insert(relative_path.clone());
-                }
-                if relative_path == "manifest.app" {
-                    manifest_written = true;
-                }
-            }
-            Err(e) => {
-                failures.push(BundleFileFailure {
-                    kind_and_path: format!("inline:{}", blob.relative_path),
-                    reason: format!("base64 decode: {e}"),
-                });
-            }
-        }
-    }
-    if !manifest_written {
+            })
+            .buffer_unordered(TRANSFER_CONCURRENCY)
+            .collect()
+            .await;
+    let manifest_written = outcomes
+        .iter()
+        .any(|(path, outcome)| path.trim_matches('/') == "manifest.app" && outcome.is_ok());
+    let written = tally("meta", outcomes);
+    if !manifest_listed || !manifest_written {
         return Err(TauriFunctionError::new(
             "fork bundle did not write a local manifest.app",
         ));
     }
 
-    // ---- Stage 2: CONTENT (signed src prefix → local content) -----
-    let src_content_store = args
-        .credentials
-        .to_store(false)
-        .await
-        .map_err(|e| TauriFunctionError::new(&format!("build src content store: {e}")))?
-        .as_generic();
-    let src_prefix = parse_storage_path(&args.source_content_prefix);
-    let src_prefix_str = src_prefix.as_ref().to_string();
-
-    let mut listing = src_content_store.list(Some(&src_prefix));
-    while let Some(item) = listing
-        .try_next()
-        .await
-        .map_err(|e| TauriFunctionError::new(&format!("list source content: {e}")))?
-    {
-        let path_str = item.location.as_ref().to_string();
-        let Some(relative_path) = relative_to_prefix(&path_str, &src_prefix_str) else {
-            continue;
-        };
-        if relative_path.is_empty() {
-            continue;
-        }
-        // Matched on the SOURCE-relative path: `translate_content_path`
-        // rewrites `metadata/{widgets|templates|pages}/{id}` segments,
-        // which the policy prefixes are stated against.
-        if is_device_local_path(&relative_path)
-            || is_excluded(&relative_path, &args.content_exclude_prefixes)
-        {
-            content_objects_skipped = content_objects_skipped.saturating_add(1);
-            continue;
-        }
-
-        let translated = translate_content_path(
-            &relative_path,
-            &args.widget_id_map,
-            &args.template_id_map,
-            &args.page_id_map,
-        );
-        if inline_content_paths.contains(&translated) {
-            continue;
-        }
-        let dst_path = join_object_path(&dst_app_prefix, &translated);
-
-        match copy_one(
-            &src_content_store,
-            &dst_content_store,
-            &item.location,
-            &dst_path,
-        )
-        .await
-        {
-            Ok(bytes) => {
-                content_objects_copied = content_objects_copied.saturating_add(1);
-                content_bytes_copied = content_bytes_copied.saturating_add(bytes);
-            }
-            Err(e) => {
-                failures.push(BundleFileFailure {
-                    kind_and_path: format!("content:{}", relative_path),
-                    reason: e.to_string(),
-                });
-            }
-        }
-    }
-
-    // ---- Stage 3: schema-only tables (empty local project DB) -----
+    let mut failures = written.failures;
     let db_tables_created = create_empty_project_tables(
         &app_handle,
         &args.app_id,
@@ -439,20 +324,140 @@ pub async fn apply_fork_bundle(
 
     Ok(ApplyForkBundleResponse {
         app_id: args.app_id,
-        meta_blobs_written,
-        content_objects_copied,
-        content_bytes_copied,
-        content_objects_skipped,
+        meta_files_written: written.files_copied,
         db_tables_created,
         failures,
     })
 }
 
+/// Write one page of an offline fork's content files into the local content
+/// store.
+#[tauri::command(async)]
+pub async fn download_fork_files(
+    app_handle: AppHandle,
+    args: DownloadForkFilesArgs,
+) -> Result<ForkFilesResponse, TauriFunctionError> {
+    if args.app_id.is_empty() {
+        return Err(TauriFunctionError::new("app_id is empty"));
+    }
+    let content_store = TauriFlowLikeState::get_project_storage_store(&app_handle).await?;
+    let app_root = Path::from("apps").join(args.app_id);
+    let skip: HashSet<String> = args
+        .skip_paths
+        .iter()
+        .map(|path| path.trim_matches('/').to_string())
+        .collect();
+    let client = transfer_client()?;
+
+    let outcomes: Vec<(String, flow_like_types::Result<u64>)> = futures::stream::iter(
+        args.files
+            .into_iter()
+            .filter(|file| !skip.contains(file.path.trim_matches('/'))),
+    )
+    .map(|file| {
+        let content_store = content_store.clone();
+        let app_root = app_root.clone();
+        let client = client.clone();
+        async move {
+            let outcome = download_into(&client, &content_store, &app_root, &file).await;
+            (file.path, outcome)
+        }
+    })
+    .buffer_unordered(TRANSFER_CONCURRENCY)
+    .collect()
+    .await;
+    Ok(tally("content", outcomes))
+}
+
+fn transfer_client() -> Result<reqwest::Client, TauriFunctionError> {
+    reqwest::Client::builder()
+        .build()
+        .map_err(|e| TauriFunctionError::new(&format!("build transfer client: {e}")))
+}
+
+/// GET `file` and write it under `root`.
+async fn download_into(
+    client: &reqwest::Client,
+    store: &Arc<dyn ObjectStore>,
+    root: &Path,
+    file: &SignedFileInput,
+) -> flow_like_types::Result<u64> {
+    let path = file.path.trim_matches('/');
+    if !is_plain_relative(path) || is_device_local_path(path) {
+        return Err(anyhow!("refused a path outside the app"));
+    }
+    let bytes = send_signed(client, reqwest::Method::GET, file, None).await?;
+    let size = bytes.len() as u64;
+    store
+        .put(&join_object_path(root, path), bytes.into())
+        .await
+        .map_err(|e| anyhow!("write local file: {e}"))?;
+    Ok(size)
+}
+
+/// Send the one request `file` was signed for and return the response body.
+async fn send_signed(
+    client: &reqwest::Client,
+    method: reqwest::Method,
+    file: &SignedFileInput,
+    body: Option<Vec<u8>>,
+) -> flow_like_types::Result<Vec<u8>> {
+    let mut request = client.request(method.clone(), &file.url);
+    for (name, value) in &file.headers {
+        request = request.header(name, value);
+    }
+    if let Some(body) = body {
+        request = request.body(body);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| anyhow!("{method} request: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow!("{method} answered HTTP {status}"));
+    }
+    Ok(response
+        .bytes()
+        .await
+        .map_err(|e| anyhow!("read {method} response: {e}"))?
+        .to_vec())
+}
+
+fn tally(kind: &str, outcomes: Vec<(String, flow_like_types::Result<u64>)>) -> ForkFilesResponse {
+    let mut response = ForkFilesResponse {
+        files_copied: 0,
+        bytes_copied: 0,
+        failures: Vec::new(),
+    };
+    for (path, outcome) in outcomes {
+        match outcome {
+            Ok(bytes) => {
+                response.files_copied = response.files_copied.saturating_add(1);
+                response.bytes_copied = response.bytes_copied.saturating_add(bytes);
+            }
+            Err(e) => response.failures.push(BundleFileFailure {
+                kind_and_path: format!("{kind}:{path}"),
+                reason: e.to_string(),
+            }),
+        }
+    }
+    response
+}
+
+/// A path that stays inside the app root it is joined to.
+fn is_plain_relative(path: &str) -> bool {
+    !path.is_empty()
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+}
+
 /// Recreates the source's user tables as **empty** tables in the local
-/// project database. A schema-only fork excludes every `{table}.lance/`
-/// directory from the content mirror, so without this the destination has
-/// the Data Studio configuration but no tables behind it. Per-table
-/// failures are collected — a fork with one unusable schema still applies.
+/// project database. A schema-only fork never ships a `{table}.lance/`
+/// directory, so without this the destination has the Data Studio
+/// configuration but no tables behind it. Per-table failures are collected —
+/// a fork with one unusable schema still applies.
 async fn create_empty_project_tables(
     app_handle: &AppHandle,
     app_id: &str,
@@ -533,60 +538,6 @@ async fn create_one_empty_table(
     Ok(())
 }
 
-/// Translate a content-store relative path. Currently the only
-/// segments that need translation are
-/// `metadata/{widgets|templates|pages}/{src_id}/...` — everything
-/// else (`metadata/{lang}.meta`, `upload/...`, `storage/...`) is
-/// identity-copied.
-fn translate_content_path(
-    relative: &str,
-    widget_map: &HashMap<String, String>,
-    template_map: &HashMap<String, String>,
-    page_map: &HashMap<String, String>,
-) -> String {
-    let segments: Vec<&str> = relative.split('/').collect();
-    if segments.len() < 3 || segments[0] != "metadata" {
-        return relative.to_string();
-    }
-    let map = match segments[1] {
-        "widgets" => widget_map,
-        "templates" => template_map,
-        "pages" => page_map,
-        _ => return relative.to_string(),
-    };
-    let dst_id = map
-        .get(segments[2])
-        .map(String::as_str)
-        .unwrap_or(segments[2]);
-    let mut out = format!("metadata/{}/{}", segments[1], dst_id);
-    for seg in &segments[3..] {
-        out.push('/');
-        out.push_str(seg);
-    }
-    out
-}
-
-async fn copy_one(
-    src_store: &Arc<dyn ObjectStore>,
-    dst_store: &Arc<dyn ObjectStore>,
-    src_path: &Path,
-    dst_path: &Path,
-) -> flow_like_types::Result<u64> {
-    let bytes = src_store
-        .get(src_path)
-        .await
-        .map_err(|e| anyhow!("get: {e}"))?
-        .bytes()
-        .await
-        .map_err(|e| anyhow!("read body: {e}"))?;
-    let len = bytes.len() as u64;
-    dst_store
-        .put(dst_path, bytes.into())
-        .await
-        .map_err(|e| anyhow!("put: {e}"))?;
-    Ok(len)
-}
-
 /// Lists `(relative_path, size)` for every object below `prefix`.
 pub(crate) async fn summarize_store_prefix(
     store: &Arc<dyn ObjectStore>,
@@ -634,8 +585,7 @@ pub(crate) fn is_uploaded_content_path(relative_path: &str) -> bool {
 }
 
 /// The legacy training ledger under `storage/inspection/`. Training state
-/// never leaves this device implicitly, whatever exclude prefixes the
-/// server sends.
+/// never leaves this device implicitly, and never lands on it from a fork.
 fn is_device_local_path(relative_path: &str) -> bool {
     is_legacy_training_ledger_path(relative_path)
 }
@@ -648,16 +598,6 @@ fn is_device_local_path(relative_path: &str) -> bool {
 /// `utils::fork::preview::project_db_prefix` on the server.
 fn is_project_db_path(relative_path: &str) -> bool {
     relative_path.starts_with("storage/db/")
-}
-
-/// Owner fork policy, applied to a source-relative path. The server already
-/// stripped what it ships inline; this keeps the mirrored source listing
-/// honest. Not a security boundary — the forker holds `ReadFiles` on the
-/// source either way.
-fn is_excluded(relative_path: &str, excludes: &[String]) -> bool {
-    excludes
-        .iter()
-        .any(|prefix| relative_path.starts_with(prefix.as_str()))
 }
 
 fn is_missing_prefix_error(error: &impl std::fmt::Display) -> bool {
@@ -704,5 +644,21 @@ mod tests {
             assert!(is_uploaded_content_path(path), "{path}");
         }
         assert!(!is_uploaded_content_path("manifest.app"));
+    }
+
+    #[test]
+    fn hub_paths_never_leave_the_app_root() {
+        for path in ["manifest.app", "upload/a b/c.csv", "storage/db/t.lance/x"] {
+            assert!(is_plain_relative(path), "{path}");
+        }
+        for path in [
+            "",
+            "../other/manifest.app",
+            "upload/../../x",
+            "upload//x",
+            "./x",
+        ] {
+            assert!(!is_plain_relative(path), "{path}");
+        }
     }
 }

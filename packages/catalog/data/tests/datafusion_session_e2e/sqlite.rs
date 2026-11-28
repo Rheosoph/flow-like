@@ -5,7 +5,7 @@ use flow_like_catalog_data::data::datafusion::databases::RegisterSqliteNode;
 use flow_like_runtime::flow::node::NodeLogic;
 use flow_like_types::async_trait;
 use flow_like_types::{Value, json::json};
-use sqlx::{Executor, SqlitePool};
+use sqlx::{AssertSqlSafe, Executor, SqlitePool};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -63,20 +63,17 @@ impl Backend for Sqlite {
     async fn create_source(&self) -> String {
         let table = unique("people");
         let pool = self.pool().await;
-        pool.execute(
-            format!(
-                "CREATE TABLE {table} (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    score REAL NOT NULL,
-                    active BOOLEAN NOT NULL,
-                    created_at TIMESTAMP NOT NULL
-                );
-                INSERT INTO {table} VALUES {};",
-                values_sql(numeric_boolean, quoted_timestamp)
-            )
-            .as_str(),
-        )
+        pool.execute(AssertSqlSafe(format!(
+            "CREATE TABLE {table} (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                score REAL NOT NULL,
+                active BOOLEAN NOT NULL,
+                created_at TIMESTAMP NOT NULL
+            );
+            INSERT INTO {table} VALUES {};",
+            values_sql(numeric_boolean, quoted_timestamp)
+        )))
         .await
         .unwrap_or_else(|error| panic!("seeding SQLite table {table}: {error}"));
         pool.close().await;
@@ -85,10 +82,11 @@ impl Backend for Sqlite {
 
     async fn count_rows(&self, source: &str) -> i64 {
         let pool = self.pool().await;
-        let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {source}"))
-            .fetch_one(&pool)
-            .await
-            .unwrap_or_else(|error| panic!("counting SQLite table {source}: {error}"));
+        let count: i64 =
+            sqlx::query_scalar(AssertSqlSafe(format!("SELECT COUNT(*) FROM {source}")))
+                .fetch_one(&pool)
+                .await
+                .unwrap_or_else(|error| panic!("counting SQLite table {source}: {error}"));
         pool.close().await;
         count
     }

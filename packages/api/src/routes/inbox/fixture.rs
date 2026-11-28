@@ -25,7 +25,7 @@ pub(crate) const BOT_TURN_TABLE: &str = r#"CREATE TABLE public."BotTurn" (
         "conversationId" TEXT NOT NULL, "triggerMessageId" TEXT NOT NULL,
         "hostKind" TEXT NOT NULL, "status" TEXT NOT NULL, "attempts" INTEGER NOT NULL,
         "hostId" TEXT, "leaseUntil" TEXT, "operationId" TEXT, "replyMessageId" TEXT,
-        "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT,
+        "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT, "originId" TEXT, "discussionHops" INTEGER,
         "audience" TEXT NOT NULL DEFAULT 'OWNER', "statusText" TEXT, "unprompted" BOOLEAN, "createdAt" TEXT NOT NULL,
         "updatedAt" TEXT NOT NULL, UNIQUE ("botId", "triggerMessageId"))"#;
 
@@ -40,7 +40,8 @@ const TABLES: [&str; 8] = [
         "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
         "leftAt" TEXT, "lastReadAt" TEXT,
         "status" TEXT NOT NULL DEFAULT 'ACTIVE', "limits" TEXT, "invitedBy" TEXT, "invitedAt" TEXT,
-        "acceptedAt" TEXT, "hiddenAt" TEXT, "clearedAt" TEXT, "clearedLegacyAt" TEXT, "clearedSeq" INTEGER, PRIMARY KEY ("conversationId", "principalId"))"#,
+        "acceptedAt" TEXT, "inviteReason" TEXT, "hiddenAt" TEXT, "clearedAt" TEXT, "clearedLegacyAt" TEXT, "clearedSeq" INTEGER,
+        "unreadCount" INTEGER, "lastEntryId" TEXT, PRIMARY KEY ("conversationId", "principalId"))"#,
     r#"CREATE TABLE public."InboxEntry" (
         "id" TEXT PRIMARY KEY, "inboxId" TEXT NOT NULL, "conversationId" TEXT NOT NULL,
         "messageId" TEXT NOT NULL, "senderId" TEXT NOT NULL, "kind" TEXT NOT NULL,
@@ -49,7 +50,7 @@ const TABLES: [&str; 8] = [
     r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE, "refuseBots" BOOLEAN)"#,
     r#"CREATE TABLE public."User" (
         "id" TEXT PRIMARY KEY, "name" TEXT, "email" TEXT, "username" TEXT, "preferredUsername" TEXT, "additionalInformation" TEXT, "updatedAt" TEXT,
-        "tier" TEXT NOT NULL DEFAULT 'FREE')"#,
+        "tier" TEXT NOT NULL DEFAULT 'FREE', "lastSeenAt" TEXT)"#,
     BOT_TURN_TABLE,
     r#"CREATE TABLE public."ConversationSegment" (
         "id" TEXT PRIMARY KEY, "conversationId" TEXT NOT NULL, "authorId" TEXT NOT NULL,
@@ -90,6 +91,14 @@ pub(crate) async fn database() -> DatabaseConnection {
     db.execute(&schema.create_table_from_entity(crate::entity::bot_note::Entity))
         .await
         .unwrap();
+    for source in [
+        schema.create_table_from_entity(crate::entity::bot_team::Entity),
+        schema.create_table_from_entity(crate::entity::bot_team_thread::Entity),
+        schema.create_table_from_entity(crate::entity::bot_team_chat::Entity),
+        schema.create_table_from_entity(crate::entity::bot_org_classification::Entity),
+    ] {
+        db.execute(&source).await.unwrap();
+    }
     for statement in TABLES
         .iter()
         .chain(&super::marks::TEST_TABLES)
@@ -183,6 +192,10 @@ pub(crate) async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str
         image_model: Set(None),
         vision_model: Set(None),
         subtask_model: Set(None),
+        calendar_wake: Set(None),
+        calendar_synced_at: Set(None),
+        others_can_invite: Set(None),
+        others_daily_turns: Set(None),
     }
     .insert(db)
     .await
@@ -208,6 +221,19 @@ pub(crate) async fn delete_bot(db: &DatabaseConnection, id: &str) {
         .col_expr(
             bot::Column::DeletedAt,
             sea_orm::sea_query::Expr::value(at(1)),
+        )
+        .filter(bot::Column::Id.eq(id))
+        .exec(db)
+        .await
+        .unwrap();
+}
+
+/// Lets people other than its owner find and invite `id`.
+pub(crate) async fn let_others_invite(db: &DatabaseConnection, id: &str) {
+    bot::Entity::update_many()
+        .col_expr(
+            bot::Column::OthersCanInvite,
+            sea_orm::sea_query::Expr::value(true),
         )
         .filter(bot::Column::Id.eq(id))
         .exec(db)
@@ -249,6 +275,8 @@ pub(crate) async fn running_turn(
         error_code: Set(None),
         hops: Set(1),
         requester_id: Set(None),
+        origin_id: Set(None),
+        discussion_hops: Set(None),
         audience: Set("OWNER".into()),
         status_text: Set(None),
         unprompted: Set(None),

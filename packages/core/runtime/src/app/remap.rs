@@ -11,7 +11,7 @@ use crate::a2ui::{id_refs::IdRef, page_remap};
 use crate::flow::board::Board;
 use flow_like_types::proto;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 const DERIVED_ID_LENGTH: usize = 24;
 const DERIVED_ID_ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
@@ -38,6 +38,15 @@ pub fn derive_id(seed: &str, source_id: &str) -> String {
         body /= 36;
     }
     id
+}
+
+/// The id that `source_id` of an app's `forked_from` has in that app, given
+/// its `fork_id_seeds`. Works for ids created upstream after the fork too,
+/// which is what lets upstream changes be matched against a fork.
+pub fn derive_lineage_id(seeds: &[String], source_id: &str) -> String {
+    seeds
+        .iter()
+        .fold(source_id.to_string(), |id, seed| derive_id(seed, &id))
 }
 
 /// Mapping table built while moving an app into a new id space. Returned to
@@ -77,7 +86,8 @@ pub struct ForkIdMap {
     #[serde(default)]
     pub roles: HashMap<String, String>,
     /// Seed every destination id in this map is derived from
-    /// ([`derive_id`]). Never leaves the process.
+    /// ([`derive_id`]). Never serialized with the map; the destination app
+    /// keeps it in `App::fork_id_seeds`.
     #[serde(skip)]
     #[cfg_attr(feature = "openapi", schema(ignore))]
     pub seed: String,
@@ -153,15 +163,15 @@ pub fn remap_board(
 
     register_board_ids(&board, maps);
 
-    let mut new_nodes = HashMap::with_capacity(board.nodes.len());
-    for (_, mut node) in board.nodes.drain() {
+    let mut new_nodes = BTreeMap::new();
+    for (_, mut node) in std::mem::take(&mut board.nodes) {
         rewrite_node(&mut node, maps);
         new_nodes.insert(node.id.clone(), node);
     }
     board.nodes = new_nodes;
 
-    let mut new_layers = HashMap::with_capacity(board.layers.len());
-    for (_, mut layer) in board.layers.drain() {
+    let mut new_layers = BTreeMap::new();
+    for (_, mut layer) in std::mem::take(&mut board.layers) {
         let new_layer_id = maps
             .layers
             .get(&layer.id)
@@ -171,15 +181,15 @@ pub fn remap_board(
         if let Some(parent) = layer.parent_id.as_ref() {
             layer.parent_id = maps.layers.get(parent).cloned();
         }
-        let mut layer_nodes = HashMap::with_capacity(layer.nodes.len());
-        for (_, mut node) in layer.nodes.drain() {
+        let mut layer_nodes = BTreeMap::new();
+        for (_, mut node) in std::mem::take(&mut layer.nodes) {
             rewrite_node(&mut node, maps);
             layer_nodes.insert(node.id.clone(), node);
         }
         layer.nodes = layer_nodes;
 
-        let mut layer_pins = HashMap::with_capacity(layer.pins.len());
-        for (_, mut pin) in layer.pins.drain() {
+        let mut layer_pins = BTreeMap::new();
+        for (_, mut pin) in std::mem::take(&mut layer.pins) {
             rewrite_pin_top(&mut pin, maps);
             layer_pins.insert(pin.id.clone(), pin);
         }
@@ -233,7 +243,7 @@ pub fn register_board_ids(board: &proto::Board, maps: &mut ForkIdMap) {
     }
 }
 
-fn register_node_pin_ids(nodes: &HashMap<String, proto::Node>, maps: &mut ForkIdMap) {
+fn register_node_pin_ids(nodes: &BTreeMap<String, proto::Node>, maps: &mut ForkIdMap) {
     for node in nodes.values() {
         let node_id = maps.mint(&node.id);
         maps.nodes.entry(node.id.clone()).or_insert(node_id);
@@ -241,7 +251,7 @@ fn register_node_pin_ids(nodes: &HashMap<String, proto::Node>, maps: &mut ForkId
     }
 }
 
-fn register_pin_ids(pins: &HashMap<String, proto::Pin>, maps: &mut ForkIdMap) {
+fn register_pin_ids(pins: &BTreeMap<String, proto::Pin>, maps: &mut ForkIdMap) {
     for pin in pins.values() {
         let pin_id = maps.mint(&pin.id);
         maps.pins.entry(pin.id.clone()).or_insert(pin_id);
@@ -266,8 +276,8 @@ fn rewrite_node(node: &mut proto::Node, maps: &ForkIdMap) {
             .map(|id| maps.nodes.get(id).cloned().unwrap_or(id.clone()))
             .collect();
     }
-    let mut new_pins = HashMap::with_capacity(node.pins.len());
-    for (_, mut pin) in node.pins.drain() {
+    let mut new_pins = BTreeMap::new();
+    for (_, mut pin) in std::mem::take(&mut node.pins) {
         rewrite_pin_top(&mut pin, maps);
         new_pins.insert(pin.id.clone(), pin);
     }
@@ -453,7 +463,7 @@ pub fn strip_event_secrets(event: &mut proto::Event) {
     }
 }
 
-fn strip_secret_values(variables: &mut HashMap<String, proto::Variable>) {
+fn strip_secret_values(variables: &mut BTreeMap<String, proto::Variable>) {
     for var in variables.values_mut() {
         if var.secret {
             var.default_value.clear();
@@ -532,6 +542,16 @@ mod tests {
     }
 
     #[test]
+    fn lineage_ids_chain_the_seeds_in_order() {
+        let seeds = ["fork".to_string(), "duplicate".to_string()];
+        assert_eq!(derive_lineage_id(&[], "src"), "src");
+        assert_eq!(
+            derive_lineage_id(&seeds, "src"),
+            derive_id("duplicate", &derive_id("fork", "src"))
+        );
+    }
+
+    #[test]
     fn derived_ids_look_like_cuids() {
         let random = flow_like_types::create_id();
         for id in [derive_id("seed", "x"), derive_id("", "y")] {
@@ -559,7 +579,7 @@ mod tests {
         };
         let board = proto::Board {
             id: "src_board".into(),
-            variables: HashMap::from([(secret.id.clone(), secret.clone())]),
+            variables: BTreeMap::from([(secret.id.clone(), secret.clone())]),
             ..Default::default()
         };
         let mut maps = ForkIdMap {
@@ -575,7 +595,7 @@ mod tests {
         let mut event = proto::Event {
             id: "src_event".into(),
             board_id: "src_board".into(),
-            variables: HashMap::from([(secret.id.clone(), secret)]),
+            variables: BTreeMap::from([(secret.id.clone(), secret)]),
             ..Default::default()
         };
         remap_event(&mut event, &maps);

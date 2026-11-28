@@ -18,3 +18,40 @@ pub trait FromProto<T> {
 pub type Timestamp = prost_types::Timestamp;
 
 pub use prost::Message;
+
+#[cfg(test)]
+mod tests {
+    use super::{Message, proto};
+
+    fn board(keys: &[&str]) -> proto::Board {
+        proto::Board {
+            id: "board".into(),
+            refs: keys
+                .iter()
+                .map(|key| (key.to_string(), key.to_string()))
+                .collect(),
+            nodes: keys
+                .iter()
+                .map(|key| {
+                    let node = proto::Node {
+                        id: key.to_string(),
+                        ..Default::default()
+                    };
+                    (key.to_string(), node)
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn map_insertion_order_does_not_change_encoded_bytes() {
+        let keys = ["a", "b", "c", "d", "e", "f", "g", "h"];
+        let mut reversed = keys;
+        reversed.reverse();
+        assert_eq!(
+            board(&keys).encode_to_vec(),
+            board(&reversed).encode_to_vec()
+        );
+    }
+}

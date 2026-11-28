@@ -1,8 +1,10 @@
+use crate::runtime_config::LoadConfig;
 #[cfg(feature = "aws")]
 use aws_config::SdkConfig;
 use axum::body::Body;
 use flow_like::app::App;
 use flow_like::flow::board::Board;
+use flow_like::flow::board::format::{CURRENT_BOARD_FORMAT_VERSION, with_supported_version};
 use flow_like::flow::node::NodeLogic;
 use flow_like::flow_like_model_provider::provider::{ModelProviderConfiguration, OpenAIConfig};
 use flow_like::flow_like_storage::Path;
@@ -165,6 +167,11 @@ const CACHED_PAGE_REVISIONS_PER_BOARD: usize = 64;
 /// board keeps resolving on this instance.
 const PINNED_BOARD_REVALIDATE_AFTER: Duration = Duration::from_secs(5 * 60);
 
+/// A detached load has no request deadline to cancel it, and it holds the board's single-flight
+/// lock. The limit is as long as the longest request may run, so it never cuts a load a request
+/// could have finished, and a load that never returns cannot block the board for good.
+const DETACHED_BOARD_LOAD_LIMIT: Duration = Duration::from_secs(15 * 60);
+
 impl CachedBoard {
     pub(crate) fn new(e_tag: String, board: Board) -> Self {
         Self {
@@ -227,6 +234,11 @@ impl CachedBoard {
 
     pub(crate) fn prerun_manifest(&self) -> Arc<flow_like::flow::compiled::PrerunManifest> {
         self.with_prerun_derivation(|cached| cached.source.manifest())
+    }
+
+    /// `Board::content_hash` of this entry, computed once and shared with its Page revisions.
+    pub(crate) fn content_hash(&self) -> flow_like_types::Result<u64> {
+        self.with_prerun_derivation(|cached| cached.source.content_hash(&self.board))
     }
 
     /// Memoize only derived data. Callers still revalidate storage, Event
@@ -293,6 +305,162 @@ impl TrustedUntil {
         let mut current = self.0.lock();
         *current = Some(current.map_or(until, |current| current.max(until)));
     }
+
+    /// Carry over what `other` knows about the same object.
+    pub fn extend_from(&self, other: &TrustedUntil) {
+        if let Some(until) = *other.0.lock() {
+            self.extend(until);
+        }
+    }
+}
+
+/// [`PageContractFacts`](flow_like::flow::compiled::prerun::PageContractFacts) of one exact
+/// board revision, plus what this instance knows about the artifacts a Page run needs beside
+/// them. Lets Page contracts resolve without loading the board.
+pub struct CachedPageContractFacts {
+    pub facts: flow_like::flow::compiled::prerun::PageContractFacts,
+    /// Exact-ETag `.board` snapshot of a draft.
+    pub draft_snapshot: TrustedUntil,
+    /// Board-only prerun authority of a draft.
+    pub draft_authority: TrustedUntil,
+    /// Pages of a pinned version, as immutable as the version that owns them.
+    version_pages: parking_lot::Mutex<HashMap<String, Arc<flow_like::a2ui::Page>>>,
+}
+
+impl CachedPageContractFacts {
+    pub fn new(facts: flow_like::flow::compiled::prerun::PageContractFacts) -> Self {
+        Self {
+            facts,
+            draft_snapshot: TrustedUntil::default(),
+            draft_authority: TrustedUntil::default(),
+            version_pages: parking_lot::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// A page of this pinned version read earlier. Never use it for a draft: draft pages are
+    /// saved independently of the board's ETag.
+    pub fn version_page(&self, page_id: &str) -> Option<flow_like::a2ui::Page> {
+        self.version_pages
+            .lock()
+            .get(page_id)
+            .map(|page| (**page).clone())
+    }
+
+    pub fn remember_version_page(&self, page: &flow_like::a2ui::Page) {
+        self.version_pages
+            .lock()
+            .insert(page.id.clone(), Arc::new(page.clone()));
+    }
+}
+
+/// Bytes of decoded draft pages one instance keeps, estimated from their stored size.
+const DRAFT_PAGE_CACHE_WEIGHT: u64 = 64 * 1024 * 1024;
+/// Decoded page bytes per stored (compressed) byte, for the cache weight.
+const DRAFT_PAGE_DECODED_FACTOR: u64 = 10;
+
+/// A draft Page as storage served it under `e_tag`. Draft pages are saved independently of the
+/// board's ETag, so every use confirms the entry with one conditional read.
+pub struct CachedDraftPage {
+    pub e_tag: String,
+    pub page: flow_like::a2ui::Page,
+    weight: u32,
+}
+
+impl CachedDraftPage {
+    pub fn new(e_tag: String, page: flow_like::a2ui::Page, stored_bytes: u64) -> Self {
+        let weight = stored_bytes
+            .saturating_mul(DRAFT_PAGE_DECODED_FACTOR)
+            .min(u64::from(u32::MAX)) as u32;
+        Self {
+            e_tag,
+            page,
+            weight,
+        }
+    }
+}
+
+/// Run a board load to completion even when the request awaiting it is cancelled.
+///
+/// Hydrating a large board can outlast a request's deadline. Dropping the load with the request
+/// would throw the work away, and every retry would start over and time out again. The task
+/// keeps the single-flight guard until the load is done, so a retry queues behind it and is
+/// answered from the entry it leaves in the cache.
+async fn detached_board_load<F>(
+    single_flight: flow_like_types::tokio::sync::OwnedMutexGuard<()>,
+    load: F,
+) -> flow_like_types::Result<Arc<CachedBoard>>
+where
+    F: Future<Output = flow_like_types::Result<Arc<CachedBoard>>> + Send + 'static,
+{
+    // Entering the request's span would keep it, and the request's trace, open until a load that
+    // outlives the request has finished.
+    let span = tracing::debug_span!(parent: None, "detached_board_load");
+    span.follows_from(tracing::Span::current());
+    flow_like_types::tokio::spawn(
+        async move {
+            let _single_flight = single_flight;
+            flow_like_types::tokio::time::timeout(DETACHED_BOARD_LOAD_LIMIT, load)
+                .await
+                .map_err(|_| {
+                    anyhow!(
+                        "board load did not finish within {} s",
+                        DETACHED_BOARD_LOAD_LIMIT.as_secs()
+                    )
+                })?
+        }
+        .instrument(span),
+    )
+    .await
+    .map_err(|error| anyhow!("board load task did not finish: {error}"))?
+}
+
+/// Confirm or replace the cached hydration of a board with one conditional storage read.
+async fn refresh_cached_board(
+    board_cache: moka::sync::Cache<String, Arc<CachedBoard>>,
+    cache_key: String,
+    app_id: String,
+    board_id: String,
+    app_state: Arc<FlowLikeState>,
+    version: Option<(u32, u32, u32)>,
+) -> flow_like_types::Result<Arc<CachedBoard>> {
+    let cached = board_cache.get(&cache_key);
+    let store = Board::meta_store(&app_state).await?;
+    let storage_root = Path::from("apps").join(app_id.as_str());
+    let verification_started_at = Instant::now();
+    let read = Board::load_proto_if_changed(
+        store,
+        &storage_root,
+        &board_id,
+        version,
+        cached.as_ref().map(|entry| entry.e_tag.as_str()),
+    )
+    .await?;
+
+    let (proto, meta) = match read {
+        ConditionalRead::NotModified => {
+            let cached = cached.ok_or_else(|| {
+                anyhow!(
+                    "storage reported NotModified for {app_id}/{board_id} without a cached ETag"
+                )
+            })?;
+            cached.mark_verified(verification_started_at);
+            return Ok(cached);
+        }
+        ConditionalRead::Fresh(proto, meta) => (proto, meta),
+    };
+
+    let board =
+        Board::from_loaded_proto_for_version(proto, storage_root, app_state, version).await?;
+    let entry = Arc::new(CachedBoard::new(
+        meta.e_tag.clone().unwrap_or_default(),
+        board,
+    ));
+    entry.mark_verified(verification_started_at);
+    // An object without an ETag can never be validated, so it is never cached.
+    if meta.e_tag.is_some() {
+        board_cache.insert(cache_key, entry.clone());
+    }
+    Ok(entry)
 }
 
 /// A registry of per-key process-local mutexes that forget themselves once nobody holds them.
@@ -366,10 +534,11 @@ fn native_async_credential_lifetime(
                 | CredentialsAccess::InvokeWrite
         )
     {
-        // Native async deployment caps event age and hard execution at 900s
-        // each. Keep another 60s for dispatch preparation and clock skew.
-        // Both cached grants and freshly minted sessions must cover this window.
-        chrono::Duration::seconds(900 + 900 + 60)
+        // Native async deployment caps event age at 900s and hard execution at
+        // Lambda's 1800s maximum. Keep another 60s for dispatch preparation and
+        // clock skew. Both cached grants and freshly minted sessions must cover
+        // this window, which stays inside the one-hour STS role-chaining limit.
+        chrono::Duration::seconds(900 + 1800 + 60)
     } else {
         chrono::Duration::seconds(120)
     }
@@ -641,6 +810,10 @@ pub struct State {
     /// which a writer already holds while it calls `master_board`.
     board_load_locks:
         parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
+    /// Serialises builds of one compiled artifact on this instance; the build lease in
+    /// `execution::compiled_artifacts` does the same across instances.
+    artifact_build_locks:
+        parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
     pub content_bucket: Arc<FlowLikeStore>,
     pub cdn_bucket: Arc<FlowLikeStore>,
     pub meta_bucket: Arc<FlowLikeStore>,
@@ -666,6 +839,12 @@ pub struct State {
     /// `{app_id}:{board_id}:` so deleting a board can drop its entries by prefix.
     pub prerun_manifest_cache:
         moka::sync::Cache<String, Arc<flow_like::flow::compiled::PrerunManifest>>,
+    /// Page contract facts keyed like `prerun_manifest_cache` (same `{app_id}:{board_id}:`
+    /// prefix), content-addressed by draft ETag or immutable version.
+    pub page_contract_facts: moka::sync::Cache<String, Arc<CachedPageContractFacts>>,
+    /// Draft pages keyed `{app_id}:{board_id}:{page_id}`, each confirmed by its storage ETag
+    /// before use.
+    pub draft_pages: moka::sync::Cache<String, Arc<CachedDraftPage>>,
     pub response_cache: moka::sync::Cache<String, Value>,
     pub(crate) execution_usage_cache: crate::routes::usage::cache::UsageCache,
     /// WASM package permission cache: "wasm:{user_id}:{package_id}" -> the
@@ -686,6 +865,9 @@ pub struct State {
     /// are far more frequent than execution-state reads, and rebuilding a Redis
     /// connection on every call would dominate the latency the cache exists to avoid.
     pub cache: crate::cache::CacheBackendHandle,
+    /// The query service every data read runs on (`QUERY_LAMBDA_FUNCTION` or
+    /// `QUERY_SERVICE_URL`), connected on first use.
+    pub query: crate::query::QueryService,
     /// Execution state backend (`EXECUTION_STATE_BACKEND`), built on first use and shared
     /// by every executor callback and poll. A failed build is not memoized.
     pub(crate) execution_state_store: flow_like_types::tokio::sync::OnceCell<
@@ -864,31 +1046,7 @@ async fn load_service_secrets(secrets: &SecretStore) -> ServiceSecrets {
     }
 }
 
-const DEVELOPMENT_ENCRYPTION_KEY: &str = "flow-like-dev-encryption-key-DO-NOT-USE-IN-PRODUCTION";
-
-/// The material the token encryption key is derived from. Bot secrets, webhook secrets, OAuth
-/// grants and push tokens are sealed with it, so only a debug build may use the development key,
-/// and only when the secret is absent: a lookup that failed never falls back.
-fn encryption_key_material(
-    lookup: Result<String, SecretError>,
-    allow_development_key: bool,
-) -> Result<String, String> {
-    match lookup {
-        Ok(material) if !material.trim().is_empty() => Ok(material),
-        Ok(_) => Err(
-            "SINK_TOKEN_ENCRYPTION_KEY is empty; the API does not start without this key".into(),
-        ),
-        Err(error) if allow_development_key && error.is_not_found() => {
-            tracing::warn!(
-                "SINK_TOKEN_ENCRYPTION_KEY not set - this debug build uses the insecure development key"
-            );
-            Ok(DEVELOPMENT_ENCRYPTION_KEY.to_string())
-        }
-        Err(error) => Err(format!(
-            "SINK_TOKEN_ENCRYPTION_KEY could not be loaded ({error}); the API does not start without this key"
-        )),
-    }
-}
+use flow_like_audit::secret_crypto::encryption_key_material;
 
 /// Installs the process-wide backend JWT and audit entry keys; returns `AUDIT_KID`.
 async fn install_signing_keys(secrets: &SecretStore, platform_config: &Hub) -> Option<String> {
@@ -1561,6 +1719,16 @@ impl State {
                 .time_to_idle(Duration::from_secs(24 * 60 * 60))
                 .support_invalidation_closures()
                 .build(),
+            page_contract_facts: moka::sync::Cache::builder()
+                .max_capacity(4_096)
+                .time_to_idle(Duration::from_secs(24 * 60 * 60))
+                .support_invalidation_closures()
+                .build(),
+            draft_pages: moka::sync::Cache::builder()
+                .weigher(|_key: &String, entry: &Arc<CachedDraftPage>| entry.weight)
+                .max_capacity(DRAFT_PAGE_CACHE_WEIGHT)
+                .time_to_idle(Duration::from_secs(30 * 60))
+                .build(),
             board_sync_cache: moka::sync::Cache::builder()
                 .max_capacity(BOARD_CACHE_MAX_ENTRIES)
                 .time_to_idle(Duration::from_secs(30 * 60))
@@ -1588,6 +1756,7 @@ impl State {
                 .time_to_live(Duration::from_secs(10 * 60))
                 .build(),
             board_load_locks: parking_lot::Mutex::new(HashMap::new()),
+            artifact_build_locks: parking_lot::Mutex::new(HashMap::new()),
             credentials_cache: cache,
             credential_refresh_locks: parking_lot::Mutex::new(HashMap::new()),
             content_bucket,
@@ -1610,6 +1779,7 @@ impl State {
             wasm_registry,
             sink_scheduler,
             cache: cache_backend,
+            query: crate::query::QueryService::default(),
             execution_state_store: flow_like_types::tokio::sync::OnceCell::new(),
             secrets,
             encryption_key,
@@ -1928,7 +2098,7 @@ impl State {
             return pinned;
         }
         let load_lock = keyed_local_lock(&self.board_load_locks, cache_key.clone());
-        let _single_flight = load_lock.lock().await;
+        let single_flight = load_lock.lock_owned().await;
         // A queued burst shares a fresh check instead of serializing one storage
         // round trip per action. Later requests still revalidate floating drafts.
         if let Some(cached) =
@@ -1938,44 +2108,21 @@ impl State {
             return Ok(cached);
         }
 
-        let cached = self.board_cache.get(&cache_key);
-        let store = Board::meta_store(&app_state).await?;
-        let storage_root = Path::from("apps").join(app_id.to_string());
-        let verification_started_at = Instant::now();
-        let read = Board::load_proto_if_changed(
-            store,
-            &storage_root,
-            board_id,
-            version,
-            cached.as_ref().map(|entry| entry.e_tag.as_str()),
-        )
-        .await?;
-
-        let (proto, meta) = match read {
-            ConditionalRead::NotModified => {
-                let cached = cached.ok_or_else(|| {
-                    flow_like_types::anyhow!(
-                        "storage reported NotModified for {app_id}/{board_id} without a cached ETag"
-                    )
-                })?;
-                cached.board.ensure_supported_format()?;
-                cached.mark_verified(verification_started_at);
-                return Ok(cached);
-            }
-            ConditionalRead::Fresh(proto, meta) => (proto, meta),
-        };
-
-        let board =
-            Board::from_loaded_proto_for_version(proto, storage_root, app_state, version).await?;
-        let entry = Arc::new(CachedBoard::new(
-            meta.e_tag.clone().unwrap_or_default(),
-            board,
-        ));
-        entry.mark_verified(verification_started_at);
-        // An object without an ETag can never be validated, so it is never cached.
-        if meta.e_tag.is_some() {
-            self.board_cache.insert(cache_key, entry.clone());
-        }
+        // The entry is shared by clients of every board format, so it is hydrated at the
+        // runtime's own ceiling and each caller checks its declared format afterwards.
+        let refresh = with_supported_version(
+            CURRENT_BOARD_FORMAT_VERSION,
+            refresh_cached_board(
+                self.board_cache.clone(),
+                cache_key,
+                app_id.to_string(),
+                board_id.to_string(),
+                app_state,
+                version,
+            ),
+        );
+        let entry = detached_board_load(single_flight, refresh).await?;
+        entry.board.ensure_supported_format()?;
         Ok(entry)
     }
 
@@ -2012,6 +2159,14 @@ impl State {
     ) -> Option<flow_like_types::Result<Arc<CachedBoard>>> {
         let pinned = recently_verified_pinned(&self.board_cache, cache_key, version)?;
         Some(pinned.board.ensure_supported_format().map(|()| pinned))
+    }
+
+    /// The lock a build of the compiled artifact behind `cache_key` holds on this instance.
+    pub(crate) fn artifact_build_lock(
+        &self,
+        cache_key: &str,
+    ) -> Arc<flow_like_types::tokio::sync::Mutex<()>> {
+        keyed_local_lock(&self.artifact_build_locks, cache_key.to_string())
     }
 
     /// The draft entry this instance holds, without asking storage whether it is current.
@@ -2642,7 +2797,7 @@ mod tests {
 
     #[test]
     fn the_encryption_key_never_falls_back_after_a_failed_lookup() {
-        use super::{DEVELOPMENT_ENCRYPTION_KEY, encryption_key_material};
+        use flow_like_audit::secret_crypto::{DEVELOPMENT_ENCRYPTION_KEY, encryption_key_material};
         use flow_like_secrets::{SecretError, SecretProviderKind};
 
         let throttled = || {
@@ -2915,6 +3070,55 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_board_load_outlives_its_cancelled_request_and_answers_the_retry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = moka::sync::Cache::builder().max_capacity(4).build();
+        let key = super::board_cache_key("app-1", "board-1", None);
+        let locks = parking_lot::Mutex::new(HashMap::new());
+        let loads = std::sync::Arc::new(AtomicUsize::new(0));
+        let (finish, finished) = tokio::sync::oneshot::channel::<()>();
+
+        let guard = super::keyed_local_lock(&locks, key.clone())
+            .lock_owned()
+            .await;
+        let request = super::detached_board_load(guard, {
+            let (cache, key, loads) = (cache.clone(), key.clone(), loads.clone());
+            async move {
+                loads.fetch_add(1, Ordering::SeqCst);
+                finished.await.unwrap();
+                let entry = cached_board();
+                cache.insert(key, entry.clone());
+                Ok(entry)
+            }
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), request)
+                .await
+                .is_err(),
+            "the request gives up while the board is still hydrating"
+        );
+
+        let retry_lock = super::keyed_local_lock(&locks, key.clone());
+        let retry = tokio::spawn({
+            let (cache, key) = (cache.clone(), key.clone());
+            async move {
+                let _single_flight = retry_lock.lock_owned().await;
+                cache.get(&key)
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!retry.is_finished(), "the retry waits for the running load");
+
+        finish.send(()).unwrap();
+        assert!(
+            retry.await.unwrap().is_some(),
+            "the load of the cancelled request filled the cache"
+        );
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn pinned_pages_are_kept_with_their_version() {
         let entry = cached_board();
@@ -3079,7 +3283,7 @@ mod tests {
                 assert_eq!(
                     native_async_credential_lifetime(&mode, Some(backend), Some("worker"))
                         .num_seconds(),
-                    1860
+                    2760
                 );
             }
         }
@@ -3128,7 +3332,7 @@ mod tests {
         );
         // Unknown expiration also fails the native post-mint lifetime check.
         assert!(RuntimeCredentials::Aws(grant.clone()).expires_soon(required));
-        for remaining_seconds in [121, 900, 1800] {
+        for remaining_seconds in [121, 900, 1800, 2700] {
             grant.expiration =
                 Some(chrono::Utc::now() + chrono::Duration::seconds(remaining_seconds));
             assert!(RuntimeCredentials::Aws(grant.clone()).expires_soon(required));

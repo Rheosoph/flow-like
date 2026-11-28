@@ -54,6 +54,7 @@ pub const MANAGEMENT_TRANSPORT: &str = "management_transport";
 pub const REBOOT_WATCHER: &str = "reboot_watcher";
 pub const UPDATE_WATCHER: &str = "update_watcher";
 pub const FLEET_PUBLISHER: &str = "fleet_publisher";
+pub const DEVICE_WAKE: &str = "device_wake";
 pub const ARCHIVE_PUBLISHER: &str = "archive_publisher";
 pub const ACME_RENEWAL: &str = "acme_renewal";
 pub const SECRET_PUBLISHER: &str = "secret_publisher";

@@ -72,6 +72,8 @@ struct RefreshResult {
     turns: Option<Vec<Value>>,
     delivered_ids: Vec<String>,
     failed_actions: Vec<FailedAction>,
+    #[serde(skip)]
+    places: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -315,6 +317,15 @@ async fn refresh(
             .cloned()
             .collect(),
     );
+    result.places = request(
+        authority,
+        &client,
+        Method::GET,
+        scope.url("bots/places"),
+        None,
+    )
+    .await
+    .ok();
     for value in payload.actions.iter().take(8) {
         if !authority.active() {
             return Err(());
@@ -474,10 +485,13 @@ mod ios {
             return;
         };
         tauri::async_runtime::spawn(async move {
+            let places_app = app.clone();
             let mut result = RefreshResult::default();
+            let mut payload_scope = String::new();
             let work = async {
                 let _lock = WORK.lock().await;
                 let payload = payload.map_err(|_| ())?;
+                payload_scope = payload.scope.clone();
                 let scope = Scope::parse(&payload.scope)?;
                 let raw_scope = CString::new(payload.scope.as_str()).map_err(|_| ())?;
                 if unsafe { flow_like_native_bot_refresh_active(id.as_ptr(), raw_scope.as_ptr()) }
@@ -507,12 +521,40 @@ mod ios {
                 tokio::time::timeout(Duration::from_secs(23), work).await,
                 Ok(Ok(()))
             );
+            if let Some(places) = result.places.take() {
+                let app = places_app.clone();
+                let scope = payload_scope.clone();
+                tauri::async_runtime::spawn(
+                    async move { store_places(&app, &scope, places).await },
+                );
+            }
             if let Ok(encoded) = CString::new(serde_json::to_string(&result).unwrap_or_default()) {
                 unsafe {
                     flow_like_native_complete_bot_refresh(id.as_ptr(), encoded.as_ptr());
                 }
             }
         });
+    }
+
+    async fn store_places(app: &AppHandle, scope: &str, places: Value) {
+        let Ok(manager) = crate::state::TauriEventSinkManagerState::construct(app).await else {
+            return;
+        };
+        let Ok(manager) = tokio::time::timeout(Duration::from_secs(3), manager.lock()).await else {
+            return;
+        };
+        let db = manager.db();
+        drop(manager);
+        if let Err(error) = crate::event_sink::geolocation::bot_places::store(&db, scope, places) {
+            tracing::warn!(error=%error, "Could not store the places the bots watch");
+            return;
+        }
+        let _ = <crate::event_sink::geolocation::GeoLocationSink as crate::event_sink::EventSink>::start(
+            &Default::default(),
+            app,
+            db,
+        )
+        .await;
     }
 
     pub(super) fn setup(app: &AppHandle) {

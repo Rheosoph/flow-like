@@ -833,6 +833,8 @@ async fn queued_turn(db: &DatabaseConnection, bot_id: &str, trigger: &str) -> St
         error_code: Set(None),
         hops: Set(0),
         requester_id: Set(None),
+        origin_id: Set(None),
+        discussion_hops: Set(None),
         audience: Set("OWNER".into()),
         status_text: Set(None),
         unprompted: Set(None),

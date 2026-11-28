@@ -22,7 +22,7 @@
 		"@tailwindcss/vite": "^4.1.12",
 		"@flow-like/flow-like-ui": "workspace:*",
 		"@types/lodash-es": "^4.17.12",
-		"astro": "7.3.3",
+		"astro": "7.4.13",
 		"cookie": "^2.0.1",
 		"lodash-es": "^4.17.21",
 		"sharp": "^0.35.3",
@@ -31,6 +31,6 @@
 	},
 	"devDependencies": {
 		"cheerio": "^1.0.0",
-		"puppeteer": "24.43.1"
+		"puppeteer": "25.18.1"
 	}
 }

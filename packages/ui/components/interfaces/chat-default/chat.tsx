@@ -19,6 +19,7 @@ import { cn } from "../../../lib/utils";
 import type { ComposerAttachSource } from "../../../state/composer-capture";
 import { ConversationNotePill } from "../../bots-tab/conversation-note";
 import type { Mentionable } from "../../bots-tab/mentions";
+import type { TeamTagOption } from "../../bots-tab/team-tag-model";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import type { IMessage } from "./chat-db";
@@ -35,6 +36,13 @@ import {
 	isVisibleChatMessage,
 } from "./chat-message-interaction";
 import { ChatRunStatus, useRunStop } from "./chat-run-controls";
+import {
+	type ChatScrollMark,
+	holdChatScrollMark,
+	readChatScrollMark,
+	recallChatScroll,
+	rememberChatScroll,
+} from "./chat-scroll-memory";
 import {
 	ChatBox,
 	type ChatBoxModel,
@@ -75,6 +83,21 @@ type ChatItem =
  * until it scrolls near.
  */
 const IMMEDIATE_MESSAGE_TAIL = 8;
+
+/** Rows mounted at once around a restored scroll position, so it lands on real content too. */
+function rowsAroundMark(
+	items: readonly { data: { id: string } }[],
+	mark: ChatScrollMark | undefined,
+): ReadonlySet<string> {
+	if (!mark) return new Set();
+	const index = items.findIndex((item) => item.data.id === mark.rowId);
+	if (index < 0) return new Set();
+	return new Set(
+		items
+			.slice(Math.max(0, index - 2), index + IMMEDIATE_MESSAGE_TAIL)
+			.map((item) => item.data.id),
+	);
+}
 
 function getInteractionCreatedAt(interaction: IInteractionRequest): number {
 	return (interaction.expires_at - interaction.ttl_seconds) * 1000;
@@ -194,9 +217,13 @@ export interface IChatConcurrency {
 export interface IChatGroup {
 	/** Rendered above a message: the speaker line, day dividers, membership notes. */
 	renderMessageHeader?: (message: IMessage, index: number) => React.ReactNode;
+	/** Rendered below a message: a card that acts on what it asked, such as a bot's proposal. */
+	renderMessageFooter?: (message: IMessage) => React.ReactNode;
 	/** Hover menu in a message's corner, e.g. edit and delete for your own. */
 	renderMessageMenu?: (message: IMessage) => React.ReactNode;
 	mentionables?: readonly Mentionable[];
+	/** Teams a leading `#` suggests in the composer. */
+	teamTags?: readonly TeamTagOption[];
 	placeholder?: string;
 	/** Writing is not possible; the composer stays but cannot send. */
 	composerDisabled?: boolean;
@@ -312,6 +339,15 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 	) => {
 		const scrollContainerRef = useRef<HTMLDivElement>(null);
 		const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+		const followEndRef = useRef(shouldAutoScroll);
+		followEndRef.current = shouldAutoScroll;
+		const [restoreMark, setRestoreMark] = useState(() =>
+			recallChatScroll(sessionId),
+		);
+		// The session whose transcript is laid out and placed; scroll positions are kept under it.
+		const placedSession = useRef<string | undefined>(undefined);
+		const releaseHold = useRef<(() => void) | null>(null);
+		const markFrame = useRef<number | null>(null);
 		// Several turns can generate at once (global chat); app chats keep exactly one.
 		const [currentMessages, setCurrentMessages] = useState<IMessage[]>([]);
 		const [localMessages, setLocalMessages] = useState<IMessage[]>(messages);
@@ -395,6 +431,12 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					cancelAnimationFrame(rafIdRef.current);
 					rafIdRef.current = null;
 				}
+				if (markFrame.current !== null) {
+					cancelAnimationFrame(markFrame.current);
+					markFrame.current = null;
+				}
+				releaseHold.current?.();
+				releaseHold.current = null;
 			};
 		}, []);
 
@@ -421,6 +463,10 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					timestamp: msg.timestamp,
 				}));
 		}, [localMessages, currentMessages]);
+		const restoredRows = useMemo(
+			() => rowsAroundMark(chatItems, restoreMark),
+			[chatItems, restoreMark],
+		);
 
 		// Pending interactions stay at the bottom where the user answers them; settled ones fold
 		// into a compact group under the message that was current when they were asked.
@@ -518,7 +564,16 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		// FILTERED by session rather than cleared: the store-side mirror may have already pushed the
 		// new session's bubbles (or a stale RAF may still fire afterwards) — filtering makes every
 		// interleaving converge on "only this session's bubbles" instead of racing a blind clear.
+		// Not on mount: the state already belongs to this session, and resetting there undid the
+		// first-paint pin, so a chat opened on its history stopped following new content.
+		const shownSession = useRef(sessionId);
 		useEffect(() => {
+			if (shownSession.current === sessionId) return;
+			shownSession.current = sessionId;
+			placedSession.current = undefined;
+			releaseHold.current?.();
+			releaseHold.current = null;
+			setRestoreMark(recallChatScroll(sessionId));
 			const belongsToSession = (message: IMessage) =>
 				!message.sessionId || message.sessionId === sessionId;
 			if (pendingMessagesRef.current) {
@@ -570,17 +625,36 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			container.scrollTop = container.scrollHeight;
 		}, []);
 
-		// Pin the transcript to the bottom BEFORE the first paint — a deferred scroll flashes the
-		// oldest messages at the top on every mount and session switch. The follow-up passes catch
+		// Place the transcript BEFORE the first paint — a deferred scroll flashes the oldest
+		// messages at the top on every mount and session switch. A chat the reader left scrolled up
+		// reopens where they left it; otherwise it pins to the bottom. The follow-up passes catch
 		// late layout (async editor mount, images) without ever painting the top first; they are
 		// deliberately not cleaned up (one-shot, and the scroll callback no-ops once unmounted).
 		useLayoutEffect(() => {
 			if (localMessages.length === 0 || hasInitiallyScrolled) return;
+			setHasInitiallyScrolled(true);
+			placedSession.current = sessionId;
+			const container = scrollContainerRef.current;
+			releaseHold.current?.();
+			releaseHold.current =
+				container && restoreMark
+					? holdChatScrollMark(container, restoreMark)
+					: null;
+			if (releaseHold.current) {
+				followEndRef.current = false;
+				setShouldAutoScroll(false);
+				return;
+			}
 			scrollMessagesToEnd();
 			requestAnimationFrame(scrollMessagesToEnd);
 			setTimeout(scrollMessagesToEnd, 120);
-			setHasInitiallyScrolled(true);
-		}, [localMessages.length, hasInitiallyScrolled, scrollMessagesToEnd]);
+		}, [
+			localMessages.length,
+			hasInitiallyScrolled,
+			restoreMark,
+			sessionId,
+			scrollMessagesToEnd,
+		]);
 
 		const scrollToBottom = useCallback(() => {
 			if (!shouldAutoScroll) return;
@@ -600,7 +674,22 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			return Math.abs(scrollHeight - scrollTop - clientHeight) < threshold;
 		}, []);
 
+		const rememberPosition = useCallback(() => {
+			if (markFrame.current !== null) return;
+			markFrame.current = requestAnimationFrame(() => {
+				markFrame.current = null;
+				const container = scrollContainerRef.current;
+				const session = placedSession.current;
+				if (!container || !session || container.clientHeight === 0) return;
+				rememberChatScroll(
+					session,
+					isAtBottom() ? null : readChatScrollMark(container),
+				);
+			});
+		}, [isAtBottom]);
+
 		const handleScroll = useCallback(() => {
+			rememberPosition();
 			const atBottom = isAtBottom();
 			if (isScrollingProgrammatically.current) {
 				if (!atBottom) {
@@ -610,7 +699,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			}
 
 			setShouldAutoScroll(atBottom);
-		}, [isAtBottom]);
+		}, [isAtBottom, rememberPosition]);
 
 		// Auto-scroll when new messages arrive or current message updates, but only if should auto-scroll
 		// biome-ignore lint/correctness/useExhaustiveDependencies: the content deps are the re-run triggers; the body only reads the scroll flags.
@@ -737,6 +826,21 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 		// A reply's `send_message` takes the composer's send path: it starts a turn or queues
 		// like a typed message, and is unavailable whenever Send is disabled.
+		// The composer growing a line, its tray opening or the keyboard rising shrinks the feed from
+		// below; a reader at the end stays at the end instead of losing the last lines under it.
+		useEffect(() => {
+			const container = scrollContainerRef.current;
+			if (!container || typeof ResizeObserver === "undefined") return;
+			let height = container.clientHeight;
+			const observer = new ResizeObserver(() => {
+				const next = container.clientHeight;
+				if (next < height && followEndRef.current) scrollMessagesToEnd();
+				height = next;
+			});
+			observer.observe(container);
+			return () => observer.disconnect();
+		}, [scrollMessagesToEnd]);
+
 		const handleSendMessageRef = useRef(handleSendMessage);
 		handleSendMessageRef.current = handleSendMessage;
 		const sendFollowUp = useCallback((content: string) => {
@@ -749,12 +853,13 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const followUpBlocked = !concurrency && (isSending || isStreamActive);
 
 		// Keep the transcript pinned without asking scrollIntoView to pan the
-		// document/visual viewport while iOS is opening its keyboard.
+		// document/visual viewport while iOS is opening its keyboard. A reader scrolled up stays put.
 		useEffect(() => {
 			let focusTimer = 0;
 			const onFocusIn = (e: FocusEvent) => {
 				const target = e.target as HTMLElement | null;
 				if (!target?.closest("[data-fl-chat-composer]")) return;
+				if (!followEndRef.current) return;
 				window.clearTimeout(focusTimer);
 				focusTimer = window.setTimeout(scrollMessagesToEnd, 100);
 			};
@@ -825,6 +930,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				sendMessage: handleSendMessage,
 				scrollToBottom,
 				clearMessages: () => {
+					if (sessionId) rememberChatScroll(sessionId, null);
+					placedSession.current = undefined;
+					releaseHold.current?.();
+					releaseHold.current = null;
+					setRestoreMark(undefined);
 					setLocalMessages([]);
 					setReplyTarget(null);
 					setHasInitiallyScrolled(false);
@@ -834,7 +944,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					chatBox.current?.focusInput?.();
 				},
 			}),
-			[handleSendMessage, scrollToBottom],
+			[handleSendMessage, scrollToBottom, sessionId],
 		);
 
 		const surface = (
@@ -881,7 +991,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 													),
 											),
 									)
-									.map((item, index) =>
+									.map((item, index, shown) =>
 										item.data.notice ? (
 											<div
 												className={cn(
@@ -914,6 +1024,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 														index > 0 &&
 														group.runStart?.(item.data as IMessage) &&
 														"mt-3",
+													// Approvals one after another read as one list, not as separate replies.
+													group?.layout !== "room" &&
+														item.data.approval &&
+														shown[index - 1]?.data.approval &&
+														"-mt-8",
 												)}
 												key={`msg-${item.data.id}`}
 												data-chat-message={item.data.id}
@@ -934,12 +1049,15 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 													)}
 												<MessageShell
 													immediate={
-														index >= chatItems.length - IMMEDIATE_MESSAGE_TAIL
+														index >=
+															chatItems.length - IMMEDIATE_MESSAGE_TAIL ||
+														restoredRows.has(item.data.id)
 													}
 													root={scrollContainerRef}
 												>
 													<MessageComponent
 														message={item.data as IMessage}
+														loading={item.data.live}
 														onMessageUpdate={onMessageUpdate}
 														onReply={handleReply}
 														editable={group?.editable?.(item.data as IMessage)}
@@ -961,6 +1079,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 													interactions={settledByMessageId.get(item.data.id)}
 													onRespond={onRespondToInteraction}
 												/>
+												{group?.renderMessageFooter?.(item.data as IMessage)}
 											</div>
 										),
 									)}
@@ -1007,7 +1126,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									)}
 								{visibleLiveMessages.map((liveMessage) => (
 									<div
-										className="w-full px-4 animate-in fade-in slide-in-from-top-1 duration-300"
+										className="w-full px-1 animate-in fade-in slide-in-from-top-1 duration-300 sm:px-4"
 										key={`msg-${liveMessage.id}`}
 										style={{
 											maxWidth:
@@ -1092,7 +1211,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
 								}}
 							>
-								{inlinePrompt && <div className="pt-2">{inlinePrompt}</div>}
+								{inlinePrompt && (
+									<div data-fl-chat-inline-prompt className="pt-2">
+										{inlinePrompt}
+									</div>
+								)}
 								{replyTarget && (
 									<MessageReference
 										reference={replyTarget}
@@ -1101,6 +1224,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								)}
 								<ChatBox
 									mentionables={group?.mentionables}
+									teamTags={group?.teamTags}
 									placeholder={group?.placeholder}
 									ref={chatBox}
 									availableTools={config?.tools ?? []}

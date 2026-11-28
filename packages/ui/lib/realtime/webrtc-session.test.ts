@@ -1,4 +1,12 @@
-import { afterAll, describe, expect, mock, test } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	describe,
+	expect,
+	jest,
+	mock,
+	test,
+} from "bun:test";
 import type { IRealtimeAccess } from "./types";
 
 class FakeAwareness {
@@ -22,13 +30,18 @@ class FakeAwareness {
 	}
 }
 
+interface FakeConnection {
+	peer?: unknown;
+	destroy: () => void;
+}
+
 class FakeWebrtcProvider {
 	static instances: FakeWebrtcProvider[] = [];
 	awareness = new FakeAwareness();
 	peerOpts: Record<string, unknown>;
 	signalingConns = [{ connected: true }];
 	room = {
-		webrtcConns: new Map<string, { destroy: () => void }>(),
+		webrtcConns: new Map<string, FakeConnection>(),
 	};
 	disconnectCalls = 0;
 	connectCalls = 0;
@@ -66,10 +79,15 @@ mock.module("y-webrtc", () => ({
 afterAll(() => {
 	mock.module("y-webrtc", () => actualYWebrtc);
 });
+afterEach(() => {
+	jest.useRealTimers();
+});
 
 const { createRealtimeSession } = await import("./webrtc");
 
-function access(credential: string): IRealtimeAccess {
+const signalingServers = ["wss://signaling.example.com"];
+
+function access(credential: string, iceExpiresAt?: number): IRealtimeAccess {
 	return {
 		jwt: "",
 		encryption_key: "room-key",
@@ -82,41 +100,69 @@ function access(credential: string): IRealtimeAccess {
 				credential,
 			},
 		],
+		...(iceExpiresAt === undefined ? {} : { ice_expires_at: iceExpiresAt }),
 	};
 }
 
+/** A connection whose statistics name the kind of candidate it sends from. */
+function connection(candidateType: string, onDestroy: () => void) {
+	const reports = [
+		{ id: "local", type: "local-candidate", candidateType },
+		{ id: "pair", type: "candidate-pair", localCandidateId: "local" },
+		{ id: "transport", type: "transport", selectedCandidatePairId: "pair" },
+	];
+	return {
+		peer: {
+			_pc: {
+				getStats: async () => ({
+					forEach(visit: (report: Record<string, unknown>) => void) {
+						for (const report of reports) visit(report);
+					},
+				}),
+			},
+		},
+		destroy: onDestroy,
+	};
+}
+
+async function settled(): Promise<void> {
+	for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+}
+
+function latestProvider(): FakeWebrtcProvider {
+	const provider = FakeWebrtcProvider.instances.at(-1);
+	if (!provider) throw new Error("No provider was created");
+	return provider;
+}
+
 describe("shared realtime session ICE lifecycle", () => {
-	test("wires initial ICE and refreshes a reused room", async () => {
+	test("a second consumer's credentials leave the room's live connections running", async () => {
 		const room = `realtime-test-${crypto.randomUUID()}`;
 		const providersBefore = FakeWebrtcProvider.instances.length;
 		const first = await createRealtimeSession({
 			room,
 			access: access("first-password"),
-			signalingServers: ["wss://signaling.example.com"],
+			signalingServers,
 		});
-		const provider = FakeWebrtcProvider.instances.at(-1)!;
+		const provider = latestProvider();
 		expect(provider.peerOpts).toEqual({
 			config: { iceServers: access("first-password").ice_servers },
 		});
 
-		let recycledPeers = 0;
-		provider.room.webrtcConns.set("peer-1", {
-			destroy: () => recycledPeers++,
-		});
-		provider.room.webrtcConns.set("peer-2", {
-			destroy: () => recycledPeers++,
-		});
+		let closedPeers = 0;
+		provider.room.webrtcConns.set("peer-1", { destroy: () => closedPeers++ });
+		provider.room.webrtcConns.set("peer-2", { destroy: () => closedPeers++ });
 
 		const second = await createRealtimeSession({
 			room,
 			access: access("second-password"),
-			signalingServers: ["wss://signaling.example.com"],
+			signalingServers,
 		});
 		expect(FakeWebrtcProvider.instances).toHaveLength(providersBefore + 1);
 		expect(provider.peerOpts).toEqual({
 			config: { iceServers: access("second-password").ice_servers },
 		});
-		expect(recycledPeers).toBe(2);
+		expect(closedPeers).toBe(0);
 
 		first.dispose();
 		first.dispose();
@@ -125,31 +171,170 @@ describe("shared realtime session ICE lifecycle", () => {
 		expect(provider.peerOpts).toEqual({
 			config: { iceServers: access("third-password").ice_servers },
 		});
+		expect(closedPeers).toBe(0);
 
 		second.dispose();
 		expect(provider.disconnectCalls).toBe(1);
 		expect(provider.destroyCalls).toBe(1);
 	});
 
-	test("rejects reuse when the room encryption key changed", async () => {
+	test("a relayed connection is replaced a minute before its credential lapses", async () => {
+		jest.useFakeTimers();
+		const room = `realtime-relay-test-${crypto.randomUUID()}`;
+		const lapsesAt = Math.floor(Date.now() / 1000) + 10 * 60;
+		const session = await createRealtimeSession({
+			room,
+			access: access("first-password", lapsesAt),
+			signalingServers,
+		});
+		const provider = latestProvider();
+		const closed: string[] = [];
+		provider.room.webrtcConns.set(
+			"relayed",
+			connection("relay", () => closed.push("relayed")),
+		);
+		provider.room.webrtcConns.set(
+			"direct",
+			connection("host", () => closed.push("direct")),
+		);
+
+		session.refreshAccess(access("second-password", lapsesAt + 4 * 60 * 60));
+		provider.room.webrtcConns.set(
+			"later",
+			connection("relay", () => closed.push("later")),
+		);
+		jest.advanceTimersByTime(9 * 60_000 - 1_000);
+		await settled();
+		expect(closed).toEqual([]);
+
+		jest.advanceTimersByTime(2_000);
+		await settled();
+		expect(closed).toEqual(["relayed"]);
+		session.dispose();
+	});
+
+	test("a released room cancels the replacement it had planned", async () => {
+		jest.useFakeTimers();
+		const room = `realtime-release-test-${crypto.randomUUID()}`;
+		const lapsesAt = Math.floor(Date.now() / 1000) + 10 * 60;
+		const session = await createRealtimeSession({
+			room,
+			access: access("first-password", lapsesAt),
+			signalingServers,
+		});
+		const provider = latestProvider();
+		let closed = 0;
+		provider.room.webrtcConns.set(
+			"relayed",
+			connection("relay", () => closed++),
+		);
+		session.refreshAccess(access("second-password", lapsesAt + 4 * 60 * 60));
+		session.dispose();
+
+		jest.advanceTimersByTime(20 * 60_000);
+		await settled();
+		expect(closed).toBe(0);
+	});
+
+	test("two consumers opening a room at once share one provider", async () => {
+		const room = `realtime-race-test-${crypto.randomUUID()}`;
+		const providersBefore = FakeWebrtcProvider.instances.length;
+		const [first, second] = await Promise.all(
+			["aaa.bbb.first", "aaa.bbb.second"].map((jwt) =>
+				createRealtimeSession({
+					room,
+					access: { ...access("password"), jwt },
+					signalingServers,
+				}),
+			),
+		);
+
+		expect(FakeWebrtcProvider.instances).toHaveLength(providersBefore + 1);
+		expect(second.provider).toBe(first.provider);
+		first.dispose();
+		expect(latestProvider().destroyCalls).toBe(0);
+		second.dispose();
+		expect(latestProvider().destroyCalls).toBe(1);
+	});
+
+	test("a failed opening does not block the next one", async () => {
+		const room = `realtime-retry-test-${crypto.randomUUID()}`;
+		const refused = createRealtimeSession({
+			room,
+			access: { ...access("password"), jwt: "aaa.bbb.ccc" },
+		});
+		const opened = createRealtimeSession({
+			room,
+			access: access("password"),
+			signalingServers,
+		});
+
+		expect(refused).rejects.toThrow("No signaling servers are configured");
+		(await opened).dispose();
+	});
+
+	const nextDay = (credential: string): IRealtimeAccess => ({
+		...access(credential),
+		key_id: "2026-09-03",
+	});
+
+	test("a consumer with a newer room key takes the room over once its holder lets go", async () => {
+		const room = `realtime-rekey-test-${crypto.randomUUID()}`;
+		const holder: { session?: { dispose(): void } } = {};
+		const stale = mock(() => holder.session?.dispose());
+		holder.session = await createRealtimeSession({
+			room,
+			access: access("first-password"),
+			signalingServers,
+			onAuthFailure: stale,
+		});
+		const old = latestProvider();
+
+		const arrival = await createRealtimeSession({
+			room,
+			access: nextDay("second-password"),
+			signalingServers,
+		});
+		expect(stale).toHaveBeenCalledTimes(1);
+		expect(old.destroyCalls).toBe(1);
+		expect(arrival.provider).not.toBe(old);
+		expect(arrival.provider.peerOpts).toEqual({
+			config: { iceServers: nextDay("second-password").ice_servers },
+		});
+
+		const rejoined = await createRealtimeSession({
+			room,
+			access: nextDay("third-password"),
+			signalingServers,
+		});
+		expect(rejoined.provider).toBe(arrival.provider);
+		rejoined.dispose();
+		arrival.dispose();
+	});
+
+	test("a holder that keeps the room refuses a consumer on another key", async () => {
+		jest.useFakeTimers();
 		const room = `realtime-key-test-${crypto.randomUUID()}`;
+		const stale = mock(() => {});
 		const first = await createRealtimeSession({
 			room,
 			access: access("first-password"),
-			signalingServers: ["wss://signaling.example.com"],
+			signalingServers,
+			onAuthFailure: stale,
 		});
-		const changedKey = {
-			...access("second-password"),
-			key_id: "2026-09-03",
-		};
 
-		expect(
-			createRealtimeSession({
-				room,
-				access: changedKey,
-				signalingServers: ["wss://signaling.example.com"],
-			}),
-		).rejects.toThrow("older encryption key");
+		const refusal = createRealtimeSession({
+			room,
+			access: nextDay("second-password"),
+			signalingServers,
+		}).then(
+			() => null,
+			(error: Error) => error,
+		);
+		await settled();
+		expect(stale).toHaveBeenCalledTimes(1);
+		jest.advanceTimersByTime(3_000);
+		expect((await refusal)?.message).toContain("older encryption key");
 		first.dispose();
 	});
 });

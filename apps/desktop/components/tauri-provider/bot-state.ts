@@ -9,6 +9,7 @@ import type {
 	IBotEncryptionHost,
 	IBotMailAddress,
 	IBotMailAvailability,
+	IBotMailDomain,
 	IBotMailThread,
 	IBotMailThreadView,
 	IBotNote,
@@ -27,6 +28,9 @@ import type {
 	IBotTurnHost,
 	IBotWebhook,
 	IBotWorkspace,
+	ICalendarFeed,
+	ICalendarRange,
+	ICalendarWake,
 	IConnectedAccount,
 	ICreateBotConnectorRequest,
 	ICreateBotRequest,
@@ -38,13 +42,28 @@ import type {
 	IUpdateBotRequest,
 	IUpdateBotSkillRequest,
 	IUpdateBotTaskRequest,
+	IUpdateCalendarFeed,
+	IUpdateCalendarWake,
 	IUpsertBotSecretRequest,
 } from "@flow-like/flow-like-ui";
 import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
+import {
+	expectCalendarFeed,
+	expectCalendarRange,
+	expectCalendarWake,
+	isNoCalendarFeed,
+} from "@flow-like/flow-like-ui/lib/bot-calendar-shape";
 import { createScreenSealing } from "@flow-like/flow-like-ui/lib/bot-screens/screen-sealing";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { IAppVisibility } from "@flow-like/flow-like-ui/lib/schema/app/app";
+import type {
+	TeamsBotAccess,
+	TeamsBotConnection,
+	TeamsBotPackage,
+	TeamsBotSetup,
+} from "@flow-like/flow-like-ui/lib/teams-bot";
+import type { IBotChannelLink } from "@flow-like/flow-like-ui/state/backend-state/bot-channels-state";
 import {
 	type IBotApprovalItemDecision,
 	type ISealedApprovalAnswer,
@@ -65,6 +84,7 @@ import {
 	LocalStoreError,
 	errorCode,
 	localBots,
+	localCalendar,
 	localPermissions,
 	localTasks,
 	localToolGrants,
@@ -445,10 +465,20 @@ export class BotState implements IBotState {
 		);
 	}
 
+	/** The built-ins the account's last list held, so this computer's copy of one may go. */
+	private accountBuiltIns(): NonNullable<IBot["system"]>[] {
+		const session = accountSession(this.backend);
+		if (!session) return [];
+		return this.accountBots
+			.known(session.sub)
+			.flatMap((bot) => (bot.system ? [bot.system] : []));
+	}
+
 	async deleteBot(botId: string): Promise<void> {
 		const account = await this.accountFor(botId);
 		if (!account) {
-			await this.here(botId, () => localBots.delete(botId));
+			const accountBuiltIns = this.accountBuiltIns();
+			await this.here(botId, () => localBots.delete(botId, accountBuiltIns));
 			this.ids.forgetLocal(botId);
 			return;
 		}
@@ -729,6 +759,136 @@ export class BotState implements IBotState {
 		);
 	}
 
+	async getCalendarWake(botId: string): Promise<ICalendarWake> {
+		const account = await this.accountFor(botId);
+		if (!account) return this.here(botId, () => localCalendar.wake(botId));
+		return expectCalendarWake(
+			await get<unknown>(
+				account.profile,
+				`${botPath(account.id)}/calendar`,
+				account.auth,
+			),
+			`read the calendar wake-ups of bot ${botId}`,
+		);
+	}
+
+	async setCalendarWake(
+		botId: string,
+		update: IUpdateCalendarWake,
+	): Promise<ICalendarWake> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () => localCalendar.setWake(botId, update));
+		}
+		return expectCalendarWake(
+			await put<unknown>(
+				account.profile,
+				`${botPath(account.id)}/calendar`,
+				update,
+				account.auth,
+			),
+			`change the calendar wake-ups of bot ${botId}`,
+		);
+	}
+
+	/** Bots that live only on this computer have no hub to serve a link. */
+	async getCalendarFeed(botId: string): Promise<ICalendarFeed | null> {
+		const account = await this.accountFor(botId);
+		if (!account) return null;
+		try {
+			return expectCalendarFeed(
+				await get<unknown>(
+					account.profile,
+					`${botPath(account.id)}/calendar/feed`,
+					account.auth,
+				),
+				`read the calendar link of bot ${botId}`,
+			);
+		} catch (error) {
+			if (isNoCalendarFeed(error)) return null;
+			throw error;
+		}
+	}
+
+	async updateCalendarFeed(
+		botId: string,
+		update: IUpdateCalendarFeed,
+	): Promise<ICalendarFeed> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			throw new Error("A calendar link needs the bot to live on your account");
+		}
+		return expectCalendarFeed(
+			await put<unknown>(
+				account.profile,
+				`${botPath(account.id)}/calendar/feed`,
+				update,
+				account.auth,
+			),
+			`change the calendar link of bot ${botId}`,
+		);
+	}
+
+	async rotateCalendarFeed(botId: string): Promise<ICalendarFeed> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			throw new Error("A calendar link needs the bot to live on your account");
+		}
+		return expectCalendarFeed(
+			await post<unknown>(
+				account.profile,
+				`${botPath(account.id)}/calendar/feed/rotate`,
+				undefined,
+				account.auth,
+			),
+			`replace the calendar link of bot ${botId}`,
+		);
+	}
+
+	async deleteCalendarFeed(botId: string): Promise<void> {
+		const account = await this.accountFor(botId);
+		if (!account) return;
+		await del<void>(
+			account.profile,
+			`${botPath(account.id)}/calendar/feed`,
+			undefined,
+			account.auth,
+		);
+	}
+
+	/** A desktop bot's connected calendars are signed in on its desktop, so this computer reads them. */
+	async listCalendar(
+		botId: string,
+		from: string,
+		to: string,
+	): Promise<ICalendarRange> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () => localCalendar.events(botId, from, to));
+		}
+		if (await this.locatedOnDesktop(botId, account)) {
+			return localCalendar.events(account.id, from, to);
+		}
+		return expectCalendarRange(
+			await get<unknown>(
+				account.profile,
+				`${botPath(account.id)}/calendar/events?${new URLSearchParams({ from, to })}`,
+				account.auth,
+			),
+			`list the calendar of bot ${botId}`,
+		);
+	}
+
+	private async locatedOnDesktop(
+		botId: string,
+		account: IAccountRoute,
+	): Promise<boolean> {
+		const listed = this.accountBots
+			.known(account.sub)
+			.find((bot) => bot.id === account.id);
+		return (listed ?? (await this.getBot(botId))).location === "desktop";
+	}
+
 	async listSkills(botId: string): Promise<IBotSkill[]> {
 		const account = await this.accountFor(botId);
 		if (!account) return this.here(botId, () => localSkills.list(botId));
@@ -912,6 +1072,31 @@ export class BotState implements IBotState {
 		);
 	}
 
+	/** Signed out, a new bot lives on this computer and gets no address. */
+	async getNewBotMailDomain(): Promise<IBotMailDomain> {
+		const session = accountSession(this.backend);
+		if (!session) return { configured: false };
+		return get<IBotMailDomain>(
+			session.profile,
+			"bots/email-domain",
+			session.auth,
+		);
+	}
+
+	async checkNewBotMailAddress(alias: string): Promise<IBotMailAvailability> {
+		const session = accountSession(this.backend);
+		if (!session) {
+			throw new Error(
+				"Email needs a bot on an account; sign in to give a new bot an address",
+			);
+		}
+		return get<IBotMailAvailability>(
+			session.profile,
+			`bots/email-address/check/${encodeURIComponent(alias)}`,
+			session.auth,
+		);
+	}
+
 	async listMailThreads(botId: string): Promise<IBotMailThread[]> {
 		const account = await this.accountFor(botId);
 		if (!account) return [];
@@ -943,6 +1128,97 @@ export class BotState implements IBotState {
 			);
 		}
 		return account;
+	}
+
+	private async teamsRoute(botId: string): Promise<IAccountRoute> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			throw new Error(
+				"Microsoft Teams needs a bot on an account; this bot lives on this device",
+			);
+		}
+		return account;
+	}
+
+	async getTeams(botId: string): Promise<TeamsBotConnection> {
+		const account = await this.teamsRoute(botId);
+		return get<TeamsBotConnection>(
+			account.profile,
+			`${botPath(account.id)}/teams`,
+			account.auth,
+		);
+	}
+
+	async setupTeams(
+		botId: string,
+		input: TeamsBotSetup,
+	): Promise<TeamsBotConnection> {
+		const account = await this.teamsRoute(botId);
+		return put<TeamsBotConnection>(
+			account.profile,
+			`${botPath(account.id)}/teams`,
+			input,
+			account.auth,
+		);
+	}
+
+	async getTeamsPackage(botId: string): Promise<TeamsBotPackage> {
+		const account = await this.teamsRoute(botId);
+		return get<TeamsBotPackage>(
+			account.profile,
+			`${botPath(account.id)}/teams/package`,
+			account.auth,
+		);
+	}
+
+	async rotateTeamsSecret(botId: string): Promise<TeamsBotConnection> {
+		const account = await this.teamsRoute(botId);
+		return post<TeamsBotConnection>(
+			account.profile,
+			`${botPath(account.id)}/teams/rotate`,
+			{},
+			account.auth,
+		);
+	}
+
+	async disconnectTeams(botId: string): Promise<TeamsBotConnection> {
+		const account = await this.teamsRoute(botId);
+		return del<TeamsBotConnection>(
+			account.profile,
+			`${botPath(account.id)}/teams`,
+			undefined,
+			account.auth,
+		);
+	}
+
+	async getTeamsAccess(botId: string): Promise<TeamsBotAccess> {
+		const account = await this.teamsRoute(botId);
+		return get<TeamsBotAccess>(
+			account.profile,
+			`${botPath(account.id)}/teams/access`,
+			account.auth,
+		);
+	}
+
+	async listChannelLinks(botId: string): Promise<IBotChannelLink[]> {
+		const account = await this.accountFor(botId);
+		if (!account) return [];
+		const response = await get<{ links?: IBotChannelLink[] }>(
+			account.profile,
+			`${botPath(account.id)}/channels`,
+			account.auth,
+		);
+		return asArray(response?.links);
+	}
+
+	async deleteChannelLink(botId: string, linkId: string): Promise<void> {
+		const account = await this.teamsRoute(botId);
+		await del<void>(
+			account.profile,
+			`${botPath(account.id)}/channels/${encodeURIComponent(linkId)}`,
+			undefined,
+			account.auth,
+		);
 	}
 
 	async listWebhooks(botId: string): Promise<IBotWebhook[]> {

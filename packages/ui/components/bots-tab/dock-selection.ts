@@ -7,6 +7,28 @@ import { directPartnerId, isSelfPrincipal } from "./crew-model";
 /** The Bots tab. Its dock shows the global conversation, so the docked overlay stays closed there. */
 export const BOTS_ROUTE = "/bots";
 
+/** `?view=org` shows the org chart instead of the chats. */
+export const BOTS_VIEW_PARAM = "view";
+export const ORG_VIEW = "org";
+
+export type BotsView = "chats" | "org";
+
+export function parseBotsView(params: SearchParamsLike): BotsView {
+	return params.get(BOTS_VIEW_PARAM) === ORG_VIEW ? "org" : "chats";
+}
+
+/** The query string switched to a view, keeping every other parameter. */
+export function botsViewQuery(
+	view: BotsView,
+	current: string | URLSearchParams,
+): string {
+	const params = new URLSearchParams(current);
+	if (view === "org") params.set(BOTS_VIEW_PARAM, ORG_VIEW);
+	else if (params.get(BOTS_VIEW_PARAM) === ORG_VIEW)
+		params.delete(BOTS_VIEW_PARAM);
+	return params.toString();
+}
+
 export type DockSelection =
 	| { type: "system"; system: BotSystemKey }
 	| { type: "bot"; botId: string }
@@ -77,6 +99,7 @@ export function dockSelectionQuery(
 	}
 	params.delete("bot");
 	params.delete("conversation");
+	if (params.get(BOTS_VIEW_PARAM) === ORG_VIEW) params.delete(BOTS_VIEW_PARAM);
 	if (selection.type === "conversation") {
 		params.set("conversation", selection.conversationId);
 	} else if (selection.type === "bot") {

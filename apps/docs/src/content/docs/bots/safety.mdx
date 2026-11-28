@@ -52,6 +52,8 @@ Review and revoke standing approvals in the bot's details under **Allowed action
 
 **Auto mode.** In a chat you're watching, Auto mode runs tools and applies changes without asking each time, except for the actions above. Use it when you'll review the result afterwards.
 
+**After reading the web.** A web page can contain instructions meant for the bot. So once a turn has read web pages, calls that reach a website ask again, even when you always allow them and even in Auto mode or with **Approve automatically**: writing to a site, sending a secret, reaching a private network and opening a site in the browser. Reading from a site you always allow still runs without asking. For a site you haven't allowed yet, choose **Always allow** on the card and later turns read from it without asking.
+
 **Background turns.** When a schedule, webhook or mail wakes the bot and nobody is watching, the bot's decision model checks whether your own messages or the bot's instructions clearly cover the exact call. A yes runs that one call and is never saved as an approval. Content from the trigger itself, such as the text of a mail, never counts as permission. Otherwise the turn pauses until you answer, for up to 7 days.
 
 ## Data labels
@@ -93,14 +95,15 @@ Because the server can't read encrypted conversations:
 - Calls in an encrypted chat need a speech-to-text model installed on your device. Hosted speech models run behind the server, so an app without its own model shows no call there, and bots speak only with a voice installed on the device. What is said is sealed like a message. The server only learns that a call started and ended, so it can ring the others.
 - Secrets sealed for a bot's host can't be used by turns that run in the cloud.
 
-A bot that answers with a hosted model sends each turn through the server to that model, so the model's provider reads what the bot sends it. Bots on a device always use hosted models. Encryption keeps their chats unreadable in the server's storage and inbox, not from the model.
+A bot that answers with a hosted model sends each turn through the server to that model, so the model's provider reads what the bot sends it. A device bot on a model you connected with your own provider calls that provider straight from the device, and your hub sends the device the model's key for the turn. Encryption keeps their chats unreadable in the server's storage and inbox, not from the model.
 
 ## Limits that keep costs in check
 
 | Limit | Default |
 |---|---|
-| Turns a non-owner can start per bot | 20 a day |
+| Turns a non-owner can start per bot, discussions they started included | 20 a day |
 | Turns bots start for each other | daily cap by plan |
+| Messages two bots exchange per message from a person | 10, up to 40 when someone allows a longer discussion |
 | Outgoing mail | 500 recipients per bot, 2,000 per account a day |
 | Incoming mail | 200 per bot a day |
 | Webhook calls | 30 a minute per webhook |

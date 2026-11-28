@@ -93,6 +93,7 @@ import {
 	apiPut,
 	getApiBaseUrl,
 } from "./api-utils";
+import { pagePrerunScope, takeSeededPagePrerun } from "./page-prerun-seed";
 
 // Hub configuration cache
 let hubCache: IHub | undefined;
@@ -203,17 +204,7 @@ export class WebEventState implements IEventState {
 		version: [number, number, number] | undefined,
 		trigger: PageTrigger,
 	): string {
-		return JSON.stringify([
-			getApiBaseUrl(),
-			this.backend.profile?.hub ?? null,
-			this.backend.profile?.id ?? null,
-			this.backend.auth?.user?.profile?.sub ?? null,
-			this.backend.auth?.user?.access_token ?? null,
-			appId,
-			eventId,
-			version ?? null,
-			serializePageTrigger(trigger),
-		]);
+		return pagePrerunScope(this.backend, appId, eventId, version, trigger);
 	}
 
 	private takePagePrerun(
@@ -1295,6 +1286,15 @@ export class WebEventState implements IEventState {
 			// Capture identity before the request; an account switch cannot reassign its result.
 			const scope = this.pagePrerunScope(appId, eventId, version, pageTrigger);
 			const started = runTimingNow();
+			const seeded = takeSeededPagePrerun(scope);
+			if (seeded) {
+				// The handoff window counts from when the bootstrap answered.
+				this.pagePreruns.set(seeded.response, {
+					scope,
+					started: started - seeded.ageMs,
+				});
+				return seeded.response;
+			}
 			const result = await apiPost<IPrerunEventResponse>(
 				`apps/${appId}/events/${eventId}/prerun${params}`,
 				{ page_trigger: serializePageTrigger(pageTrigger) },

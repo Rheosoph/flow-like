@@ -240,8 +240,9 @@ impl MemoryEngine {
                     revision,
                     prepare_facts(
                         &self.stores.facts,
+                        Some(&self.stores.entities),
                         self.llm.as_ref(),
-                        vec![fact.clone()],
+                        Candidates::facts(vec![fact.clone()]),
                         self.timezone,
                         now,
                         true,
@@ -259,7 +260,9 @@ impl MemoryEngine {
             let commit_now = now + Duration::from_std(started.elapsed())?;
             match self
                 .commit(revision, commit_now, move |stores, state| async move {
-                    let report = apply_prepared_facts(&stores.facts, prepared, now).await?;
+                    let report =
+                        apply_prepared_facts(&stores.facts, Some(&stores.entities), prepared, now)
+                            .await?;
                     let action = report
                         .decisions
                         .into_iter()

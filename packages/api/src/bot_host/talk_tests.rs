@@ -7,20 +7,24 @@ use super::{
     ledger::{self, next_head, recover_in},
     talk::{
         ERROR_ASK_ANSWERED, ERROR_ASK_EXPIRED, ERROR_ASK_QUEUED, Question, REPLY_BY_DAYS,
-        WAIT_SECS, answer_from, answered_ask, ask_body, ask_result_transcript, asked_by,
-        end_lapsed_in, grant_scope, granted_in, headless_verdict, remote_context, roster_in,
-        turn_conversation, turn_origin_conversation,
+        WAIT_SECS, answer_from, answered_ask, ask_body, ask_result_transcript, askable_bot,
+        asked_by, end_lapsed_in, ensure_same_org, grant_scope, granted_in, headless_verdict,
+        remote_context, roster_in, turn_conversation, turn_origin_conversation,
     },
+    teams,
 };
 use crate::{
-    entity::{bot_decision_wait, bot_turn, inbox_entry},
+    entity::{
+        bot_decision_wait, bot_team, bot_team_bot, bot_team_person, bot_turn, conversation_member,
+        inbox_entry,
+    },
     routes::{
         bots::fire::{FiredTurn, TurnReply},
         inbox::{
             activity::{activity_message_id, bot_ask_targets, write_activity_in},
             approvals::open_conversation,
             conversations::start_exchange,
-            exchange::{message_outgoing, post_as_bot_in},
+            exchange::{BotLimits, exchange_across_in, message_outgoing, post_as_bot_in},
             now_millis,
         },
     },
@@ -36,7 +40,10 @@ use flow_like_types::{
     inbox::{ActivityBody, InboxEntryKind},
     tool_grant::ApprovalDecision,
 };
-use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, QueryFilter, Schema,
+};
 use serde_json::json;
 
 const OWNER: &str = "user-a";
@@ -60,7 +67,64 @@ async fn talk_db() -> DatabaseConnection {
     ] {
         db.execute_unprepared(statement).await.unwrap();
     }
+    let schema = Schema::new(db.get_database_backend());
+    for table in [
+        schema.create_table_from_entity(bot_team_bot::Entity),
+        schema.create_table_from_entity(bot_team_person::Entity),
+    ] {
+        db.execute(&table).await.unwrap();
+    }
     db
+}
+
+async fn team(
+    db: &DatabaseConnection,
+    id: &str,
+    name: &str,
+    parent: Option<&str>,
+    lead: Option<&str>,
+    direct_asks: bool,
+) {
+    bot_team::ActiveModel {
+        id: Set(id.into()),
+        name: Set(name.into()),
+        purpose: Set(None),
+        parent_id: Set(parent.map(str::to_string)),
+        lead_bot_id: Set(lead.map(str::to_string)),
+        lead_offer_bot_id: Set(None),
+        lead_offer_by: Set(None),
+        lead_offer_at: Set(None),
+        direct_asks: Set(direct_asks),
+        conversation_id: Set(None),
+        created_by: Set(OWNER.into()),
+        created_at: Set(at(0)),
+        updated_at: Set(at(0)),
+    }
+    .insert(db)
+    .await
+    .unwrap();
+}
+
+async fn join(
+    db: &DatabaseConnection,
+    team_id: &str,
+    bot: &str,
+    agreed: bool,
+    limits: Option<serde_json::Value>,
+) {
+    bot_team_bot::ActiveModel {
+        team_id: Set(team_id.into()),
+        bot_id: Set(bot.into()),
+        status: Set("ACTIVE".into()),
+        direct_agreed: Set(agreed),
+        limits: Set(limits),
+        invited_by: Set(None),
+        created_at: Set(at(0)),
+        accepted_at: Set(Some(at(0))),
+    }
+    .insert(db)
+    .await
+    .unwrap();
 }
 
 async fn heartbeat(db: &DatabaseConnection, bot: &str, seen: DateTime<FixedOffset>) {
@@ -144,7 +208,9 @@ async fn the_roster_lists_the_other_bots_with_their_presence() {
     insert_bot(&db, "bot_stranger", "user-b", "SERVER").await;
     heartbeat(&db, LEDGER, now_millis() - Duration::seconds(30)).await;
     heartbeat(&db, "bot_dev", now_millis() - Duration::seconds(600)).await;
-    let roster = roster_in(&db, OWNER, SCOUT, now_millis()).await.unwrap();
+    let roster = roster_in(&db, OWNER, SCOUT, None, now_millis())
+        .await
+        .unwrap();
     let presence: Vec<_> = roster
         .iter()
         .map(|member| (member.id.as_str(), member.presence))
@@ -1146,7 +1212,9 @@ async fn an_ask_leaves_one_activity_in_the_askers_chat_and_the_callees_chat_and_
         assert_eq!(row.message_id, activity_message_id("ask-9", chat));
         let parsed = ActivityBody::parse(&row.envelope["body"]).unwrap();
         assert_eq!(parsed, body);
-        let ActivityBody::BotAsk { question, .. } = parsed;
+        let ActivityBody::BotAsk { question, .. } = parsed else {
+            panic!("a bot ask parses as one");
+        };
         assert_eq!(question.chars().count(), 300);
         assert_eq!(activity_rows(&db, sender).await.len(), 1);
     }
@@ -1183,4 +1251,287 @@ async fn an_ask_does_not_start_the_callees_chat_and_writes_once_when_both_chats_
         .await
         .unwrap();
     assert_eq!(from_ledger_chat.len(), 1);
+}
+
+async fn org() -> DatabaseConnection {
+    let db = talk_db().await;
+    insert_bot(&db, SCOUT, OWNER, "SERVER").await;
+    insert_bot(&db, LEDGER, OWNER, "SERVER").await;
+    insert_bot(&db, "bot_patch", "user-b", "SERVER").await;
+    insert_bot(&db, "bot_books", "user-b", "SERVER").await;
+    insert_bot(&db, "bot_peer", "user-b", "SERVER").await;
+    insert_bot(&db, "bot_lone", "user-c", "SERVER").await;
+    team(&db, "t_org", "Kestrel", None, None, false).await;
+    team(
+        &db,
+        "t_sec",
+        "Security",
+        Some("t_org"),
+        Some("bot_patch"),
+        true,
+    )
+    .await;
+    team(
+        &db,
+        "t_fin",
+        "Finance",
+        Some("t_org"),
+        Some("bot_books"),
+        false,
+    )
+    .await;
+    join(&db, "t_sec", SCOUT, true, None).await;
+    join(&db, "t_sec", "bot_patch", true, None).await;
+    join(&db, "t_sec", "bot_peer", false, None).await;
+    join(&db, "t_fin", "bot_books", true, None).await;
+    join(&db, "t_sec", LEDGER, true, None).await;
+    db
+}
+
+#[tokio::test]
+async fn the_roster_adds_teammates_and_other_teams_leads_of_other_owners() {
+    let db = org().await;
+    let roster = roster_in(&db, OWNER, SCOUT, None, now_millis())
+        .await
+        .unwrap();
+    let find = |id: &str| roster.iter().find(|member| member.id == id).unwrap();
+
+    let own = find(LEDGER);
+    assert_eq!(own.owner_name, None);
+    assert_eq!(own.team.as_deref(), Some("Security"));
+    assert!(own.direct);
+
+    let lead = find("bot_patch");
+    assert_eq!(lead.owner_name.as_deref(), Some("Someone"));
+    assert_eq!(lead.team.as_deref(), Some("Security"));
+    assert_eq!(lead.lead_of.as_deref(), Some("Security"));
+    assert!(lead.direct);
+
+    let peer = find("bot_peer");
+    assert_eq!(peer.team.as_deref(), Some("Security"));
+    assert!(
+        !peer.direct,
+        "the peer's owner has not agreed to direct asks"
+    );
+
+    let other_lead = find("bot_books");
+    assert_eq!(other_lead.lead_of.as_deref(), Some("Finance"));
+    assert!(!other_lead.direct);
+
+    assert!(roster.iter().all(|member| member.id != "bot_lone"));
+    assert!(roster.iter().all(|member| member.id != SCOUT));
+}
+
+#[tokio::test]
+async fn a_bot_outside_every_team_keeps_the_owners_crew() {
+    let db = org().await;
+    let roster = roster_in(&db, "user-c", "bot_lone", None, now_millis())
+        .await
+        .unwrap();
+    assert!(roster.is_empty());
+}
+
+#[tokio::test]
+async fn an_exchange_across_owners_adds_the_callees_owner_and_its_limits() {
+    let db = org().await;
+    let limits = vec![BotLimits {
+        bot_id: "bot_patch".into(),
+        limits: json!({ "mask": 1 }),
+    }];
+    let (id, _) = exchange_across_in(
+        &db,
+        OWNER,
+        "user-b",
+        SCOUT,
+        "bot_patch",
+        &limits,
+        Some("Scout".into()),
+        at(1),
+    )
+    .await
+    .unwrap();
+    let members = conversation_member::Entity::find()
+        .filter(conversation_member::Column::ConversationId.eq(id.as_str()))
+        .all(&db)
+        .await
+        .unwrap();
+    let mut ids: Vec<&str> = members.iter().map(|m| m.principal_id.as_str()).collect();
+    ids.sort();
+    assert_eq!(ids, ["bot_patch", SCOUT, OWNER, "user-b"]);
+    assert!(members.iter().all(|member| member.status == "ACTIVE"));
+    let patch = members
+        .iter()
+        .find(|m| m.principal_id == "bot_patch")
+        .unwrap();
+    assert_eq!(patch.limits, Some(json!({ "mask": 1 })));
+    let scout = members.iter().find(|m| m.principal_id == SCOUT).unwrap();
+    assert_eq!(scout.limits, None);
+
+    let (again, _) = exchange_across_in(
+        &db,
+        "user-b",
+        OWNER,
+        "bot_patch",
+        SCOUT,
+        &limits,
+        None,
+        at(2),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again, id);
+    let count = conversation_member::Entity::find()
+        .filter(conversation_member::Column::ConversationId.eq(id.as_str()))
+        .all(&db)
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(count, 4);
+}
+
+#[tokio::test]
+async fn an_ask_across_owners_needs_a_shared_org() {
+    let db = org().await;
+    assert!(
+        ensure_same_org(&db, SCOUT, &member("bot_books", "Books"))
+            .await
+            .is_ok()
+    );
+    let refused = ensure_same_org(&db, SCOUT, &member("bot_lone", "Lone"))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("Lone is not in your org"), "{refused}");
+}
+
+async fn classify(db: &DatabaseConnection, bot: &str, level: &str) {
+    db.execute_unprepared(&format!(
+        r#"UPDATE public."Bot" SET "classification" = '{level}' WHERE "id" = '{bot}'"#
+    ))
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn an_ask_across_owners_never_reads_up() {
+    let db = org().await;
+    classify(&db, "bot_patch", "restricted").await;
+    let refused = askable_bot(&db, OWNER, SCOUT, "bot_patch", None)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.status(), axum::http::StatusCode::FORBIDDEN);
+
+    classify(&db, SCOUT, "restricted").await;
+    classify(&db, "bot_peer", "internal").await;
+    assert!(
+        askable_bot(&db, OWNER, SCOUT, "bot_peer", None)
+            .await
+            .is_ok()
+    );
+    assert!(
+        askable_bot(&db, OWNER, SCOUT, "bot_patch", None)
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn an_ask_between_one_owners_bots_skips_the_server_gate() {
+    let db = org().await;
+    classify(&db, LEDGER, "restricted").await;
+    assert!(askable_bot(&db, OWNER, SCOUT, LEDGER, None).await.is_ok());
+}
+
+async fn person(db: &DatabaseConnection, team_id: &str, user: &str, status: &str) {
+    bot_team_person::ActiveModel {
+        team_id: Set(team_id.into()),
+        user_id: Set(user.into()),
+        role: Set("MEMBER".into()),
+        status: Set(status.into()),
+        invited_by: Set(None),
+        created_at: Set(at(0)),
+        accepted_at: Set(None),
+    }
+    .insert(db)
+    .await
+    .unwrap();
+}
+
+async fn context_allowed(db: &DatabaseConnection, conversation: Option<&str>) -> bool {
+    let team = teams::active_team_of(db, SCOUT).await.unwrap().unwrap();
+    teams::team_context_allowed(db, &team, conversation)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn team_context_needs_every_person_of_the_conversation_in_the_org() {
+    let db = org().await;
+    person(&db, "t_sec", OWNER, "ACTIVE").await;
+    person(&db, "t_fin", "user-b", "ACTIVE").await;
+    person(&db, "t_sec", "user-pending", "PENDING").await;
+    create_conversation(&db, "c_org", "GROUP", "NONE", &[OWNER, "user-b", SCOUT]).await;
+    create_conversation(&db, "c_out", "GROUP", "NONE", &[OWNER, "user-x", SCOUT]).await;
+    create_conversation(
+        &db,
+        "c_pending",
+        "GROUP",
+        "NONE",
+        &[OWNER, "user-pending", SCOUT],
+    )
+    .await;
+
+    assert!(context_allowed(&db, None).await);
+    assert!(context_allowed(&db, Some("c_org")).await);
+    assert!(!context_allowed(&db, Some("c_out")).await);
+    assert!(!context_allowed(&db, Some("c_pending")).await);
+
+    let roster = roster_in(&db, OWNER, SCOUT, Some("c_out"), now_millis())
+        .await
+        .unwrap();
+    assert!(roster.iter().any(|member| member.id == LEDGER));
+    assert!(roster.iter().all(|member| member.id != "bot_patch"));
+    let roster = roster_in(&db, OWNER, SCOUT, Some("c_org"), now_millis())
+        .await
+        .unwrap();
+    assert!(roster.iter().any(|member| member.id == "bot_patch"));
+    assert!(
+        askable_bot(&db, OWNER, SCOUT, "bot_patch", Some("c_out"))
+            .await
+            .is_err()
+    );
+    assert!(
+        askable_bot(&db, OWNER, SCOUT, "bot_patch", Some("c_org"))
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn a_thread_whose_person_left_the_org_loses_team_context() {
+    let db = org().await;
+    person(&db, "t_sec", OWNER, "ACTIVE").await;
+    person(&db, "t_sec", "user-b", "ACTIVE").await;
+    create_conversation(&db, "c_thread", "GROUP", "NONE", &[OWNER, "user-b", SCOUT]).await;
+    assert!(context_allowed(&db, Some("c_thread")).await);
+    db.execute_unprepared(r#"DELETE FROM public."BotTeamPerson" WHERE "userId" = 'user-b'"#)
+        .await
+        .unwrap();
+    assert!(!context_allowed(&db, Some("c_thread")).await);
+}
+
+#[tokio::test]
+async fn a_turn_names_its_conversation_for_the_roster_scope() {
+    let db = org().await;
+    create_conversation(&db, "c_out", "GROUP", "NONE", &[OWNER, "user-x", SCOUT]).await;
+    assert_eq!(
+        turn_conversation(&db, OWNER, SCOUT, "").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        turn_conversation(&db, OWNER, SCOUT, "unknown-run")
+            .await
+            .unwrap(),
+        None
+    );
 }

@@ -147,6 +147,34 @@ export interface IInboxMessageBody {
 	user_context_revoke?: IUserContextRevoke;
 	/** The note a bot reply wrote or changed; the text is only the owner's to read. */
 	note?: IBotNoteRef;
+	/** On a person's room message: how many rounds the bots it wakes may discuss. */
+	discussion?: IInboxDiscussionGrant;
+	/** On a bot's message: a longer discussion it asks a person in the room to allow. */
+	discussion_proposal?: IInboxDiscussionProposal;
+	/** On a bot's message: bot turns that led to it; a person's message has none. */
+	hops?: number;
+	/** On a bot's message in a room: the bot turns its discussion may reach. */
+	discussion_hops?: number;
+	/** On a bot's message: it ended its discussion with another bot. */
+	discussion_outcome?: IInboxDiscussionOutcome;
+}
+
+/** How a discussion between bots ended, in the words of the bot that ended it. */
+export interface IInboxDiscussionOutcome {
+	agreed: boolean;
+	/** One sentence: what they agreed on, or what stays open. */
+	summary: string;
+}
+
+/** Rounds of a discussion between bots, one message from each per round: 1 to 20. */
+export interface IInboxDiscussionGrant {
+	rounds: number;
+}
+
+export interface IInboxDiscussionProposal {
+	rounds: number;
+	/** Why the topic needs them, in the bot's words. */
+	reason: string;
 }
 
 /** One window, or the active tab of a browser window, on the computer whose bot host is `host_id`. */
@@ -226,6 +254,8 @@ export interface IInboxApproval {
 	secret?: IInboxApprovalSecret;
 	/** Set on a `room_invite` card: who the bot wants to bring into the room, and why. */
 	invite?: IInboxApprovalInvite;
+	/** Set on a card that asks to show a picture in a room: the picture, in the bot's workspace. */
+	picture?: IInboxFileHandle;
 	configuration_changes?: Record<string, unknown>;
 	/** A standing grant was set aside because the turn read web pages first. */
 	after_web_content?: boolean;
@@ -244,6 +274,7 @@ export interface IInboxApprovalItem {
 	after_web_content?: boolean;
 	secret?: IInboxApprovalSecret;
 	invite?: IInboxApprovalInvite;
+	picture?: IInboxFileHandle;
 }
 
 /** The exact username or email address the bot was given, and its reason. */
@@ -364,6 +395,12 @@ export interface IConversation {
 	unread_count: number;
 	/** You muted it: messages arrive and count as unread, but send no push. */
 	muted?: boolean;
+	/**
+	 * You sit in it as the owner of a bot that works for someone else (their thread with your
+	 * bot's team, or their chat with your bot): it sends no push unless someone names you, and
+	 * lists apart from your own chats without counting toward your unread badge.
+	 */
+	watching?: boolean;
 	/** When you pinned it to the top of your list; null when it isn't pinned. */
 	pinned_at?: string | null;
 	/** Newest `message` entry in the reader's inbox. */
@@ -543,6 +580,8 @@ export interface IInvitation {
 	bot_name: string | null;
 	invited_by: string | null;
 	invited_at: string | null;
+	/** Why a bot invited you, in its words as its owner approved them. */
+	reason?: string | null;
 	/** `direct` is a message request, `group` a room invitation. */
 	conversation_kind?: ConversationKind;
 	/** A request's messages held for you: how many, and the newest few. */

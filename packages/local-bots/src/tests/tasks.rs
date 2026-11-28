@@ -332,7 +332,9 @@ fn deleting_a_task_or_its_bot_removes_it_and_it_never_fires() {
         .store
         .create_task(&bot.id, once(5), TaskCreator::Owner)
         .unwrap();
-    f.store.delete_bot(&bot.id).unwrap();
+    f.store
+        .delete_bot(&bot.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     let raw: i64 = f
         .raw()
         .query_row(
@@ -400,7 +402,10 @@ fn a_task_scheduled_in_a_group_fires_there_naming_its_bot() {
         .store
         .create_task_in(&bot.id, once(5), TaskCreator::Bot, Some(&group.id))
         .unwrap();
-    let place = task.conversation.clone().expect("the task fires in its group");
+    let place = task
+        .conversation
+        .clone()
+        .expect("the task fires in its group");
     assert_eq!(
         (place.id.as_str(), place.kind, place.title.as_deref()),
         (group.id.as_str(), ConversationKind::Group, Some("Crew"))
@@ -455,11 +460,20 @@ fn a_group_turn_sees_and_changes_only_the_tasks_of_its_group() {
 
     let in_group = f.store.tasks_in_turn(&bot.id, Some(&group.id)).unwrap();
     assert_eq!(
-        in_group.iter().map(|task| task.id.as_str()).collect::<Vec<_>>(),
+        in_group
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>(),
         [shared.id.as_str()]
     );
     let direct = f.direct(&bot);
-    assert_eq!(f.store.tasks_in_turn(&bot.id, Some(&direct.id)).unwrap().len(), 2);
+    assert_eq!(
+        f.store
+            .tasks_in_turn(&bot.id, Some(&direct.id))
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(f.store.tasks_in_turn(&bot.id, None).unwrap().len(), 2);
 
     let rename = || UpdateBotTask {
@@ -478,10 +492,11 @@ fn a_group_turn_sees_and_changes_only_the_tasks_of_its_group() {
         hidden.to_string().replace(&private.id, "X"),
         missing.to_string().replace("task_missing", "X")
     );
-    assert!(f
-        .store
-        .delete_task_in_turn(&bot.id, &private.id, Some(&group.id))
-        .is_err());
+    assert!(
+        f.store
+            .delete_task_in_turn(&bot.id, &private.id, Some(&group.id))
+            .is_err()
+    );
     assert_eq!(f.store.tasks(&bot.id).unwrap().len(), 2);
 
     f.store

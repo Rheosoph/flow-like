@@ -13,6 +13,7 @@ use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like_types::bot::BotCapability;
 use serde_json::{Value, json};
 
+use super::bot_discussion::DiscussionReply;
 use super::bot_notes::NotesHandle;
 use super::bot_reply_files::ReplyFiles;
 use super::bot_trail::ToolTrail;
@@ -117,6 +118,9 @@ fn ask_message(tool: &str, args: &Value) -> String {
         return format!(
             "The bot wants to change its {fields}. Review the proposed values. Approved changes take effect on the next turn."
         );
+    }
+    if let Some(message) = tools::calendar::ask_message(tool, args) {
+        return message;
     }
     if tools::services::POLICY_TOOLS.contains(&tool) {
         return connector_ask_message(tool, args);
@@ -238,6 +242,16 @@ registered_tools!(
     "list_tasks",
     "cancel_task",
     "update_task",
+    "find_place",
+    "watch_place",
+    "list_places",
+    "cancel_place",
+    "calendar_list",
+    "calendar_create",
+    "calendar_update",
+    "calendar_delete",
+    "calendar_free_slots",
+    "calendar_wake_settings",
     "shell_run",
     "browser_open",
     "browser_snapshot",
@@ -397,7 +411,9 @@ pub struct HostTools {
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
     reply_files: Option<ReplyFiles>,
+    discussion: Option<DiscussionReply>,
     conversation_key: Option<String>,
+    compaction_requested: bool,
 }
 
 impl HostTools {
@@ -488,6 +504,18 @@ impl HostTools {
         self.reply_files.as_ref()
     }
 
+    /// Collects the longer discussion a room turn proposes with `discussion_propose` and the
+    /// outcome it ends one with (`discussion_end`); offered only when a host passes it, and that
+    /// host puts both on the stored reply ([`DiscussionReply::attach`]).
+    pub fn with_discussion(mut self, reply: DiscussionReply) -> Self {
+        self.discussion = Some(reply);
+        self
+    }
+
+    pub fn discussion(&self) -> Option<&DiscussionReply> {
+        self.discussion.as_ref()
+    }
+
     /// Names the conversation the turn answers, unique on this host. The conversation's next
     /// turn then starts from this turn's summary of its older messages instead of summarizing
     /// them again. Hosts pass it only when the turn's history is that conversation's own.
@@ -498,6 +526,17 @@ impl HostTools {
 
     pub fn conversation_key(&self) -> Option<&String> {
         self.conversation_key.as_ref()
+    }
+
+    /// The person asked to compact the conversation: before its first request, the turn folds
+    /// the older messages of the conversation [`Self::with_conversation_key`] names.
+    pub fn with_compaction_requested(mut self, requested: bool) -> Self {
+        self.compaction_requested = requested;
+        self
+    }
+
+    pub fn compaction_requested(&self) -> bool {
+        self.compaction_requested
     }
 
     /// The languages `code_run` runs on this host (`ToolEnv::code_languages`). None: the host
@@ -681,6 +720,43 @@ mod tests {
         assert_eq!(
             message(&json!({ "url": "https://www.cisa.gov/feeds/kev.xml?x=1" })),
             "The bot wants to send a GET request to www.cisa.gov/feeds/kev.xml?x=1."
+        );
+    }
+
+    #[test]
+    fn calendar_tools_need_the_calendar_and_writes_ask_with_the_calendar() {
+        for name in [
+            "calendar_list",
+            "calendar_create",
+            "calendar_update",
+            "calendar_delete",
+            "calendar_free_slots",
+            "calendar_wake_settings",
+        ] {
+            assert_eq!(
+                tool_capability(name),
+                Some(BotCapability::Calendar),
+                "{name}"
+            );
+        }
+        assert!(matches!(
+            bot_tool_spec("calendar_list")
+                .expect("calendar_list")
+                .approval,
+            ToolApprovalSpec::None
+        ));
+        let spec = bot_tool_spec("calendar_create").expect("calendar_create");
+        let ToolApprovalSpec::Mutating { message, .. } = spec.approval else {
+            panic!("calendar_create asks under the connector's policy");
+        };
+        assert_eq!(
+            message(&json!({
+                "title": "Dentist",
+                "starts_at": "2026-11-21T10:00:00+01:00",
+                "calendar": "c-google",
+                "connector_label": "Work",
+            })),
+            "The bot wants to add \"Dentist\" starting 2026-11-21T10:00:00+01:00 to your calendar 'Work'."
         );
     }
 

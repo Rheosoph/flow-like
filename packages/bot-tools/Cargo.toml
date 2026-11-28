@@ -45,6 +45,7 @@ mcp = ["dep:rmcp", "dep:reqwest-mcp"]
 async-trait.workspace = true
 blake3.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 flow-like-bot-memory.workspace = true
 flow-like-catalog-code-interpreter = { workspace = true, optional = true }
 flow-like-catalog-data = { workspace = true, optional = true }
@@ -59,6 +60,8 @@ flow-like-types.workspace = true
 pulldown-cmark = "0.13.1"
 reqwest-mcp = { package = "reqwest", version = "0.13.4", default-features = false, features = ["rustls"], optional = true }
 rmcp = { workspace = true, optional = true }
+roxmltree = "0.21"
+rrule = "0.14"
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

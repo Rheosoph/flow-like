@@ -1,3 +1,5 @@
+#![cfg(feature = "execution")]
+
 //! End-to-end integration tests for Rust WASM SDK (Component Model)
 //!
 //! Tests the `#[register_node]` + `impl WasmNode` + `wasm_main!()` pattern

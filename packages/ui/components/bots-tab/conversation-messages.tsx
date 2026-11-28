@@ -3,7 +3,10 @@
 import { useTranslation } from "@flow-like/locales";
 import { ImageIcon, MailIcon, PencilIcon } from "lucide-react";
 import { useMemo } from "react";
-import type { IConversation } from "../../state/backend-state/inbox-state";
+import type {
+	IConversation,
+	IInboxDiscussionGrant,
+} from "../../state/backend-state/inbox-state";
 import { IdentityAvatar } from "../identity/identity-avatar";
 import { IdentityHoverCard } from "../identity/identity-hover-card";
 import { Button } from "../ui/button";
@@ -28,6 +31,8 @@ export interface PendingSend {
 	mentions?: readonly string[];
 	replyTo?: string;
 	files?: readonly File[];
+	/** The longer discussion between bots this message allows. */
+	discussion?: IInboxDiscussionGrant;
 	failed: boolean;
 }
 
@@ -47,6 +52,8 @@ export interface ThreadContext {
 	marks: ThreadMarks;
 	readOnly: boolean;
 	call?: ThreadCall;
+	/** Opens who someone is: a tap on their name or face. */
+	onShowMember?: (principalId: string) => void;
 }
 
 export interface ThreadHistory {
@@ -175,20 +182,40 @@ export function SpeakerLine({
 	block: Extract<ConversationBlock, { type: "group" }>;
 	thread: ThreadContext;
 }>) {
-	const { conversation, directory, text } = thread;
+	const { t } = useTranslation("bots");
+	const { conversation, directory, text, onShowMember } = thread;
 	const first = block.messages[0] as ConversationMessage;
 	const isBotMember = conversation.members.some(
 		(member) => member.principal_id === block.senderId && member.kind === "bot",
 	);
+	const name = directory(block.senderId).name;
 	return (
 		<div className="mb-1 flex min-w-0 items-center gap-2 px-4">
-			<IdentityHoverCard subject={block.senderId} className="shrink-0">
-				<IdentityAvatar subject={block.senderId} size={22} />
-			</IdentityHoverCard>
-			<IdentityHoverCard subject={block.senderId}>
-				<span className="truncate text-[13px] font-semibold">
-					{directory(block.senderId).name}
-				</span>
+			<IdentityHoverCard subject={block.senderId} className="min-w-0">
+				{onShowMember ? (
+					<button
+						type="button"
+						onClick={() => onShowMember(block.senderId)}
+						aria-label={t("crew.memberInfo.label", "About {{name}}", { name })}
+						className="-mx-1 flex min-w-0 touch-manipulation items-center gap-2 rounded-md px-1 py-0.5 outline-none transition-[background-color,transform] duration-100 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97] active:bg-muted"
+					>
+						<IdentityAvatar
+							subject={block.senderId}
+							size={22}
+							className="shrink-0"
+						/>
+						<span className="truncate text-[13px] font-semibold">{name}</span>
+					</button>
+				) : (
+					<span className="flex min-w-0 items-center gap-2">
+						<IdentityAvatar
+							subject={block.senderId}
+							size={22}
+							className="shrink-0"
+						/>
+						<span className="truncate text-[13px] font-semibold">{name}</span>
+					</span>
+				)}
 			</IdentityHoverCard>
 			<BotSenderChip
 				senderId={block.senderId}

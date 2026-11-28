@@ -31,9 +31,16 @@ pub enum BotCapability {
     PushNotifications,
     /// One-time and recurring runs.
     Scheduling,
+    /// Keeps the bot's own calendar, reads and writes the owner's connected Google and Microsoft
+    /// calendars, and wakes the bot before events.
+    Calendar,
+    /// Runs when the owner's phone arrives at or leaves a place the bot watches, and looks up
+    /// addresses with OpenStreetMap.
+    Location,
     /// Files, stored like app storage.
     Storage,
-    /// Tables, stored like app databases.
+    /// Tables, stored like app databases; reads the allowed apps' tables and graphs and adds
+    /// graph nodes and edges to them, each write approved by the owner.
     DataStudio,
     /// Remembers across chats: recall and the memory tools. FlowPilot bots always have it.
     Memory,
@@ -70,7 +77,7 @@ pub enum BotCapability {
 
 impl BotCapability {
     /// Every capability, in the order the settings list them.
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 29] = [
         Self::Internet,
         Self::WebRequests,
         Self::ProfileApps,
@@ -81,6 +88,8 @@ impl BotCapability {
         Self::Email,
         Self::PushNotifications,
         Self::Scheduling,
+        Self::Calendar,
+        Self::Location,
         Self::Storage,
         Self::DataStudio,
         Self::Memory,
@@ -112,6 +121,8 @@ impl BotCapability {
             Self::Email => "email",
             Self::PushNotifications => "push_notifications",
             Self::Scheduling => "scheduling",
+            Self::Calendar => "calendar",
+            Self::Location => "location",
             Self::Storage => "storage",
             Self::DataStudio => "data_studio",
             Self::Memory => "memory",
@@ -305,6 +316,8 @@ mod tests {
                 "email",
                 "push_notifications",
                 "scheduling",
+                "calendar",
+                "location",
                 "storage",
                 "data_studio",
                 "memory",

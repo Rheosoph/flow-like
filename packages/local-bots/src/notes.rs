@@ -26,7 +26,9 @@ fn note_of(row: &Row<'_>) -> rusqlite::Result<(BotNote, String)> {
         state: NoteState::from_stored(&state),
         version: row.get(5)?,
         sensitivity: DataSensitivity {
-            classification: classification.as_deref().and_then(DataClassification::parse),
+            classification: classification
+                .as_deref()
+                .and_then(DataClassification::parse),
             pii: row.get(7)?,
         },
         updated_by: row.get(8)?,
@@ -69,10 +71,7 @@ fn list(db: &Connection, bot_id: &str, conversation_id: &str) -> Result<Vec<BotN
     let notes = rows
         .query_map(params![bot_id, conversation_id], note_of)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(notes
-        .into_iter()
-        .map(|(note, _)| note)
-        .collect())
+    Ok(notes.into_iter().map(|(note, _)| note).collect())
 }
 
 impl LocalBotStore {

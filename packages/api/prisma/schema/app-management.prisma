@@ -189,6 +189,8 @@ model Notification {
 
   @@index([userId, createdAt])
   @@index([userId, read])
+  // The realtime poll's newest read time per user.
+  @@index([userId, readAt])
   @@index([appId, createdAt])
 }
 

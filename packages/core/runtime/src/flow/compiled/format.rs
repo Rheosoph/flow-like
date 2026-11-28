@@ -50,6 +50,16 @@ pub struct CompiledBoard {
     pub pins: Vec<CompiledPin>,
 }
 
+/// The ref list as a lookup table, borrowed. A repeated key keeps its last schema, as
+/// collecting the list into a map always did.
+struct RefTable<'a>(std::collections::HashMap<&'a str, &'a str>);
+
+impl crate::flow::pin::SchemaRefs for RefTable<'_> {
+    fn schema_ref(&self, key: &str) -> Option<&str> {
+        self.0.get(key).copied()
+    }
+}
+
 impl CompiledBoard {
     pub fn required_board_format_version(&self) -> u32 {
         use crate::flow::{board::format, variable::VariableType};
@@ -71,7 +81,12 @@ impl CompiledBoard {
         format::required_version(
             self.board_format_version,
             types,
-            &self.refs.iter().cloned().collect(),
+            &RefTable(
+                self.refs
+                    .iter()
+                    .map(|(key, schema)| (key.as_str(), schema.as_str()))
+                    .collect(),
+            ),
         )
     }
 
@@ -81,7 +96,14 @@ impl CompiledBoard {
     /// call this after decode so a bad artifact falls back to compiling from
     /// source instead of wedging the board in a panic loop.
     pub fn validate(&self) -> flow_like_types::Result<()> {
-        crate::flow::board::format::ensure_supported(self.required_board_format_version())?;
+        self.validated_format_version().map(|_| ())
+    }
+
+    /// [`Self::validate`], returning the document format the board requires, so a caller that
+    /// builds on the board does not infer it from every pin schema a second time.
+    pub(crate) fn validated_format_version(&self) -> flow_like_types::Result<u32> {
+        let required = self.required_board_format_version();
+        crate::flow::board::format::ensure_supported(required)?;
         let pins = self.pins.len() as u32;
         let nodes = self.nodes.len() as u32;
         let layers = self.layers.len() as u32;
@@ -118,7 +140,7 @@ impl CompiledBoard {
                 ));
             }
         }
-        Ok(())
+        Ok(required)
     }
 }
 

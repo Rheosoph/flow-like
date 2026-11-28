@@ -74,7 +74,7 @@ try {
 	};
 
 	// This coordinate overlaps body-portalled builder chrome above the builder's stacking context.
-	await page.mouse.click(400, 680, { clickCount: 2 });
+	await page.mouse.click(400, 680, { count: 2 });
 	await assertBlocked();
 	assert.equal(
 		await focused(),
@@ -177,7 +177,7 @@ try {
 	await page.mouse.down();
 	await page.mouse.move(4, 700, { steps: 12 });
 	await page.mouse.up();
-	await page.mouse.click(4, 30, { clickCount: 2 });
+	await page.mouse.click(4, 30, { count: 2 });
 	await assertBlocked();
 	assert.ok(
 		await page.$('[role="dialog"]'),

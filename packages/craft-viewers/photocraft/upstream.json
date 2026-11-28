@@ -1,8 +1,8 @@
 {
 	"repository": "https://github.com/storytold/photocraft.git",
-	"revision": "2df9f807702a935184041355a86405380bda8274",
-	"version": "0.19.0",
-	"wasmBindgen": "0.2.129",
+	"revision": "32f53c8fbbc7aacdb8f856a1fca024d804d02d50",
+	"version": "0.23.1",
+	"wasmBindgen": "0.2.130",
 	"cargoPackage": "photocraft-web",
 	"label": "Flows Photo",
 	"canvasId": "craft_canvas",

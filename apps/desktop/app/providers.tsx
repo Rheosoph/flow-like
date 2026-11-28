@@ -9,12 +9,14 @@ import {
 	QueryClientProvider,
 } from "@flow-like/flow-like-ui";
 import { AppLocalPrincipals } from "@flow-like/flow-like-ui/components/bots-tab/app-local-principals";
+import { GuideProvider } from "@flow-like/flow-like-ui/components/guide/guide-provider";
 import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
 import { TooltipProvider } from "@flow-like/flow-like-ui/components/ui/tooltip";
 import { GlobalUpgradeDialog } from "@flow-like/flow-like-ui/components/upgrade/upgrade-dialog";
 import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
+import { applyCatalogQueryDefaults } from "@flow-like/flow-like-ui/lib/catalog-query";
 import { purgeLegacyPageSurfaceCache } from "@flow-like/flow-like-ui/lib/page-surface-cache";
 import { isWebkitLite } from "@flow-like/flow-like-ui/lib/platform";
 import {
@@ -45,6 +47,7 @@ import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
 import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
 import { OfflineWritesNotifier } from "../components/offline-writes-notifier";
 import { PendingInviteRedeemer } from "../components/pending-invite-redeemer";
+import RemotePushPrompt from "../components/remote-push-prompt";
 import { RpaPermissionProvider } from "../components/rpa";
 import { RuntimeVariablesProviderComponent } from "../components/runtime-variables-provider";
 import { SpotlightWrapper } from "../components/spotlight-wrapper";
@@ -110,6 +113,7 @@ const queryClient = new QueryClient({
 		},
 	},
 });
+applyCatalogQueryDefaults(queryClient);
 
 function NetworkAwareProvider({ children }: { children: React.ReactNode }) {
 	const isOnline = useNetworkStatus();
@@ -197,6 +201,7 @@ export function Providers({
 														<PendingInviteRedeemer />
 														<DeviceModelUnlockProvider />
 														<NotificationProvider />
+														<RemotePushPrompt />
 														<NativeRealtimeBridge />
 														<LocalBotsBridge />
 														<RuntimeVariablesProviderComponent>
@@ -217,6 +222,7 @@ export function Providers({
 																				<GlobalChatOverlay />
 																				<BotDen />
 																				<GlobalUpgradeDialog />
+																				<GuideProvider />
 																			</AppLocalPrincipals>
 																		</TelemetryProvider>
 																	</SpotlightWrapper>

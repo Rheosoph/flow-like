@@ -204,8 +204,62 @@ async fn a_turn_records_who_woke_it_and_whether_the_conversation_is_shared() {
         );
         let stored = turn_of(&db, trigger).await;
         assert_eq!(stored.requester_id.as_deref(), Some(requester), "{trigger}");
+        assert_eq!(stored.origin_id.as_deref(), Some(requester), "{trigger}");
         assert_eq!(stored.audience, audience, "{trigger}");
     }
+}
+
+/// `bot_2`'s room message that hands `bot_1` the word in a chain `origin` started.
+fn hand_over(trigger: &str, origin: Option<&str>) -> crate::routes::inbox::delivery::BotDelivery {
+    let mut request = room_request("bot_2", trigger, ConversationKind::Group);
+    request.recipients[0].hops = 1;
+    request.hands_over = true;
+    request.chain_origin = origin.map(str::to_string);
+    request
+}
+
+#[tokio::test]
+async fn a_bot_chain_counts_against_the_person_who_started_it_never_the_owner() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    insert_bot(&db, "bot_2", "user-b", "SERVER").await;
+    super::fixture::conversation(
+        &db,
+        "c1",
+        "GROUP",
+        "PLAIN",
+        &["user-a", "user-b", "user-c", "bot_1", "bot_2"],
+    )
+    .await;
+    let now = at(100_000);
+    for index in 0..super::cap::REQUESTER_DAILY_TURNS {
+        let chained = hand_over(&format!("chain-{index}"), Some("user-c"));
+        assert_eq!(enqueue_in(&db, &chained, now).await.unwrap(), 1);
+    }
+    let first = turn_of(&db, "chain-0").await;
+    assert_eq!(first.requester_id.as_deref(), Some("bot_2"));
+    assert_eq!(first.origin_id.as_deref(), Some("user-c"));
+
+    let over = hand_over("chain-over", Some("user-c"));
+    assert_eq!(enqueue_in(&db, &over, now).await.unwrap(), 0);
+    let own = room_request("user-c", "c-asks", ConversationKind::Group);
+    assert_eq!(
+        enqueue_in(&db, &own, now).await.unwrap(),
+        0,
+        "the chain used up the person's own turns"
+    );
+
+    let owners = hand_over("owner-chain", Some("user-a"));
+    assert_eq!(enqueue_in(&db, &owners, now).await.unwrap(), 1);
+    let others = hand_over("d-chain", Some("user-d"));
+    assert_eq!(enqueue_in(&db, &others, now).await.unwrap(), 1);
+    let unknown = hand_over("unknown-chain", None);
+    assert_eq!(enqueue_in(&db, &unknown, now).await.unwrap(), 1);
+    assert_eq!(
+        turn_of(&db, "unknown-chain").await.origin_id.as_deref(),
+        Some("bot_2"),
+        "a chain without a known origin counts for the bot that woke the turn"
+    );
 }
 
 #[tokio::test]
@@ -294,4 +348,62 @@ async fn read_along_and_reaction_turns_do_not_use_up_a_requesters_limit() {
     let named = room_request("user-c", "c-named", ConversationKind::Group);
     assert_eq!(enqueue_in(&db, &named, now).await.unwrap(), 1);
     assert_eq!(turn_of(&db, "c-named").await.unprompted, None);
+}
+
+#[tokio::test]
+async fn everyone_but_the_owner_shares_one_daily_allowance_per_bot() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    crate::entity::bot::Entity::update_many()
+        .col_expr(
+            crate::entity::bot::Column::OthersDailyTurns,
+            sea_orm::sea_query::Expr::value(3),
+        )
+        .filter(crate::entity::bot::Column::Id.eq("bot_1"))
+        .exec(&db)
+        .await
+        .unwrap();
+    super::fixture::conversation(
+        &db,
+        "c1",
+        "GROUP",
+        "PLAIN",
+        &["user-a", "user-c", "user-d", "user-e", "bot_1"],
+    )
+    .await;
+    let now = at(100_000);
+    for (sender, trigger) in [("user-c", "c-1"), ("user-c", "c-2"), ("user-d", "d-1")] {
+        let request = room_request(sender, trigger, ConversationKind::Group);
+        assert_eq!(enqueue_in(&db, &request, now).await.unwrap(), 1);
+    }
+    let over = room_request("user-e", "e-1", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &over, now).await.unwrap(), 0);
+    let notice = crate::entity::inbox_entry::Entity::find()
+        .filter(crate::entity::inbox_entry::Column::MessageId.eq(
+            flow_like_types::bot_turn::rate_limit_message_id("bot_1", "e-1"),
+        ))
+        .filter(crate::entity::inbox_entry::Column::InboxId.eq("user-e"))
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("the room is told");
+    assert!(
+        notice.envelope["body"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("requests from other people"),
+        "{}",
+        notice.envelope
+    );
+    let again = room_request("user-e", "e-2", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &again, now).await.unwrap(), 0);
+    let told = notices(&db, "user-a").await;
+    assert_eq!(told.len(), 1, "the owner hears once a day");
+    assert!(told[0].id.starts_with("botothers_bot_1_"), "{}", told[0].id);
+
+    let owner = room_request("user-a", "a-1", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &owner, now).await.unwrap(), 1);
+    let tomorrow = now + Duration::hours(WINDOW_HOURS + 1);
+    let later = room_request("user-e", "e-3", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &later, tomorrow).await.unwrap(), 1);
 }

@@ -2,8 +2,8 @@ use axum::{
     Router,
     routing::{delete, get, post, put},
 };
+use flow_like_query::{Operation, table::TableOperation};
 use flow_like_storage::contracts::column_metadata::ColumnReader;
-use flow_like_storage::databases::table_summary::{TableSummary, summarize_tables_for};
 use flow_like_storage::databases::vector::schema::{
     ColumnAccessRejected, PrimaryKeyRejected, TableInputRejected,
 };
@@ -14,6 +14,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::{AppPermissionResponse, AppUser},
     permission::role_permission::RolePermissions,
+    query::{self, LanceRead},
     state::AppState,
 };
 
@@ -37,6 +38,7 @@ pub mod list_tables;
 pub mod list_tables_user;
 pub mod optimize;
 pub mod presign_db_access;
+pub mod query_parameters;
 pub mod references;
 pub mod saved_forecasts;
 pub mod saved_queries;
@@ -69,42 +71,22 @@ impl TableListParams {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum TableListResponse {
-    Names(Vec<String>),
-    Summaries(Vec<TableSummary>),
-}
-
-/// Shared body of both list endpoints.
-///
-/// Deliberately uncached. The summary is a live read every time: table contents
-/// move from flow runs, WASM nodes and other API instances, so no invalidation
-/// set could ever be complete, and the in-process response cache cannot be
-/// invalidated across Lambda instances anyway. Sources is a navigate-to page and
-/// React Query already dedupes it per session; if this ever gets slow on a large
-/// project, defer `stats()` — the only expensive call — rather than serving
-/// stale counts.
-pub async fn table_listing(
-    connection: Connection,
-    params: &TableListParams,
-    reader: &ColumnReader,
-) -> Result<TableListResponse, ApiError> {
-    let names: Vec<String> = connection
-        .table_names()
-        .execute()
-        .await?
-        .into_iter()
-        .filter(|name| !flow_like_catalog_core::is_reserved_table(name))
-        .collect();
-
-    if !params.wants_summary() {
-        return Ok(TableListResponse::Names(names));
-    }
-
-    Ok(TableListResponse::Summaries(
-        summarize_tables_for(&connection, names, reader).await,
-    ))
+/// Sends one table read to the query service for the database `scope` names, after the
+/// caller's read check. Answers the JSON the route returns.
+pub(crate) async fn read_table(
+    state: &AppState,
+    user: &AppUser,
+    permission: &AppPermissionResponse,
+    app_id: &str,
+    scope: &ScopeParams,
+    rows: usize,
+    table: TableOperation,
+) -> Result<flow_like_types::Value, ApiError> {
+    let read = LanceRead::scoped(user, permission, app_id, scope)?;
+    let source = state.query.lance_source(state, &read, None).await?;
+    let request = query::request(vec![source], rows, Operation::Table { table });
+    let response = state.query.run(&query::subject(user), &request).await?;
+    query::json_answer(response)
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -286,6 +268,8 @@ pub fn routes() -> Router<AppState> {
             get(saved_queries::list_saved_queries).post(saved_queries::create_saved_query),
         )
         .route("/queries/execute", post(saved_queries::execute_query))
+        .route("/queries/describe", post(query_parameters::describe_query))
+        .route("/queries/options", post(query_parameters::query_options))
         .route("/queries/forecast", post(forecasting::forecast_query))
         .route("/forecasts", saved_forecasts::collection_routes())
         .route(

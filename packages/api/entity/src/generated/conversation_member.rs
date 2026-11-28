@@ -41,6 +41,8 @@ pub struct Model {
     pub invited_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "acceptedAt")]
     pub accepted_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_name = "inviteReason", column_type = "Text", nullable)]
+    pub invite_reason: Option<String>,
     #[sea_orm(column_name = "hiddenAt")]
     pub hidden_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "clearedAt")]
@@ -49,6 +51,10 @@ pub struct Model {
     pub cleared_legacy_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "clearedSeq")]
     pub cleared_seq: Option<i64>,
+    #[sea_orm(column_name = "unreadCount")]
+    pub unread_count: Option<i32>,
+    #[sea_orm(column_name = "lastEntryId", column_type = "Text", nullable)]
+    pub last_entry_id: Option<String>,
     #[sea_orm(
         belongs_to,
         from = "conversation_id",

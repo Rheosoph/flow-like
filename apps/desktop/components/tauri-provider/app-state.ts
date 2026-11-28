@@ -47,8 +47,16 @@ import type {
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import {
+	type IAppShowcase,
+	type IAppShowcaseSettings,
+	emptyShowcase,
+	mergeShowcaseSettings,
+	normalizeShowcase,
+} from "@flow-like/flow-like-ui/lib/schema/app/showcase";
 import type { AppPackage } from "@flow-like/flow-like-ui/lib/schema/wasm";
 import {
+	hasExpiredAssetUrl,
 	mergeMetadataMedia,
 	stabilizeMetadata,
 	stabilizeMetadataEntries,
@@ -92,6 +100,36 @@ function remoteAppEntries(
 	entries: [IApp, IMetadata | undefined][] | undefined,
 ): [IApp, IMetadata | undefined][] {
 	return asArray(entries).filter(isAppEntry);
+}
+
+/**
+ * The native copy of a cloud app holds the artwork signature from the day it
+ * was first cached, long dead. That copy is the interim answer while the remote
+ * sync runs, so every refetch swapped each card's artwork for its placeholder
+ * and back. Media the cache already shows stays until the sync answers, as long
+ * as it is still valid.
+ */
+function withShownMedia(
+	local: [IApp, IMetadata | undefined][],
+	shown: [IApp, IMetadata | undefined][] | undefined,
+): [IApp, IMetadata | undefined][] {
+	const shownMeta = new Map(
+		remoteAppEntries(shown).map(([app, meta]) => [app.id, meta]),
+	);
+	if (shownMeta.size === 0) return local;
+	return local.map((entry) => {
+		const [app, meta] = entry;
+		const known = shownMeta.get(app.id);
+		if (
+			!meta ||
+			!known ||
+			hasExpiredAssetUrl([known.icon, known.thumbnail, known.preview_media])
+		) {
+			return entry;
+		}
+		const merged = mergeMetadataMedia(meta, known);
+		return merged === meta ? entry : [app, merged];
+	});
 }
 
 function expectRemoteApp(app: IApp | undefined, appId: string): IApp {
@@ -786,6 +824,10 @@ export class AppState implements IAppState {
 			}
 		}
 
+		const shownApps = withShownMedia(
+			localApps,
+			this.backend.queryClient.getQueryData([this.getApps.name || "backendFn"]),
+		);
 		const promise = injectDataFunction(
 			syncRemote,
 			this,
@@ -793,11 +835,11 @@ export class AppState implements IAppState {
 			this.getApps,
 			[],
 			[],
-			localApps,
+			shownApps,
 		);
 
 		this.backend.backgroundTaskHandler(promise);
-		return localApps;
+		return shownApps;
 	}
 
 	async getApp(appId: string): Promise<IApp> {
@@ -1328,6 +1370,67 @@ export class AppState implements IAppState {
 			init,
 			this.backend.auth,
 		);
+	}
+
+	async getShowcaseSettings(appId: string): Promise<IAppShowcaseSettings> {
+		if (await this.backend.isOffline(appId)) {
+			throw new Error(
+				"Store page settings are only available for online apps.",
+			);
+		}
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error(
+				"Profile or auth not set. Cannot read store page settings.",
+			);
+		}
+		const response = await fetcher<unknown>(
+			this.backend.profile,
+			`apps/${appId}/settings/showcase`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+		return mergeShowcaseSettings(response);
+	}
+
+	async updateShowcaseSettings(
+		appId: string,
+		settings: IAppShowcaseSettings,
+	): Promise<IAppShowcaseSettings> {
+		if (await this.backend.isOffline(appId)) {
+			throw new Error(
+				"Store page settings are only available for online apps.",
+			);
+		}
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error(
+				"Profile or auth not set. Cannot save store page settings.",
+			);
+		}
+		const response = await fetcher<unknown>(
+			this.backend.profile,
+			`apps/${appId}/settings/showcase`,
+			{ method: "PUT", body: JSON.stringify(settings) },
+			this.backend.auth,
+		);
+		return mergeShowcaseSettings(response, settings);
+	}
+
+	async getShowcase(appId: string): Promise<IAppShowcase> {
+		if (await this.backend.isOffline(appId)) {
+			return emptyShowcase(appId);
+		}
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error(
+				"Profile or auth not set. Cannot read the store page showcase.",
+			);
+		}
+		const response = await fetcher<unknown>(
+			this.backend.profile,
+			`apps/${appId}/showcase`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+		return normalizeShowcase(appId, response);
 	}
 
 	async changeAppAllowForking(appId: string, allow: boolean): Promise<void> {

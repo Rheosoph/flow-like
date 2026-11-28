@@ -17,7 +17,7 @@
 //! ```
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, OnceLock, Weak};
 
 use blake3::Hasher;
@@ -691,13 +691,9 @@ impl PageExecutionRevisionSource {
     /// Derive the existing public revision only for the snapshot that supplied
     /// the inputs. Page bindings are validated on every uncached revision.
     pub fn revision(&self, board: &Arc<Board>, execution: &PrerunPageExecution) -> Result<String> {
-        if !self.matches(board) {
-            return Err(anyhow!(
-                "Page revision source belongs to a different board snapshot"
-            ));
-        }
+        let content_hash = self.content_hash(board)?;
+        let board: &Board = board;
         validate_page_execution(board, execution)?;
-        let content_hash = *self.content_hash.get_or_init(|| board.content_hash());
         Ok(hash_page_execution_revision(
             board,
             execution,
@@ -705,19 +701,171 @@ impl PageExecutionRevisionSource {
             content_hash,
         ))
     }
+
+    /// [`Board::content_hash`] of the snapshot that supplied the inputs, computed once.
+    pub fn content_hash(&self, board: &Arc<Board>) -> Result<u64> {
+        if !self.matches(board) {
+            return Err(anyhow!(
+                "Page revision source belongs to a different board snapshot"
+            ));
+        }
+        Ok(*self.content_hash.get_or_init(|| board.content_hash()))
+    }
 }
 
-fn validate_page_execution(board: &Board, execution: &PrerunPageExecution) -> Result<()> {
-    if !board.page_ids.is_empty()
-        && !board
-            .page_ids
-            .iter()
-            .any(|page_id| page_id == &execution.page_id)
-    {
+/// Bump when a field of [`PageContractFacts`] or the meaning of
+/// [`Board::content_hash`] changes. Readers then load the board instead.
+const PAGE_CONTRACT_FACTS_FORMAT: u32 = 1;
+
+/// What a Page contract needs from its board beyond the board-only prerun
+/// manifest. Persisted beside that manifest, it lets a host extract, validate
+/// and sign a Page contract without loading the board. Derive it only from the
+/// exact board value whose manifest carries `authority_signature`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PageContractFacts {
+    pub board_id: String,
+    pub version: (u32, u32, u32),
+    pub content_hash: u64,
+    pub page_ids: Vec<String>,
+    pub required_format_version: u32,
+    pub authority_signature: String,
+}
+
+#[derive(Serialize)]
+struct PageContractFactsDocument<'a> {
+    format: u32,
+    facts: &'a PageContractFacts,
+}
+
+#[derive(Deserialize)]
+struct OwnedPageContractFactsDocument {
+    format: u32,
+    facts: PageContractFacts,
+}
+
+impl PageContractFacts {
+    /// `authority` is `PrerunManifest::from_board(board)` and `content_hash`
+    /// is `board.content_hash()`, both usually memoized by the caller.
+    pub fn from_board(board: &Board, authority: &PrerunManifest, content_hash: u64) -> Self {
+        Self {
+            board_id: board.id.clone(),
+            version: board.version,
+            content_hash,
+            page_ids: board.page_ids.clone(),
+            required_format_version: board.required_format_version(),
+            authority_signature: authority.signature.clone(),
+        }
+    }
+
+    /// [`PrerunPageExecution::from_page`] of the board these facts describe.
+    pub fn page_execution(
+        &self,
+        authority: &PrerunManifest,
+        page: &Page,
+    ) -> Result<PrerunPageExecution> {
+        extract_page_execution_in(&self.scope(authority)?, page)
+    }
+
+    /// [`PrerunManifest::from_board_and_page`] of the board these facts describe.
+    pub fn page_manifest(&self, authority: &PrerunManifest, page: &Page) -> Result<PrerunManifest> {
+        let mut manifest = authority.clone();
+        manifest.page_events = vec![self.page_execution(authority, page)?];
+        manifest.signature = manifest.compute_signature();
+        Ok(manifest)
+    }
+
+    /// [`page_execution_revision`] of the board these facts describe.
+    pub fn page_execution_revision(
+        &self,
+        authority: &PrerunManifest,
+        execution: &PrerunPageExecution,
+    ) -> Result<String> {
+        let scope = self.scope(authority)?;
+        validate_page_execution(&scope, execution)?;
+        Ok(hash_page_execution_revision(
+            &scope,
+            execution,
+            &authority.signature,
+            self.content_hash,
+        ))
+    }
+
+    fn scope<'a>(&'a self, authority: &'a PrerunManifest) -> Result<PageContractFactsBoard<'a>> {
+        if authority.signature != self.authority_signature || !authority.page_events.is_empty() {
+            return Err(anyhow!(
+                "prerun authority does not match the Page contract facts of board '{}'",
+                self.board_id
+            ));
+        }
+        Ok(PageContractFactsBoard {
+            facts: self,
+            entry_node_ids: authority
+                .entry_node_ids
+                .iter()
+                .map(String::as_str)
+                .collect(),
+        })
+    }
+}
+
+pub fn encode_page_contract_facts(facts: &PageContractFacts) -> Result<Vec<u8>> {
+    Ok(serde_json::to_vec(&PageContractFactsDocument {
+        format: PAGE_CONTRACT_FACTS_FORMAT,
+        facts,
+    })?)
+}
+
+/// Fails on malformed bytes or another format; callers then load the board.
+pub fn decode_page_contract_facts(bytes: &[u8]) -> Result<PageContractFacts> {
+    let document: OwnedPageContractFactsDocument = serde_json::from_slice(bytes)?;
+    if document.format != PAGE_CONTRACT_FACTS_FORMAT {
+        return Err(anyhow!(
+            "Page contract facts format {} is not {PAGE_CONTRACT_FACTS_FORMAT}",
+            document.format
+        ));
+    }
+    Ok(document.facts)
+}
+
+/// The facts stand in for a board they never held, so a missing node and a
+/// node that cannot start a run both read as "not an entry node".
+struct PageContractFactsBoard<'a> {
+    facts: &'a PageContractFacts,
+    entry_node_ids: HashSet<&'a str>,
+}
+
+impl PageContractBoard for PageContractFactsBoard<'_> {
+    fn board_id(&self) -> &str {
+        &self.facts.board_id
+    }
+
+    fn board_version(&self) -> (u32, u32, u32) {
+        self.facts.version
+    }
+
+    fn page_ids(&self) -> &[String] {
+        &self.facts.page_ids
+    }
+
+    fn entry_node(&self, node_id: &str) -> EntryNode {
+        if self.entry_node_ids.contains(node_id) {
+            EntryNode::Entry
+        } else {
+            EntryNode::NotEntry
+        }
+    }
+}
+
+pub(super) fn validate_page_execution(
+    board: &dyn PageContractBoard,
+    execution: &PrerunPageExecution,
+) -> Result<()> {
+    let page_ids = board.page_ids();
+    if !page_ids.is_empty() && !page_ids.iter().any(|page_id| page_id == &execution.page_id) {
         return Err(anyhow!(
             "page '{}' is not listed by board '{}'",
             execution.page_id,
-            board.id
+            board.board_id()
         ));
     }
 
@@ -774,8 +922,8 @@ fn validate_page_execution(board: &Board, execution: &PrerunPageExecution) -> Re
     Ok(())
 }
 
-fn hash_page_execution_revision(
-    board: &Board,
+pub(super) fn hash_page_execution_revision(
+    board: &dyn PageContractBoard,
     execution: &PrerunPageExecution,
     board_manifest_signature: &str,
     board_content_hash: u64,
@@ -783,10 +931,11 @@ fn hash_page_execution_revision(
     let mut h = Hasher::new();
     h.update(b"flow-like/page-execution-revision");
     h.update(&[PAGE_EXECUTION_REVISION_VERSION]);
-    hash_string(&mut h, &board.id);
-    h.update(&board.version.0.to_le_bytes());
-    h.update(&board.version.1.to_le_bytes());
-    h.update(&board.version.2.to_le_bytes());
+    hash_string(&mut h, board.board_id());
+    let version = board.board_version();
+    h.update(&version.0.to_le_bytes());
+    h.update(&version.1.to_le_bytes());
+    h.update(&version.2.to_le_bytes());
     h.update(&board_content_hash.to_le_bytes());
     hash_string(&mut h, board_manifest_signature);
     hash_page_execution(&mut h, execution);
@@ -1009,14 +1158,21 @@ impl ComponentActionScope<'_> {
 /// Extract and validate all static execution bindings from one Page payload.
 /// The caller must pass the exact board version that owns the Page.
 pub fn extract_page_execution(board: &Board, page: &Page) -> Result<PrerunPageExecution> {
+    extract_page_execution_in(board, page)
+}
+
+fn extract_page_execution_in(
+    board: &dyn PageContractBoard,
+    page: &Page,
+) -> Result<PrerunPageExecution> {
     if let Some(page_board_id) = page.board_id.as_deref()
-        && page_board_id != board.id
+        && page_board_id != board.board_id()
     {
         return Err(anyhow!(
             "page '{}' belongs to board '{}', not '{}'",
             page.id,
             page_board_id,
-            board.id
+            board.board_id()
         ));
     }
 
@@ -1937,7 +2093,7 @@ fn decorate_workflow_binding(
 }
 
 fn optional_special_target(
-    board: &Board,
+    board: &dyn PageContractBoard,
     page: &Page,
     kind: &str,
     node_id: Option<&str>,
@@ -1957,7 +2113,7 @@ fn optional_special_target(
 }
 
 fn extract_component_actions(
-    board: &Board,
+    board: &dyn PageContractBoard,
     page_id: &str,
     component: &Value,
     scope: ComponentActionScope<'_>,
@@ -2053,7 +2209,7 @@ impl PageWidgetInstanceScope {
 }
 
 fn extract_widget_bindings(
-    board: &Board,
+    board: &dyn PageContractBoard,
     page: &Page,
     host_component_id: &str,
     host_component: &Value,
@@ -2194,7 +2350,7 @@ fn extract_widget_bindings(
 }
 
 fn extract_widget_children(
-    board: &Board,
+    board: &dyn PageContractBoard,
     page: &Page,
     instance_id: &str,
     children: &[SurfaceComponent],
@@ -2233,7 +2389,7 @@ fn extract_widget_children(
 }
 
 fn extract_inline_widget_children(
-    board: &Board,
+    board: &dyn PageContractBoard,
     page: &Page,
     instance_id: &str,
     children: &[Value],
@@ -2281,7 +2437,7 @@ fn extract_inline_widget_children(
 }
 
 fn extract_nested_component(
-    board: &Board,
+    board: &dyn PageContractBoard,
     page: &Page,
     component_id: &str,
     component: &Value,
@@ -2324,7 +2480,7 @@ fn extract_nested_component(
 }
 
 fn extract_micro_widget_bindings(
-    board: &Board,
+    board: &dyn PageContractBoard,
     page: &Page,
     host_component_id: &str,
     host_component: &Value,
@@ -2629,7 +2785,7 @@ fn bound_string(value: &Value) -> Option<&str> {
 }
 
 fn push_action(
-    board: &Board,
+    board: &dyn PageContractBoard,
     page_id: &str,
     node_id: &str,
     locator: PrerunPageActionLocator,
@@ -2652,31 +2808,70 @@ fn push_action(
     Ok(())
 }
 
-fn validate_entry_node(board: &Board, page_id: &str, source: &str, node_id: &str) -> Result<()> {
-    let node = board.nodes.get(node_id).or_else(|| {
-        board
-            .layers
-            .values()
-            .find_map(|layer| layer.nodes.get(node_id))
-    });
-    let Some(node) = node else {
-        return Err(anyhow!(
+/// What a Page contract reads from its board: identity, the Pages it lists and
+/// which nodes may start a run.
+pub(super) trait PageContractBoard {
+    fn board_id(&self) -> &str;
+    fn board_version(&self) -> (u32, u32, u32);
+    fn page_ids(&self) -> &[String];
+    fn entry_node(&self, node_id: &str) -> EntryNode;
+}
+
+pub(super) enum EntryNode {
+    Entry,
+    NotEntry,
+    Missing,
+}
+
+impl PageContractBoard for Board {
+    fn board_id(&self) -> &str {
+        &self.id
+    }
+
+    fn board_version(&self) -> (u32, u32, u32) {
+        self.version
+    }
+
+    fn page_ids(&self) -> &[String] {
+        &self.page_ids
+    }
+
+    fn entry_node(&self, node_id: &str) -> EntryNode {
+        let node = self.nodes.get(node_id).or_else(|| {
+            self.layers
+                .values()
+                .find_map(|layer| layer.nodes.get(node_id))
+        });
+        match node {
+            None => EntryNode::Missing,
+            Some(node) if node.start == Some(true) => EntryNode::Entry,
+            Some(_) => EntryNode::NotEntry,
+        }
+    }
+}
+
+fn validate_entry_node(
+    board: &dyn PageContractBoard,
+    page_id: &str,
+    source: &str,
+    node_id: &str,
+) -> Result<()> {
+    match board.entry_node(node_id) {
+        EntryNode::Entry => Ok(()),
+        EntryNode::Missing => Err(anyhow!(
             "page '{}' {} targets missing node '{}' on board '{}'",
             page_id,
             source,
             node_id,
-            board.id
-        ));
-    };
-    if node.start != Some(true) {
-        return Err(anyhow!(
+            board.board_id()
+        )),
+        EntryNode::NotEntry => Err(anyhow!(
             "page '{}' {} targets node '{}' which is not an entry node",
             page_id,
             source,
             node_id
-        ));
+        )),
     }
-    Ok(())
 }
 
 /// Per-node facts accumulated over the board walk. Maps are ordered so the
@@ -2826,11 +3021,30 @@ pub fn version_page_manifest_path(
     ))
 }
 
+/// [`PageContractFacts`] of an immutable board version, beside its manifest.
+pub fn version_page_contract_facts_path(
+    board_dir: &Path,
+    board_id: &str,
+    version: (u32, u32, u32),
+) -> Path {
+    super::version_artifact_dir(board_dir, board_id).join(format!(
+        "{}_{}_{}.v{MANIFEST_FORMAT_VERSION}.page-facts",
+        version.0, version.1, version.2
+    ))
+}
+
 /// Prerun manifest of a floating draft, beside its compiled artifact and keyed
 /// by the same `.board` etag.
 pub fn draft_manifest_path(app_id: &str, board_id: &str, e_tag: &str) -> Path {
     super::draft_artifact_dir(app_id, board_id)
         .join(format!("{}.prerun", super::draft_artifact_stem(e_tag)))
+}
+
+/// [`PageContractFacts`] of a floating draft, keyed by the same `.board` etag
+/// as its manifest.
+pub fn draft_page_contract_facts_path(app_id: &str, board_id: &str, e_tag: &str) -> Path {
+    super::draft_artifact_dir(app_id, board_id)
+        .join(format!("{}.page-facts", super::draft_artifact_stem(e_tag)))
 }
 
 /// Page-aware prerun manifest for a floating draft. The Board ETag and
@@ -3832,6 +4046,129 @@ mod tests {
         assert_eq!(
             refreshed.revision(&board, &execution).unwrap(),
             page_execution_revision(&board, &execution).unwrap()
+        );
+    }
+
+    fn facts_board() -> Board {
+        let mut board = page_board();
+        let mut plain = Node::new("events_simple", "plain", "", "Events");
+        plain.id = "plain".into();
+        board.nodes.insert(plain.id.clone(), plain);
+        let mut layer = Layer::new("layer-1".into(), "Layer".into(), LayerType::Function);
+        let mut layer_entry = Node::new("events_simple", "layer-entry", "", "Events");
+        layer_entry.id = "layer-entry".into();
+        layer_entry.set_start(true);
+        layer.nodes.insert(layer_entry.id.clone(), layer_entry);
+        board.layers.insert(layer.id.clone(), layer);
+        board.version = (1, 4, 2);
+        board
+    }
+
+    fn facts_page() -> Page {
+        let mut page = configured_page();
+        page.on_unload_event_id = Some("plain".into());
+        page.components.push(SurfaceComponent::new(
+            "layer-button",
+            json!({
+                "type": "button",
+                "eventHandlers": {
+                    "click": [
+                        { "name": "workflow_event", "context": { "nodeId": "layer-entry" } },
+                        { "name": "workflow_event", "context": { "nodeId": "plain" } }
+                    ]
+                }
+            }),
+        ));
+        page
+    }
+
+    #[test]
+    fn page_contract_facts_reproduce_the_board_contract() {
+        let board = facts_board();
+        let authority = PrerunManifest::from_board(&board);
+        let facts = PageContractFacts::from_board(&board, &authority, board.content_hash());
+
+        for page in [configured_page(), nested_widget_page(), facts_page()] {
+            let execution = PrerunPageExecution::from_page(&board, &page).unwrap();
+            assert_eq!(facts.page_execution(&authority, &page).unwrap(), execution);
+            assert_eq!(
+                facts.page_manifest(&authority, &page).unwrap(),
+                PrerunManifest::from_board_and_page(&board, &page).unwrap()
+            );
+            assert_eq!(
+                facts
+                    .page_execution_revision(&authority, &execution)
+                    .unwrap(),
+                page_execution_revision(&board, &execution).unwrap()
+            );
+        }
+
+        let execution = PrerunPageExecution::from_page(&board, &facts_page()).unwrap();
+        assert!(
+            execution.special_events.unload.is_none(),
+            "a hook on a node that cannot start a run is dropped by both"
+        );
+        let mut noncanonical = execution.clone();
+        noncanonical.action_events[0].node_id = "load".into();
+        let mut foreign = execution.clone();
+        foreign.page_id = "foreign-page".into();
+        let mut not_entry = execution.clone();
+        not_entry.special_events.load = Some(PrerunPageEventTarget {
+            node_id: "plain".into(),
+        });
+        let mut missing = execution.clone();
+        missing.special_events.load = Some(PrerunPageEventTarget {
+            node_id: "nowhere".into(),
+        });
+        for invalid in [noncanonical, foreign, not_entry, missing] {
+            assert!(page_execution_revision(&board, &invalid).is_err());
+            assert!(facts.page_execution_revision(&authority, &invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn page_contract_facts_refuse_an_authority_they_were_not_derived_with() {
+        let board = facts_board();
+        let authority = PrerunManifest::from_board(&board);
+        let facts = PageContractFacts::from_board(&board, &authority, board.content_hash());
+        let page = configured_page();
+
+        let mut widened = authority.clone();
+        widened.entry_node_ids.push("plain".into());
+        widened.signature = widened.compute_signature();
+        assert!(facts.page_execution(&widened, &page).is_err());
+
+        let page_bound = PrerunManifest::from_board_and_page(&board, &page).unwrap();
+        assert!(facts.page_manifest(&page_bound, &page).is_err());
+        let execution = PrerunPageExecution::from_page(&board, &page).unwrap();
+        assert!(
+            facts
+                .page_execution_revision(&page_bound, &execution)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn page_contract_facts_round_trip_and_reject_other_formats() {
+        let board = facts_board();
+        let authority = PrerunManifest::from_board(&board);
+        let facts = PageContractFacts::from_board(&board, &authority, u64::MAX);
+        let bytes = encode_page_contract_facts(&facts).unwrap();
+        assert_eq!(decode_page_contract_facts(&bytes).unwrap(), facts);
+
+        let mut document: Value = serde_json::from_slice(&bytes).unwrap();
+        document["format"] = json!(PAGE_CONTRACT_FACTS_FORMAT + 1);
+        assert!(decode_page_contract_facts(&serde_json::to_vec(&document).unwrap()).is_err());
+        assert!(decode_page_contract_facts(b"not json").is_err());
+
+        assert_ne!(
+            draft_page_contract_facts_path("app", "board", "\"etag\""),
+            draft_manifest_path("app", "board", "\"etag\"")
+        );
+        let board_dir = Path::from("apps").join("app");
+        assert_ne!(
+            version_page_contract_facts_path(&board_dir, "board", (1, 2, 3)),
+            manifest_path(&board_dir, "board", (1, 2, 3))
         );
     }
 

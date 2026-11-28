@@ -72,6 +72,17 @@ pub fn start() {
             cadcraft_io::plotter::plot(doc, space, opts).map_err(|e| e.to_string())
         }),
     });
+    cadcraft_engine::cmd::file::set_image_decoder(|bytes| cadcraft_io::raster::decode(bytes).map_err(|e| e.to_string()));
+    cadcraft_engine::cmd::file::set_write_as(|doc, name, options| {
+        cadcraft_io::write_with(doc, name, &cadcraft_io::SaveOptions { version: options.version, binary: options.binary }).map_err(|e| e.to_string())
+    });
+    cadcraft_engine::cmd::file::set_entity_codec(cadcraft_engine::cmd::file::EntityCodec {
+        groups: cadcraft_io::entity_groups,
+        entity: cadcraft_io::entity_from_groups,
+    });
+    cadcraft_engine::cmd::file::set_object_records(cadcraft_io::object_records);
+    cadcraft_engine::cmd::file::set_proxies_lost(cadcraft_io::proxies_lost);
+    cadcraft_engine::cmd::file::set_dwg_compat_lost(cadcraft_io::dwg_compat_lost);
     wasm_bindgen_futures::spawn_local(async {
         match start_app().await {
             Ok(()) => event("ready", json!({})),
@@ -96,7 +107,7 @@ async fn start_app() -> Result<(), String> {
                 CONTEXT.with(|ctx| *ctx.borrow_mut() = Some(cc.egui_ctx.clone()));
                 let mut session = Session::empty();
                 session.host_command = Some(host_command);
-                let mut app = CadApp::new(session, Services::default());
+                let mut app = CadApp::new(session, Services { no_file_system: true, ..Services::default() });
                 if let Some(rs) = &cc.wgpu_render_state {
                     app.set_wgpu(rs, None);
                 }

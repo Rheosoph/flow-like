@@ -20,6 +20,24 @@ const config = {
 const fetchMock = vi.fn<typeof fetch>();
 let loader: typeof import("./oidc-configuration");
 
+function memoryStorage(): Storage {
+	const items = new Map<string, string>();
+	return {
+		get length() {
+			return items.size;
+		},
+		clear: () => items.clear(),
+		getItem: (key) => items.get(key) ?? null,
+		key: (index) => [...items.keys()][index] ?? null,
+		removeItem: (key) => {
+			items.delete(key);
+		},
+		setItem: (key, value) => {
+			items.set(key, String(value));
+		},
+	};
+}
+
 beforeEach(async () => {
 	vi.resetModules();
 	harness.apiUrl = "https://api.test";
@@ -27,6 +45,7 @@ beforeEach(async () => {
 	vi.stubEnv("NEXT_PUBLIC_API_URL", undefined);
 	vi.stubEnv("NEXT_PUBLIC_FLOW_LIKE_RUNTIME_CONFIG", "0");
 	vi.stubGlobal("fetch", fetchMock);
+	vi.stubGlobal("localStorage", memoryStorage());
 	fetchMock.mockReset();
 	loader = await import("./oidc-configuration");
 });
@@ -161,5 +180,28 @@ describe("public OIDC startup configuration", () => {
 			"Missing runtime config",
 		);
 		expect(fetchMock).not.toHaveBeenCalled();
+		expect(loader.storedWebOidcConfiguration()).toBeUndefined();
+	});
+
+	it("stores a received configuration for the next start of the same API only", async () => {
+		localStorage.clear();
+		expect(loader.storedWebOidcConfiguration()).toBeUndefined();
+		fetchMock.mockResolvedValueOnce(Response.json(config));
+		await loader.loadWebOidcConfiguration();
+		expect(loader.storedWebOidcConfiguration()).toEqual(config);
+
+		harness.apiUrl = "https://other-api.test";
+		expect(loader.storedWebOidcConfiguration()).toBeUndefined();
+	});
+
+	it("keeps the stored configuration when a request fails", async () => {
+		localStorage.clear();
+		fetchMock.mockResolvedValueOnce(Response.json(config));
+		await loader.loadWebOidcConfiguration();
+		fetchMock.mockResolvedValueOnce(
+			new Response("Unavailable", { status: 503 }),
+		);
+		expect(await loader.loadWebOidcConfiguration()).toBeUndefined();
+		expect(loader.storedWebOidcConfiguration()).toEqual(config);
 	});
 });

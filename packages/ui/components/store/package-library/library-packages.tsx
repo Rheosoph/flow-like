@@ -17,7 +17,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import Link from "next/link";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSearch } from "../../../hooks/use-search-index";
 import { hasElevatedAccess } from "../../../lib/app-package-overview";
@@ -88,6 +88,7 @@ import {
 	libraryUpdateCheck,
 } from "./library-model";
 import {
+	type LibraryAction,
 	type LibraryAuth,
 	type LibraryPackagesState,
 	useLibraryPackages,
@@ -125,12 +126,12 @@ const KEEPS_ACCESS: ReadonlySet<LibraryAccess> = new Set([
 
 const STATE_TONE: Record<LibraryState, HubTone> = {
 	not_installed: {
-		text: "text-violet-600 dark:text-violet-400",
-		dot: "bg-violet-500",
+		text: "text-tab-purple",
+		dot: "bg-tab-purple",
 	},
 	ready: {
-		text: "text-emerald-600 dark:text-emerald-400",
-		dot: "bg-emerald-500",
+		text: "text-good",
+		dot: "bg-good-solid",
 	},
 	update: { text: "text-primary", dot: "bg-primary" },
 	problem: { text: "text-destructive", dot: "bg-destructive" },
@@ -273,6 +274,27 @@ function StatePill({ state }: { state: LibraryState }) {
 	return <HubStatePill label={labels.state[state]} tone={STATE_TONE[state]} />;
 }
 
+const WORKING_TONE: HubTone = {
+	text: "text-muted-foreground",
+	dot: "bg-muted-foreground animate-pulse",
+};
+
+/** While a download, compile or uninstall runs, the card says so instead of its settled state. */
+function useWorkingLabel(
+	action: LibraryAction | undefined,
+	status: string | undefined,
+): string | undefined {
+	const { t } = useTranslation();
+	if (action === "uninstall")
+		return t("libraryWorkingUninstalling", "Uninstalling…");
+	if (status === "compiling") return t("libraryWorkingCompiling", "Compiling…");
+	if (status === "downloading" || action)
+		return action === "update"
+			? t("libraryWorkingUpdating", "Updating…")
+			: t("libraryWorkingInstalling", "Installing…");
+	return undefined;
+}
+
 function useMachineStat(
 	entry: LibraryEntry,
 	status: CompileStatus | undefined,
@@ -283,7 +305,7 @@ function useMachineStat(
 	if (status === "downloading" || status === "compiling")
 		return {
 			label: t("compiling", "Compiling"),
-			className: "text-sky-600 dark:text-sky-400",
+			className: "text-info",
 		};
 	if (entry.installed)
 		return { label: t("ready", "Ready"), className: STATE_TONE.ready.text };
@@ -664,6 +686,58 @@ function NewPermissionList({ tags }: { tags: readonly string[] }) {
 	);
 }
 
+function UninstallDialog({
+	entry,
+	open,
+	onOpenChange,
+	onConfirm,
+}: Readonly<{
+	entry: LibraryEntry;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	onConfirm: () => void;
+}>) {
+	const { t } = useTranslation();
+	return (
+		<AlertDialog open={open} onOpenChange={onOpenChange}>
+			<AlertDialogContent>
+				<AlertDialogHeader>
+					<AlertDialogTitle>
+						{t("libraryUninstallTitle", "Uninstall {{name}}?", {
+							name: entry.name,
+						})}
+					</AlertDialogTitle>
+					<AlertDialogDescription>
+						{entry.access === "local"
+							? t(
+									"libraryUninstallLocalDescription",
+									"This copy was loaded from a .wasm file. To use it again you load that file again.",
+								)
+							: KEEPS_ACCESS.has(entry.access)
+								? t(
+										"libraryUninstallKeepsAccessDescription",
+										"The package is removed from this device. You keep your access and can install it again any time.",
+									)
+								: t(
+										"libraryUninstallDescription",
+										"The package is removed from this device. Boards on this device that use its nodes need it installed again.",
+									)}
+					</AlertDialogDescription>
+				</AlertDialogHeader>
+				<AlertDialogFooter>
+					<AlertDialogCancel>{t("cancel", "Cancel")}</AlertDialogCancel>
+					<AlertDialogAction
+						className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+						onClick={onConfirm}
+					>
+						{t("uninstall", "Uninstall")}
+					</AlertDialogAction>
+				</AlertDialogFooter>
+			</AlertDialogContent>
+		</AlertDialog>
+	);
+}
+
 function UpdateReviewDialog({
 	entry,
 	check,
@@ -741,6 +815,7 @@ function LibraryPackageCard({
 	machine?: LibraryMachine;
 }) {
 	const [reviewOpen, setReviewOpen] = useState(false);
+	const [uninstallOpen, setUninstallOpen] = useState(false);
 	const local = useLoadLocal(library, machine);
 	const onMachine = Boolean(machine);
 	const status = machine?.getPackageStatus?.(entry.id);
@@ -748,6 +823,7 @@ function LibraryPackageCard({
 		library.pending.has(entry.id) ||
 		status === "downloading" ||
 		status === "compiling";
+	const workingLabel = useWorkingLabel(library.pending.get(entry.id), status);
 	const summary = useMemo(() => librarySummary(entry), [entry]);
 	const check = useMemo(
 		() => libraryUpdateCheck(entry, library.summariesPending),
@@ -778,18 +854,33 @@ function LibraryPackageCard({
 					entry.access === "local" ? undefined : libraryStoreHref(entry.id)
 				}
 				versionLabel={versionLabel}
-				overlay={onMachine ? <StatePill state={entry.state} /> : undefined}
+				overlay={
+					onMachine ? (
+						workingLabel ? (
+							<HubStatePill label={workingLabel} tone={WORKING_TONE} />
+						) : (
+							<StatePill state={entry.state} />
+						)
+					) : undefined
+				}
 				className={cn(
 					onMachine &&
 						entry.state === "not_installed" &&
-						"border-dashed border-violet-500/50",
+						"border-dashed border-tab-purple/50",
 				)}
 				footer={
 					<LibraryFooter entry={entry} machine={onMachine} status={status} />
 				}
 				actions={
 					<>
-						{onMachine && <MachineCaption entry={entry} check={check} />}
+						{onMachine &&
+							(workingLabel ? (
+								<p className="mb-2 flex h-5 min-w-0 items-center truncate text-xs text-muted-foreground">
+									{workingLabel}
+								</p>
+							) : (
+								<MachineCaption entry={entry} check={check} />
+							))}
 						<div className="flex min-w-0 items-center gap-1.5">
 							<PrimaryAction
 								entry={entry}
@@ -805,11 +896,17 @@ function LibraryPackageCard({
 								machine={onMachine}
 								busy={busy}
 								onInstall={install}
-								onUninstall={() => library.uninstall(entry.id)}
+								onUninstall={() => setUninstallOpen(true)}
 							/>
 						</div>
 					</>
 				}
+			/>
+			<UninstallDialog
+				entry={entry}
+				open={uninstallOpen}
+				onOpenChange={setUninstallOpen}
+				onConfirm={() => library.uninstall(entry.id)}
 			/>
 			{review && (
 				<UpdateReviewDialog
@@ -861,6 +958,60 @@ function EmptyLibrary() {
 					{t("explorePackages", "Explore packages")}
 					<ArrowRight />
 				</Link>
+			</Button>
+		</div>
+	);
+}
+
+/**
+ * Loads the next library page when the end of the grid scrolls into view, and
+ * offers the same as a button. Search and filters run over the loaded pages, so
+ * a short filtered grid keeps the sentinel visible and keeps loading.
+ */
+function LibraryPager({
+	library,
+}: Readonly<{ library: LibraryPackagesState }>) {
+	const { t } = useTranslation();
+	const sentinel = useRef<HTMLDivElement>(null);
+	const { hasMore, loadingMore, loadMoreFailed, loadMore } = library;
+
+	useEffect(() => {
+		const node = sentinel.current;
+		if (!node || !hasMore || loadMoreFailed) return;
+		if (typeof IntersectionObserver === "undefined") return;
+		const observer = new IntersectionObserver(
+			(observed) => {
+				if (observed.some((entry) => entry.isIntersecting)) loadMore();
+			},
+			{ rootMargin: "400px" },
+		);
+		observer.observe(node);
+		return () => observer.disconnect();
+	}, [hasMore, loadMoreFailed, loadMore]);
+
+	if (!hasMore) return null;
+	return (
+		<div
+			ref={sentinel}
+			data-library-pager
+			className="flex flex-col items-center gap-2 py-2 text-sm text-muted-foreground"
+		>
+			<span>
+				{t("libraryLoadedOfTotal", "{{loaded}} of {{total}} loaded", {
+					loaded: library.libraryLoaded.toLocaleString(),
+					total: library.libraryTotal.toLocaleString(),
+				})}
+			</span>
+			<Button
+				variant="outline"
+				size="sm"
+				disabled={loadingMore}
+				onClick={loadMore}
+			>
+				{loadingMore && <Loader2 className="size-4 animate-spin" />}
+				{loadMoreFailed
+					? t("libraryLoadMoreRetry", "Couldn't load more — try again")
+					: t("libraryLoadMore", "Load more")}
 			</Button>
 		</div>
 	);
@@ -992,16 +1143,18 @@ export function LibraryPackages({
 				) : isEmpty ? (
 					<EmptyLibrary />
 				) : !hasList ? null : results.length === 0 ? (
-					<HubNoMatches
-						text={t(
-							"nothingInYourLibraryMatchesTheseFilters",
-							"Nothing in your library matches these filters.",
-						)}
-						onShowAll={() => {
-							setFilter(ALL_FILTER);
-							setQuery("");
-						}}
-					/>
+					library.hasMore ? null : (
+						<HubNoMatches
+							text={t(
+								"nothingInYourLibraryMatchesTheseFilters",
+								"Nothing in your library matches these filters.",
+							)}
+							onShowAll={() => {
+								setFilter(ALL_FILTER);
+								setQuery("");
+							}}
+						/>
+					)
 				) : (
 					<div className={PACKAGE_GRID_CLASS_NAME}>
 						{results.map((entry) => (
@@ -1014,6 +1167,7 @@ export function LibraryPackages({
 						))}
 					</div>
 				)}
+				{hasList && <LibraryPager library={library} />}
 			</section>
 		</PackagesHubLayout>
 	);

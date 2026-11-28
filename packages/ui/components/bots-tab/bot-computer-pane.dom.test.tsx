@@ -419,14 +419,12 @@ describe("the pane", () => {
 			);
 		});
 		await act(async () => {
-			container
-				.querySelector("form")
-				?.dispatchEvent(
-					new window.Event("submit", {
-						bubbles: true,
-						cancelable: true,
-					}) as never,
-				);
+			container.querySelector("form")?.dispatchEvent(
+				new window.Event("submit", {
+					bubbles: true,
+					cancelable: true,
+				}) as never,
+			);
 		});
 		expect(pairScreen).toHaveBeenCalledWith("b1", "flowlike://pair-screen?v=1");
 		await hide();

@@ -1,6 +1,7 @@
 import type { SurfaceComponent } from "../../components/a2ui/types";
 import type { IElementDemand } from "../../lib/schema/flow/element-demand";
 import type { IEvent } from "../../lib/schema/flow/event";
+import type { IPrerunEventResponse } from "./types";
 import type { Version } from "./widget-state";
 
 export type PageLayoutType =
@@ -164,6 +165,11 @@ export interface IPageBootstrap {
 	 * sealed page-execution claims in their capability — so no variant header is sent.
 	 */
 	readonly servedVariant?: string | null;
+	/**
+	 * The prerun answer for this page's onLoad at `executionRevision`, so the onLoad starts
+	 * without its own prerun round trip. Absent when the page has no onLoad.
+	 */
+	readonly onLoadPrerun?: IPrerunEventResponse | null;
 }
 
 export interface IPageState {

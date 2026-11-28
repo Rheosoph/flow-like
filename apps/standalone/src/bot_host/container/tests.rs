@@ -25,6 +25,7 @@ fn turn(id: &str, bot: &str) -> BotTurn {
         reply_message_id: None,
         error_code: None,
         hops: 0,
+        discussion_hops: None,
         owner_id: "owner".into(),
         requester_id: None,
         requester_name: None,
@@ -368,12 +369,13 @@ async fn a_batched_claim_tracks_the_actual_turn() {
 #[tokio::test]
 async fn a_child_poll_sees_only_its_bot_and_cannot_remove_other_hosts() {
     let (host, api, _state, _rx) = fixture(false);
-    let mut other = lock(&host.bots).get("bot").unwrap().clone();
+    let bot = lock(&host.bots).get("bot").unwrap().clone();
+    let mut other = bot.clone();
     other.id = "other".into();
     *host.poll.lock().await = Some(Snapshot {
         at: Instant::now(),
         response: DevicePollResponse {
-            bots: vec![lock(&host.bots).get("bot").unwrap().clone(), other],
+            bots: vec![bot, other],
             turns: vec![turn("turn", "bot"), turn("other-turn", "other")],
             next_poll_ms: 2_000,
         },

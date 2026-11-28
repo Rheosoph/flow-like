@@ -2,6 +2,7 @@
 mod live_mcp;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde_json::json;
 use wasm_bindgen::prelude::*;
@@ -69,9 +70,43 @@ async fn start_app() -> Result<(), String> {
                 let region = wordcraft_ui_egui::i18n::system_region();
                 let mut session = Session::new(wordcraft_engine::blank_document(&region));
                 session.author = "Flows Word User".into();
-                let inbox = wordcraft_ui_egui::Inbox::default();
-                let open_inbox = inbox.clone();
                 let ctx = cc.egui_ctx.clone();
+                let frame_ctx = ctx.clone();
+                let copy_ctx = ctx.clone();
+                let clipboard = craft::platform::clipboard::EventClipboard::new(
+                    move || frame_ctx.cumulative_frame_nr(),
+                    move |flavors| {
+                        let (index, text) = flavors
+                            .iter()
+                            .enumerate()
+                            .find(|(_, flavor)| flavor.mime == craft::platform::clipboard::TEXT)
+                            .ok_or(craft::platform::clipboard::ClipboardError::NoFormat)?;
+                        copy_ctx.copy_text(String::from_utf8_lossy(&text.data).into_owned());
+                        Ok(index)
+                    },
+                );
+                let wake_ctx = ctx.clone();
+                let spec = craft::ui::InstallSpec::new(
+                    craft::host::target::ShellInfo::current(),
+                    Arc::new(craft::window::system::NoWindows),
+                )
+                .app_id("wordcraft")
+                .system(craft::platform::appearance::SystemReader::start(
+                    move || wake_ctx.request_repaint(),
+                ))
+                .clipboard(craft::platform::clipboard::Clipboard::new(clipboard));
+                let lang = wordcraft_ui_egui::i18n::Lang::from_pref("auto");
+                craft::ui::shell::embed::install(&ctx, spec, &wordcraft_ui_egui::ui_fonts(lang))
+                    .map_err(|error| format!("The document runtime could not start: {error}"))?;
+                let wake_ctx = ctx.clone();
+                let files = craft::platform::browser_files::BrowserFiles::new(move || {
+                    wake_ctx.request_repaint()
+                });
+                let framework_host = craft::host::Host::builder(wordcraft_ui_egui::APP)
+                    .i18n(wordcraft_ui_egui::i18n::catalogs())
+                    .files(Arc::new(files))
+                    .lang(lang.craft_lang())
+                    .build();
                 let services = Services {
                     host_command: Some(Box::new(|id| {
                         if matches!(id, "file.save" | "file.saveAs") {
@@ -100,37 +135,9 @@ async fn start_app() -> Result<(), String> {
                         }
                         None
                     })),
-                    open_async: Some(Box::new(move |purpose| {
-                        if purpose != "picture" {
-                            return;
-                        }
-                        let inbox = open_inbox.clone();
-                        let ctx = ctx.clone();
-                        wasm_bindgen_futures::spawn_local(async move {
-                            let Some(file) = rfd::AsyncFileDialog::new()
-                                .add_filter(
-                                    "Pictures",
-                                    &["png", "jpg", "jpeg", "gif", "webp", "bmp"],
-                                )
-                                .pick_file()
-                                .await
-                            else {
-                                return;
-                            };
-                            let bytes = file.read().await;
-                            if bytes.len() <= MAX_BYTES {
-                                inbox
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner())
-                                    .push((file.file_name(), bytes));
-                                ctx.request_repaint();
-                            }
-                        });
-                    })),
-                    inbox: Some(inbox),
                     ..Default::default()
                 };
-                let mut app = WordApp::new(session, services);
+                let mut app = WordApp::new(session, services).with_host(Arc::new(framework_host));
                 app.autosave = false;
                 app.session.autosave = false;
                 Ok(Box::new(Host {
@@ -173,9 +180,9 @@ impl Host {
                 if let Some(response) =
                     live_mcp::receive(&message, read_only, &mut |method, params| {
                         let (request, _reply) =
-                            wordcraft_ui_egui::ControlRequest::new(method, params);
+                            craft::automation::control::ControlRequest::new(method, params);
                         match wordcraft_ui_egui::control::handle(&mut self.app, &ctx, &request) {
-                            wordcraft_ui_egui::control::Outcome::Done(reply) => {
+                            craft::automation::control::Reply::Done(reply) => {
                                 live_mcp::unwrap_control(reply)
                             }
                             _ => Err("This operation requires a later editor frame.".into()),
@@ -249,9 +256,16 @@ impl Host {
                     return Err("Open a document first.".into());
                 }
                 self.read_only = field(&message, "readOnly").as_bool().unwrap_or(true);
-                self.app.dialog = None;
+                let ctx = CONTEXT
+                    .with(|context| context.borrow().clone())
+                    .ok_or("The editor is not ready.")?;
+                for dialog in self.app.dialog_host.open_dialogs() {
+                    self.app.dialog_host.cancel_by_id(&ctx, dialog.id);
+                }
                 self.app.ui.backstage = false;
-                self.app.canvas.want_focus = !self.read_only;
+                if !self.read_only {
+                    self.app.canvas.focus_page(&ctx);
+                }
                 // Preview always preserves printed page layout, independent of the editor view.
                 let _ = self.app.session.run("view.printLayout", &json!({}));
                 self.app.session.relayout();
@@ -415,7 +429,7 @@ impl eframe::App for Host {
                 )
             });
         } else {
-            self.app.raw_input_hook(ctx, raw);
+            craft::ui::shell::embed::before_input(ctx, |out| self.app.frame_input(out));
         }
     }
 

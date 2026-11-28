@@ -1,33 +1,34 @@
-//! File-size accounting for released content, the GCP port of
-//! `apps/backend/aws/file-tracker`.
+//! File-size accounting for released content on GCP, an adapter to
+//! `flow-like-file-accounting` like `apps/backend/aws/file-tracker`.
 //!
-//! Every `OBJECT_FINALIZE`/`OBJECT_DELETE` under `apps/` and `users/` updates a
-//! per-object ledger row in the Firestore `files` collection and applies the size
-//! delta to `App.totalSize` (and `User.totalSize` for user-scoped keys) inside
-//! one PostgreSQL transaction, reached through the self-rotating Cloud SQL IAM
-//! token. The ledger, not the event, is the source of the previous size, exactly
-//! like the DynamoDB table on AWS and the Cosmos container on Azure.
-//!
-//! Two differences from the Cosmos original are forced by Firestore. The
-//! partition key becomes an ordinary indexed field (`app_id`), because Firestore
-//! has no partition key and its IAM cannot scope to a collection let alone to a
-//! partition. And the concurrency token moves out of the document: Cosmos
-//! carries `_etag` in the body, Firestore keeps `updateTime` in the envelope, so
-//! every conditional write is driven by the value the read returned alongside
-//! the document.
+//! Every `OBJECT_FINALIZE`/`OBJECT_DELETE` under `apps/` and `users/` becomes one
+//! observation: the object at its generation sequencer, or the enclosing Lance
+//! dataset directory, whose size is measured by listing it. The shared core writes the
+//! SQL ledger and moves App, User and payer totals. The Firestore `files` collection is
+//! read-only: it supplies the pre-SQL baseline of an object or dataset once.
 
 use crate::gcs_events::GcsEvent;
-use flow_like_db::{AsDbConflict, DbConflict, DbDialect, RetryPolicy, retry_transaction};
-use flow_like_gcp_data::firestore::{FirestoreClient, FirestoreError, MutationOutcome};
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
+use flow_like_db::DbDialect;
+use flow_like_file_accounting::{self as accounting, Observation};
+use flow_like_gcp_data::firestore::{FilterOperator, FirestoreClient, QueryFilter};
+use flow_like_storage::Path;
+use flow_like_storage::object_store::ObjectStore;
+use futures::TryStreamExt;
+use sea_orm::{DatabaseConnection, DbErr};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 pub const DEFAULT_FILES_COLLECTION: &str = "files";
+
+const DATASET_LIST_TIMEOUT: Duration = Duration::from_secs(60);
+const LEGACY_PAGE_SIZE: i32 = 500;
 
 pub struct FileTrackingContext {
     pub firestore: FirestoreClient,
     pub files_collection: String,
     pub content_bucket: String,
+    pub store: Arc<dyn ObjectStore>,
     pub database: DatabaseConnection,
     pub dialect: DbDialect,
 }
@@ -40,70 +41,18 @@ pub enum FileTrackingError {
     Retryable(&'static str),
 }
 
-/// Ledger row: one per object, queried by app id.
+/// Legacy ledger row, read-only: one per object, queried by app id.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct LedgerDocument {
     id: String,
-    /// The Cosmos `pk` under its Firestore name. It is still the only field the
-    /// `files` index covers, so the query shape survives the rename.
     app_id: String,
     sk: String,
     size: i64,
     user_id: String,
     etag: String,
-    /// The GCS generation of the event that last wrote this row. Zero means the
-    /// row predates generation tracking and is never treated as stale.
     #[serde(default)]
     generation: i64,
     updated_at: i64,
-}
-
-/// What it takes to put the ledger back the way it was.
-///
-/// Every arm carries the `updateTime` the write produced, so an undo can only
-/// ever remove the exact version this event wrote. A newer event that landed in
-/// between owns the row, and its value is the correct one to keep.
-#[derive(Debug)]
-enum LedgerRollback {
-    None,
-    /// The event created a row that did not exist before.
-    Remove {
-        update_time: Option<String>,
-    },
-    /// The event overwrote an existing row.
-    Restore {
-        previous: Box<LedgerDocument>,
-        update_time: Option<String>,
-    },
-    /// The event removed a row.
-    Recreate {
-        previous: Box<LedgerDocument>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct KeyIdentity {
-    user_id: Option<String>,
-    app_id: String,
-}
-
-/// `apps/{app_id}/...` or `users/{sub}/apps/{app_id}/...`, mirroring the AWS
-/// parser (which also does not validate the third `apps` segment).
-fn parse_key_identity(key: &str) -> Option<KeyIdentity> {
-    let parts: Vec<&str> = key.split('/').collect();
-    match parts.as_slice() {
-        ["apps", app_id, ..] if !app_id.is_empty() => Some(KeyIdentity {
-            user_id: None,
-            app_id: (*app_id).to_string(),
-        }),
-        ["users", user_id, _, app_id, ..] if !user_id.is_empty() && !app_id.is_empty() => {
-            Some(KeyIdentity {
-                user_id: Some((*user_id).to_string()),
-                app_id: (*app_id).to_string(),
-            })
-        }
-        _ => None,
-    }
 }
 
 /// Firestore document IDs may not contain `/`; object names are paths.
@@ -111,52 +60,110 @@ fn ledger_id(key: &str) -> String {
     blake3::hash(key.as_bytes()).to_hex().to_string()
 }
 
-/// Azure's `sequencer` is fixed-width hex, so staleness there was a
-/// lexicographic `>=`. A GCS generation is a decimal integer of varying width,
-/// so the same test has to be numeric — compared as text, `"9"` outranks `"10"`
-/// and every carry into a new digit would silently drop a fresh event.
-///
-/// This is the `OBJECT_FINALIZE` predicate only. `>=` is right there because a
-/// redelivered finalize carries the generation the row already holds and must
-/// be a no-op; it is wrong for a delete, see [`is_stale_deletion`].
-fn is_stale(existing: &LedgerDocument, incoming: Option<i64>) -> bool {
-    match incoming {
-        Some(generation) => existing.generation != 0 && existing.generation >= generation,
-        None => false,
+/// `None` when the event is not accounted (`device-archives/`, whose DeviceArchive metadata
+/// accounts for them separately).
+fn observe_event(
+    event: &GcsEvent,
+    content_bucket: &str,
+    dataset_sequencer: &str,
+) -> Result<Option<Observation>, FileTrackingError> {
+    if event.object.starts_with("device-archives/") {
+        return Ok(None);
+    }
+    let object_sequencer = if accounting::dataset_prefix(&event.object).is_some() {
+        String::new()
+    } else {
+        if !event.is_deletion() && event.size.is_none() {
+            return Err(FileTrackingError::Permanent(
+                "object_finalized_without_size",
+            ));
+        }
+        let generation = event
+            .generation
+            .ok_or(FileTrackingError::Permanent(
+                "object_event_without_generation",
+            ))
+            .and_then(|generation| {
+                u64::try_from(generation)
+                    .map_err(|_| FileTrackingError::Permanent("object_event_without_generation"))
+            })?;
+        accounting::generation_sequencer(generation, event.is_deletion())
+    };
+    accounting::observe(
+        content_bucket,
+        &event.object,
+        &object_sequencer,
+        dataset_sequencer,
+    )
+    .map(Some)
+    .ok_or(FileTrackingError::Permanent("invalid_object_key_layout"))
+}
+
+async fn list_size(store: Arc<dyn ObjectStore>, prefix: String) -> Result<i64, DbErr> {
+    let path = Path::parse(prefix.trim_end_matches('/'))
+        .map_err(|error| DbErr::Custom(format!("dataset prefix {prefix} is invalid: {error}")))?;
+    let total = async {
+        store
+            .list(Some(&path))
+            .try_fold(0i64, |total, meta| async move {
+                Ok(total.saturating_add(i64::try_from(meta.size).unwrap_or(i64::MAX)))
+            })
+            .await
+    };
+    match tokio::time::timeout(DATASET_LIST_TIMEOUT, total).await {
+        Ok(Ok(total)) => Ok(total),
+        Ok(Err(error)) => Err(DbErr::Custom(format!(
+            "listing dataset {prefix} failed: {error}"
+        ))),
+        Err(_) => Err(DbErr::Custom(format!("listing dataset {prefix} timed out"))),
     }
 }
 
-/// The `OBJECT_DELETE` predicate, and the second place a GCS generation differs
-/// from an Event Grid `sequencer`. A sequencer is a property of the *event*, so
-/// BlobCreated and DeleteBlob for one blob carry distinct, increasing values and
-/// `>=` tells them apart. A generation is a property of the *object version*:
-/// the OBJECT_DELETE for a live object carries exactly the generation its
-/// OBJECT_FINALIZE carried, which is the value `record_creation` stored. Under
-/// `>=` every deletion would compare equal, be skipped as stale, and the ledger
-/// row — and `App.totalSize` with it — would never come down. So a delete is
-/// stale only when the row was written by a strictly *newer* generation, i.e. the
-/// object was overwritten after the version this delete refers to.
-fn is_stale_deletion(existing: &LedgerDocument, incoming: Option<i64>) -> bool {
-    matches!(incoming, Some(generation) if existing.generation != 0 && existing.generation > generation)
+async fn legacy_size(
+    firestore: FirestoreClient,
+    collection: String,
+    key: String,
+) -> Result<i64, DbErr> {
+    firestore
+        .read_document::<LedgerDocument>(&collection, &ledger_id(&key))
+        .await
+        .map(|document| document.map_or(0, |document| document.value.size))
+        .map_err(|error| DbErr::Custom(format!("legacy ledger read for {key} failed: {error}")))
 }
 
-fn map_firestore(error: FirestoreError) -> FileTrackingError {
-    tracing::warn!(error = %error, "files ledger request failed");
-    FileTrackingError::Retryable("files_ledger_unavailable")
-}
-
-/// Cosmos scoped every read to a partition key, so a row belonging to another
-/// app could never come back from a read this worker issued. Firestore has no
-/// partition key, so that guarantee has to be restated as an explicit check:
-/// the ledger ID is a hash of the object name and object names are namespaced
-/// per app, which means a mismatch is either a hash collision or a ledger being
-/// written by something other than this worker. Both are conditions to refuse
-/// rather than to absorb into somebody else's size total.
-fn ensure_same_app(existing: &LedgerDocument, app_id: &str) -> Result<(), FileTrackingError> {
-    if existing.app_id != app_id {
-        return Err(FileTrackingError::Permanent("files_ledger_app_mismatch"));
+async fn legacy_files(
+    firestore: FirestoreClient,
+    collection: String,
+    app_id: String,
+    prefix: String,
+) -> Result<Vec<(String, i64)>, DbErr> {
+    let filters = [QueryFilter::new("app_id", FilterOperator::Equal, app_id)];
+    let mut files = Vec::new();
+    let mut continuation: Option<String> = None;
+    loop {
+        let page = firestore
+            .query_page::<LedgerDocument>(
+                &collection,
+                &filters,
+                &[],
+                LEGACY_PAGE_SIZE,
+                continuation.as_deref(),
+            )
+            .await
+            .map_err(|error| {
+                DbErr::Custom(format!("legacy ledger query for {prefix} failed: {error}"))
+            })?;
+        files.extend(
+            page.documents
+                .into_iter()
+                .filter(|document| document.value.sk.starts_with(&prefix))
+                .map(|document| (document.value.sk, document.value.size)),
+        );
+        match page.continuation {
+            Some(next) => continuation = Some(next),
+            None => return Ok(files),
+        }
     }
-    Ok(())
 }
 
 pub async fn process(ctx: &FileTrackingContext, event: &GcsEvent) -> Result<(), FileTrackingError> {
@@ -167,428 +174,167 @@ pub async fn process(ctx: &FileTrackingContext, event: &GcsEvent) -> Result<(), 
         );
         return Ok(());
     }
-    // DeviceArchive metadata accounts for these server-owned payloads separately.
-    if event.object.starts_with("device-archives/") {
+    let dataset_sequencer = accounting::measurement_sequencer(SystemTime::now());
+    let Some(observation) = observe_event(event, &ctx.content_bucket, &dataset_sequencer)? else {
         return Ok(());
-    }
-    let identity = parse_key_identity(&event.object)
-        .ok_or(FileTrackingError::Permanent("invalid_object_key_layout"))?;
-    let id = ledger_id(&event.object);
-
-    let (delta, rollback) = if event.is_deletion() {
-        let (size, rollback) = record_deletion(ctx, &id, &identity.app_id, event).await?;
-        (-size, rollback)
+    };
+    let finalized_size = if event.is_deletion() {
+        0
     } else {
-        let size = event.size.ok_or(FileTrackingError::Permanent(
-            "object_finalized_without_size",
-        ))?;
-        let (previous, rollback) = record_creation(ctx, &id, &identity, size, event).await?;
-        (size - previous, rollback)
+        event.size.unwrap_or_default()
     };
 
-    if delta == 0 {
-        return Ok(());
-    }
-
-    if let Err(error) = apply_usage_delta(
+    let results = accounting::apply_batch(
         &ctx.database,
         ctx.dialect,
-        identity.user_id.as_deref(),
-        &identity.app_id,
-        delta,
-    )
-    .await
-    {
-        // The stored object is deliberately left alone. Deleting it to "undo"
-        // the event would publish another notification into this very
-        // subscription and the worker would be feeding itself — the AWS original
-        // names this as Lambda recursion and refuses it for the same reason.
-        // Only the ledger is rolled back, so the redelivery recomputes the same
-        // delta against the same previous size instead of seeing its own
-        // half-applied write and computing zero.
-        rollback_ledger(ctx, &id, rollback).await;
-        return Err(error);
-    }
-    Ok(())
-}
-
-/// Upsert the ledger row and return the previous size (0 if absent, `size` when
-/// the event is stale so that the caller computes a zero delta).
-async fn record_creation(
-    ctx: &FileTrackingContext,
-    id: &str,
-    identity: &KeyIdentity,
-    size: i64,
-    event: &GcsEvent,
-) -> Result<(i64, LedgerRollback), FileTrackingError> {
-    let existing = ctx
-        .firestore
-        .read_document::<LedgerDocument>(&ctx.files_collection, id)
-        .await
-        .map_err(map_firestore)?;
-
-    if let Some(existing) = &existing {
-        ensure_same_app(&existing.value, &identity.app_id)?;
-        if is_stale(&existing.value, event.generation) {
-            tracing::info!(object = %event.object, "ignoring stale OBJECT_FINALIZE event");
-            return Ok((size, LedgerRollback::None));
-        }
-    }
-
-    let document = LedgerDocument {
-        id: id.to_string(),
-        app_id: identity.app_id.clone(),
-        sk: event.object.clone(),
-        size,
-        user_id: identity.user_id.clone().unwrap_or_default(),
-        etag: event.etag.clone().unwrap_or_default(),
-        generation: event.generation.unwrap_or_default(),
-        updated_at: chrono::Utc::now().timestamp(),
-    };
-
-    let (outcome, update_time) = match &existing {
-        Some(current) => {
-            write_ledger(ctx, id, &document, Some(current.update_time.as_deref())).await?
-        }
-        None => write_ledger(ctx, id, &document, None).await?,
-    };
-
-    match outcome {
-        MutationOutcome::Applied => match existing {
-            Some(current) => {
-                let previous_size = current.value.size;
-                Ok((
-                    previous_size,
-                    LedgerRollback::Restore {
-                        previous: Box::new(current.value),
-                        update_time,
-                    },
-                ))
+        std::slice::from_ref(&observation),
+        |observation| {
+            legacy_size(
+                ctx.firestore.clone(),
+                ctx.files_collection.clone(),
+                observation.key.clone(),
+            )
+        },
+        |observation| {
+            legacy_files(
+                ctx.firestore.clone(),
+                ctx.files_collection.clone(),
+                observation.app_id.clone(),
+                observation.key.clone(),
+            )
+        },
+        |observation| {
+            let store = ctx.store.clone();
+            let prefix = observation.key.clone();
+            let dataset = observation.is_dataset();
+            async move {
+                if dataset {
+                    list_size(store, prefix).await
+                } else {
+                    Ok(finalized_size)
+                }
             }
-            None => Ok((0, LedgerRollback::Remove { update_time })),
-        },
-        // Another delivery moved the row between the read and the write; a retry
-        // re-reads it.
-        MutationOutcome::Conflict
-        | MutationOutcome::PreconditionFailed
-        | MutationOutcome::NotFound => {
-            Err(FileTrackingError::Retryable("files_ledger_write_conflict"))
-        }
-    }
-}
-
-/// Delete the ledger row and return the size it held (0 if absent or stale).
-async fn record_deletion(
-    ctx: &FileTrackingContext,
-    id: &str,
-    app_id: &str,
-    event: &GcsEvent,
-) -> Result<(i64, LedgerRollback), FileTrackingError> {
-    let Some(existing) = ctx
-        .firestore
-        .read_document::<LedgerDocument>(&ctx.files_collection, id)
-        .await
-        .map_err(map_firestore)?
-    else {
-        tracing::warn!(object = %event.object, "no ledger row for deleted object");
-        return Ok((0, LedgerRollback::None));
-    };
-    ensure_same_app(&existing.value, app_id)?;
-    if is_stale_deletion(&existing.value, event.generation) {
-        tracing::info!(object = %event.object, "ignoring stale OBJECT_DELETE event");
-        return Ok((0, LedgerRollback::None));
-    }
-
-    match ctx
-        .firestore
-        .delete_document(&ctx.files_collection, id, existing.update_time.as_deref())
-        .await
-        .map_err(map_firestore)?
-    {
-        MutationOutcome::Applied => Ok((
-            existing.value.size,
-            LedgerRollback::Recreate {
-                previous: Box::new(existing.value),
-            },
-        )),
-        MutationOutcome::NotFound => Ok((0, LedgerRollback::None)),
-        MutationOutcome::Conflict | MutationOutcome::PreconditionFailed => {
-            Err(FileTrackingError::Retryable("files_ledger_write_conflict"))
-        }
-    }
-}
-
-/// Write one ledger row and return the `updateTime` it produced.
-///
-/// This goes through `commit` rather than through `create_document` /
-/// `replace_document` for one reason: only `commit` reports the resulting
-/// `updateTime`, and without it a rollback would have to write blind.
-async fn write_ledger(
-    ctx: &FileTrackingContext,
-    id: &str,
-    document: &LedgerDocument,
-    update_time: Option<Option<&str>>,
-) -> Result<(MutationOutcome, Option<String>), FileTrackingError> {
-    let mut batch = ctx.firestore.write_batch();
-    match update_time {
-        Some(update_time) => batch.replace(&ctx.files_collection, id, document, None, update_time),
-        None => batch.create(&ctx.files_collection, id, document, None),
-    }
-    .map(|_| ())
-    .map_err(map_firestore)?;
-
-    let outcome = ctx.firestore.commit(batch).await.map_err(map_firestore)?;
-    Ok((
-        outcome.outcome,
-        outcome.update_times.into_iter().next().flatten(),
-    ))
-}
-
-/// Undo this event's ledger write. Best effort: the delivery is already failing
-/// and will be redelivered, and a rollback that itself fails leaves the row
-/// owned by whoever wrote it last, which the next delivery reconciles against.
-async fn rollback_ledger(ctx: &FileTrackingContext, id: &str, rollback: LedgerRollback) {
-    let outcome = match &rollback {
-        LedgerRollback::None => return,
-        LedgerRollback::Remove { update_time } => {
-            let Some(update_time) = update_time.as_deref() else {
-                tracing::error!(
-                    ledger_id = %id,
-                    "ledger row has no updateTime to roll back against; leaving it in place"
-                );
-                return;
-            };
-            ctx.firestore
-                .delete_document(&ctx.files_collection, id, Some(update_time))
-                .await
-        }
-        LedgerRollback::Restore {
-            previous,
-            update_time,
-        } => {
-            let Some(update_time) = update_time.as_deref() else {
-                tracing::error!(
-                    ledger_id = %id,
-                    "ledger row has no updateTime to roll back against; leaving it in place"
-                );
-                return;
-            };
-            ctx.firestore
-                .replace_document(
-                    &ctx.files_collection,
-                    id,
-                    previous.as_ref(),
-                    None,
-                    Some(update_time),
-                )
-                .await
-        }
-        // The row was deleted, so there is no `updateTime` to swap against.
-        // Create-if-absent is the equivalent guard: a row that has reappeared
-        // belongs to a newer event and must not be overwritten with this one's
-        // stale snapshot.
-        LedgerRollback::Recreate { previous } => {
-            ctx.firestore
-                .create_document(&ctx.files_collection, id, previous.as_ref(), None)
-                .await
-        }
-    };
-
-    match outcome {
-        Ok(MutationOutcome::Applied) => {
-            tracing::warn!(ledger_id = %id, "rolled the files ledger back after a usage-update failure")
-        }
-        Ok(outcome) => tracing::warn!(
-            ledger_id = %id,
-            ?outcome,
-            "a newer event owns the ledger row; leaving its value in place"
-        ),
-        Err(error) => tracing::error!(
-            ledger_id = %id,
-            error = %error,
-            "files ledger rollback failed; the row may over-report until the next event"
-        ),
-    }
-}
-
-/// The user update reads the app update's output, so the app row still locks first.
-const USER_SCOPED_USAGE_SQL: &str = r#"WITH a AS (UPDATE "public"."App" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2 RETURNING 1), u AS (UPDATE "public"."User" SET "totalSize" = "totalSize" + $1 WHERE "id" = $3 AND EXISTS (SELECT 1 FROM a) RETURNING 1) SELECT (SELECT count(*) FROM a) AS "apps", (SELECT count(*) FROM u) AS "users""#;
-
-/// `UPDATE "App" SET "totalSize" = "totalSize" + delta` (and the same for
-/// `"User"` when the key is user-scoped) in one retried transaction; a missing
-/// row is a permanent failure like on AWS. Relative increments keep concurrent
-/// events safe without a read-modify-write, and a lost commit race on this hot
-/// row is re-run by `retry_transaction`; an unknown commit outcome is not,
-/// because applying the delta twice would over-count.
-///
-/// A user-scoped key moves both totals in one statement so the app row lock is
-/// not held across a second round trip. The statement stays inside the
-/// transaction: a missing user must roll the app increment back, and only an
-/// open transaction makes a lost connection safe to re-run.
-async fn apply_usage_delta(
-    database: &DatabaseConnection,
-    dialect: DbDialect,
-    user_id: Option<&str>,
-    app_id: &str,
-    delta: i64,
-) -> Result<(), FileTrackingError> {
-    let app_key = app_id.to_owned();
-    let user_key = user_id.map(str::to_owned);
-    retry_transaction::<_, (), UsageError>(
-        database,
-        dialect,
-        None,
-        &RetryPolicy::default(),
-        move |txn| {
-            let app_id = app_key.clone();
-            let user_id = user_key.clone();
-            Box::pin(async move {
-                let Some(user_id) = user_id else {
-                    let app_rows = txn
-                        .execute_raw(Statement::from_sql_and_values(
-                            DatabaseBackend::Postgres,
-                            r#"UPDATE "public"."App" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2"#,
-                            [delta.into(), app_id.into()],
-                        ))
-                        .await?
-                        .rows_affected();
-                    if app_rows == 0 {
-                        return Err(UsageError::AppNotFound);
-                    }
-                    return Ok(());
-                };
-                let counts = txn
-                    .query_one_raw(Statement::from_sql_and_values(
-                        DatabaseBackend::Postgres,
-                        USER_SCOPED_USAGE_SQL,
-                        [delta.into(), app_id.into(), user_id.into()],
-                    ))
-                    .await?
-                    .ok_or_else(|| DbErr::Custom("usage update returned no row counts".into()))?;
-                if counts.try_get::<i64>("", "apps")? == 0 {
-                    return Err(UsageError::AppNotFound);
-                }
-                if counts.try_get::<i64>("", "users")? == 0 {
-                    return Err(UsageError::UserNotFound);
-                }
-                Ok(())
-            })
         },
     )
-    .await
-    .map_err(|error| match error {
-        UsageError::AppNotFound => FileTrackingError::Permanent("usage_app_not_found"),
-        UsageError::UserNotFound => FileTrackingError::Permanent("usage_user_not_found"),
-        UsageError::Db(error) => {
-            tracing::warn!(error = %error, app_id, "usage update failed");
-            FileTrackingError::Retryable("usage_database_unavailable")
+    .await;
+
+    match results.into_iter().next() {
+        Some(Err(error)) => {
+            tracing::error!(key = %observation.key, error = %error, "file accounting failed");
+            Err(FileTrackingError::Retryable("file_accounting_failed"))
         }
-    })
-}
-
-#[derive(Debug)]
-enum UsageError {
-    Db(DbErr),
-    AppNotFound,
-    UserNotFound,
-}
-
-impl From<DbErr> for UsageError {
-    fn from(error: DbErr) -> Self {
-        Self::Db(error)
-    }
-}
-
-impl AsDbConflict for UsageError {
-    fn db_conflict(&self) -> Option<DbConflict> {
-        match self {
-            Self::Db(error) => error.db_conflict(),
-            Self::AppNotFound | Self::UserNotFound => None,
-        }
-    }
-}
-
-impl std::fmt::Display for UsageError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Db(error) => write!(f, "{error}"),
-            Self::AppNotFound => f.write_str("app not found"),
-            Self::UserNotFound => f.write_str("user not found"),
-        }
+        _ => Ok(()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gcs_events::{OBJECT_DELETE, OBJECT_FINALIZE};
 
-    fn row(generation: i64) -> LedgerDocument {
-        LedgerDocument {
-            id: "i".into(),
-            app_id: "a".into(),
-            sk: "k".into(),
-            size: 1,
-            user_id: String::new(),
-            etag: String::new(),
+    const BUCKET: &str = "content";
+    const MEASURED: &str = "abc";
+
+    fn event(kind: &str, object: &str, generation: Option<i64>) -> GcsEvent {
+        GcsEvent {
+            id: String::new(),
+            event_type: kind.into(),
+            bucket: BUCKET.into(),
+            object: object.into(),
+            size: Some(10),
             generation,
-            updated_at: 0,
+            etag: None,
         }
     }
 
+    fn observed(event: &GcsEvent) -> Result<Option<Observation>, FileTrackingError> {
+        observe_event(event, BUCKET, MEASURED)
+    }
+
     #[test]
-    fn identity_from_app_and_user_keys() {
-        assert_eq!(
-            parse_key_identity("apps/a1/storage/db/x.lance"),
-            Some(KeyIdentity {
-                user_id: None,
-                app_id: "a1".into()
-            })
+    fn finalize_is_stamped_with_its_generation() {
+        let o = observed(&event(OBJECT_FINALIZE, "apps/a1/x.txt", Some(7)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(o.sequencer, accounting::generation_sequencer(7, false));
+        assert_eq!(o.key, "apps/a1/x.txt");
+        assert_eq!(o.bucket, BUCKET);
+        assert_eq!(o.app_id, "a1");
+        assert_eq!(o.user_id, None);
+    }
+
+    #[test]
+    fn delete_orders_right_after_its_finalize() {
+        let finalize = observed(&event(OBJECT_FINALIZE, "users/u1/apps/a1/x", Some(7)))
+            .unwrap()
+            .unwrap();
+        let delete = observed(&event(OBJECT_DELETE, "users/u1/apps/a1/x", Some(7)))
+            .unwrap()
+            .unwrap();
+        let newer = accounting::generation_sequencer(8, false);
+        assert_eq!(finalize.user_id.as_deref(), Some("u1"));
+        let order = |s: &str| (s.len(), s.to_owned());
+        assert!(order(&delete.sequencer) > order(&finalize.sequencer));
+        assert!(order(&delete.sequencer) < order(&newer));
+    }
+
+    #[test]
+    fn lance_file_becomes_the_dataset_directory() {
+        let o = observed(&event(
+            OBJECT_FINALIZE,
+            "apps/a1/storage/db/t.lance/data/0.lance",
+            None,
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(o.key, "apps/a1/storage/db/t.lance/");
+        assert_eq!(o.sequencer, MEASURED);
+        assert!(o.is_dataset());
+    }
+
+    #[test]
+    fn dataset_file_without_generation_is_accepted() {
+        let mut e = event(
+            OBJECT_FINALIZE,
+            "apps/a1/t.lance/_versions/1.manifest",
+            None,
         );
+        e.size = None;
+        assert!(observed(&e).unwrap().is_some());
+    }
+
+    #[test]
+    fn plain_object_requires_a_generation() {
+        let missing = observed(&event(OBJECT_FINALIZE, "apps/a1/x", None));
         assert_eq!(
-            parse_key_identity("users/u1/apps/a1/db/x"),
-            Some(KeyIdentity {
-                user_id: Some("u1".into()),
-                app_id: "a1".into()
-            })
+            missing.unwrap_err(),
+            FileTrackingError::Permanent("object_event_without_generation")
         );
-        assert_eq!(parse_key_identity("media/x.png"), None);
-        assert_eq!(parse_key_identity("users/u1"), None);
-        assert_eq!(parse_key_identity("apps//x"), None);
+        assert!(observed(&event(OBJECT_DELETE, "apps/a1/x", Some(-1))).is_err());
     }
 
-    /// The lexicographic form this replaces would call generation 1_755_254_400
-    /// stale against 999_999_999, because `"9"` sorts above `"1"`. The
-    /// equal-generation case is stale for a finalize only: that is a redelivery
-    /// of the write that produced the row.
     #[test]
-    fn stale_detection_compares_generations_numerically() {
-        let existing = row(1_755_254_400_000_002);
-        assert!(is_stale(&existing, Some(1_755_254_400_000_001)));
-        assert!(is_stale(&existing, Some(1_755_254_400_000_002)));
-        assert!(!is_stale(&existing, Some(1_755_254_400_000_003)));
-        assert!(!is_stale(&existing, None));
-        assert!(!is_stale(&row(999_999_999), Some(1_755_254_400_000_001)));
+    fn finalize_requires_a_size() {
+        let mut e = event(OBJECT_FINALIZE, "apps/a1/x", Some(1));
+        e.size = None;
+        assert_eq!(
+            observed(&e).unwrap_err(),
+            FileTrackingError::Permanent("object_finalized_without_size")
+        );
     }
 
-    /// An OBJECT_DELETE carries the same generation as the OBJECT_FINALIZE that
-    /// wrote the row, so equality is the *normal* delete and must go through;
-    /// only a strictly newer row (the object was overwritten first) is stale.
     #[test]
-    fn deletion_staleness_is_strict() {
-        let generation = 1_755_254_400_000_002;
-        assert!(!is_stale_deletion(&row(generation), Some(generation)));
-        assert!(is_stale_deletion(&row(generation), Some(generation - 1)));
-        assert!(!is_stale_deletion(&row(generation), Some(generation + 1)));
-        assert!(!is_stale_deletion(&row(generation), None));
-        assert!(!is_stale_deletion(&row(0), Some(generation)));
+    fn bad_layout_is_permanent() {
+        assert_eq!(
+            observed(&event(OBJECT_FINALIZE, "media/x.png", Some(1))).unwrap_err(),
+            FileTrackingError::Permanent("invalid_object_key_layout")
+        );
     }
 
-    /// A row written before generations were tracked must not swallow the first
-    /// event that carries one.
     #[test]
-    fn rows_without_a_generation_are_never_stale() {
-        assert!(!is_stale(&row(0), Some(1)));
-        assert!(!is_stale_deletion(&row(0), Some(1)));
+    fn device_archives_are_skipped() {
+        let e = event(OBJECT_FINALIZE, "device-archives/a1/x", None);
+        assert!(observed(&e).unwrap().is_none());
     }
 
     #[test]

@@ -5,5 +5,6 @@
 pub use flow_like_runtime::*;
 
 pub mod a2ui;
+#[cfg(feature = "copilot")]
 pub mod copilot;
 pub mod flow;

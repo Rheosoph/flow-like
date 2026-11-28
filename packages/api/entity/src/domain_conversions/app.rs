@@ -151,6 +151,8 @@ impl From<app::Model> for App {
                 SystemTime::UNIX_EPOCH
                     + std::time::Duration::from_secs(date_time.timestamp() as u64)
             }),
+            // Kept only in the app's manifest; the row cannot say.
+            fork_id_seeds: None,
             bot_id: model.bot_id,
             refuse_bots: model.refuse_bots.unwrap_or(false),
         }
@@ -215,6 +217,8 @@ impl From<App> for app::Model {
             bot_id: app.bot_id,
             // Changed only through `PATCH /apps/{app_id}/settings/bots`, never by a whole-app save.
             refuse_bots: None,
+            // Changed only through `PUT /apps/{app_id}/settings/showcase`.
+            showcase: None,
         }
     }
 }

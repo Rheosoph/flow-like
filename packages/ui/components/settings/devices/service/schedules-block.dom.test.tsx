@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { byRole, click, installDom, queryByRole } from "../testing/dom-harness";
 import type { FakeWorkspaceOptions } from "../testing/fake-workspace";
+import { moment } from "../testing/icu";
 
 const dom = installDom();
 const { cleanupDevices, mountDevices, preloadDevices } = await import(
@@ -122,7 +123,9 @@ describe("Service › Status · Schedules", () => {
 		expect(text(item)).toContain("Nightly reconciliation");
 		expect(text(item)).toContain("At 02:00 every day · Europe/Berlin");
 		expect(lines(container)).toEqual([
-			"Next run Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			moment(
+				"Next run Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			),
 		]);
 		expect(text(block(container))).toContain(
 			"A run is skipped when the device is off, asleep or restarting at its time, and when the previous run is still going.",
@@ -147,7 +150,7 @@ describe("Service › Status · Schedules", () => {
 		});
 		const [running, next, last] = lines(container);
 		expect(running).toBe("A run is going now.");
-		expect(next).toMatch(/^Next run Oct 1 at 02:00 GMT\+2 · in 12 hr\./);
+		expect(next).toMatch(/^Next run Oct 1(?: at |, )02:00 GMT\+2 · in 12 hr\./);
 		expect(last).toBe(
 			"Last run 02:00 GMT+2 · 12 hr. ago · 00:00 your time · failed",
 		);
@@ -166,7 +169,9 @@ describe("Service › Status · Schedules", () => {
 		expect(schedule(container)?.dataset.scheduleState).toBe("armed");
 		// A status carries the result and neither a time nor a counter.
 		expect(lines(container)).toEqual([
-			"Next run by its schedule: Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			moment(
+				"Next run by its schedule: Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			),
 			"Last run succeeded",
 		]);
 		expect(has(container, "[data-schedule-skipped]")).toBe(false);
@@ -409,7 +414,7 @@ describe("Service › Status · a one-time schedule", () => {
 		expect(text(item)).toContain("Price update");
 		expect(text(item)).toContain("Once on 2026-10-15 at 09:00 · Europe/Berlin");
 		const [line, ...rest] = onceLines(container);
-		expect(line).toMatch(/^Runs once Oct 15 at 09:00 GMT\+2 · in /);
+		expect(line).toMatch(/^Runs once Oct 15(?: at |, )09:00 GMT\+2 · in /);
 		expect(rest).toEqual([]);
 		const foot = text(block(container));
 		expect(foot).toContain(
@@ -505,7 +510,7 @@ describe("Service › Status · a one-time schedule", () => {
 		const { container } = await open({ reader: "status" });
 		expect(onceItem(container)?.dataset.once).toBe("pending");
 		expect(onceLines(container)[0]).toMatch(
-			/^Runs once Oct 15 at 09:00 GMT\+2/,
+			/^Runs once Oct 15(?: at |, )09:00 GMT\+2/,
 		);
 	});
 

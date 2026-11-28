@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import {
 	type QueryClient,
+	useInfiniteQuery,
 	useMutation,
 	useQuery,
 	useQueryClient,
@@ -45,7 +46,10 @@ export type LibraryAuth =
 	| null
 	| undefined;
 
-const LIBRARY_LIMIT = 100;
+/** Divides by every grid column count (2, 3, 4), so a full page never leaves a ragged last row. */
+export const LIBRARY_PAGE_SIZE = 48;
+/** `MAX_SEARCH_IDS` in `packages/api/src/routes/registry/search.rs`. */
+const MAX_LOOKUP_IDS = 100;
 const REGISTRY_STALE_MS = 60_000;
 
 export const libraryQueryKeys = {
@@ -100,13 +104,25 @@ export function useLibraryPackages({
 	const { pending, start, settle } = usePendingActions();
 
 	/** Buying or getting a package on the store detail does not touch this key; the tab remounts after it. */
-	const library = useQuery({
+	const library = useInfiniteQuery({
 		queryKey: libraryQueryKeys.library(sub),
-		queryFn: () =>
+		initialPageParam: 0,
+		queryFn: ({ pageParam }) =>
 			backend.registryState.getOwnedPackages({
 				access: "library",
-				limit: LIBRARY_LIMIT,
+				limit: LIBRARY_PAGE_SIZE,
+				offset: pageParam,
 			}),
+		getNextPageParam: (last, pages) => {
+			const loaded = pages.reduce(
+				(sum, page) => sum + asArray(page?.packages).length,
+				0,
+			);
+			return asArray(last?.packages).length > 0 &&
+				loaded < (last?.totalCount ?? 0)
+				? loaded
+				: undefined;
+		},
 		enabled: backendReady && signedIn === true,
 		staleTime: REGISTRY_STALE_MS,
 		refetchOnMount: "always",
@@ -125,9 +141,21 @@ export function useLibraryPackages({
 	});
 
 	const libraryPackages = useMemo(
-		() => (signedIn === true ? asArray(library.data?.packages) : []),
+		() =>
+			signedIn === true
+				? asArray(library.data?.pages).flatMap((page) =>
+						asArray(page?.packages),
+					)
+				: [],
 		[signedIn, library.data],
 	);
+	const libraryTotal =
+		signedIn === true
+			? Math.max(
+					library.data?.pages[0]?.totalCount ?? 0,
+					libraryPackages.length,
+				)
+			: 0;
 	const installedPackages = useMemo(
 		() => asArray(installed.data),
 		[installed.data],
@@ -137,7 +165,10 @@ export function useLibraryPackages({
 	const lookupIds = useMemo(
 		() =>
 			librarySettled
-				? libraryIdsToLookUp(libraryPackages, installedPackages)
+				? libraryIdsToLookUp(libraryPackages, installedPackages).slice(
+						0,
+						MAX_LOOKUP_IDS,
+					)
 				: [],
 		[librarySettled, libraryPackages, installedPackages],
 	);
@@ -159,7 +190,7 @@ export function useLibraryPackages({
 			? "loading"
 			: signedIn === false
 				? "signed-out"
-				: library.isError
+				: library.isError && !library.data
 					? "error"
 					: library.isPending
 						? "loading"
@@ -181,6 +212,11 @@ export function useLibraryPackages({
 		[libraryPackages, installedPackages, updates.data, lookup.data, statusOf],
 	);
 	const counts = useMemo(() => libraryCounts(entries), [entries]);
+	const names = useMemo(
+		() => new Map(entries.map((entry) => [entry.id, entry.name])),
+		[entries],
+	);
+	const nameOf = (id: string) => names.get(id) ?? id;
 
 	const install = useMutation({
 		mutationFn: ({ id, version }: { id: string; version?: string }) =>
@@ -188,16 +224,21 @@ export function useLibraryPackages({
 		onMutate: ({ id }) => start(id, "install"),
 		onSuccess: (_, { id }) => {
 			toast.success(
-				t("packageInstalledSuccessfully", "Package installed successfully"),
+				t("libraryPackageInstalled", "{{name}} installed", {
+					name: nameOf(id),
+				}),
 			);
 			invalidateMachine(queryClient, id);
 		},
-		onError: (error) =>
+		onError: (error, { id }) =>
 			toast.error(
 				t(
-					"failedToInstallPackageMessage",
-					"Failed to install package: {{message}}",
-					{ message: getErrorMessage(error) },
+					"libraryPackageInstallFailed",
+					"Couldn't install {{name}}: {{message}}",
+					{
+						name: nameOf(id),
+						message: getErrorMessage(error),
+					},
 				),
 			),
 		onSettled: (_, __, { id }) => settle(id),
@@ -207,22 +248,24 @@ export function useLibraryPackages({
 		mutationFn: ({ id, version }: { id: string; version: string }) =>
 			backend.registryState.updatePackage(id, version),
 		onMutate: ({ id }) => start(id, "update"),
-		onSuccess: (_, { id }) => {
+		onSuccess: (_, { id, version }) => {
 			toast.success(
-				t("countPackagesUpdated", {
-					defaultValue_one: "Package updated",
-					defaultValue_other: "{{count}} packages updated",
-					count: 1,
+				t("libraryPackageUpdated", "{{name}} updated to v{{version}}", {
+					name: nameOf(id),
+					version,
 				}),
 			);
 			invalidateMachine(queryClient, id);
 		},
-		onError: (error) =>
+		onError: (error, { id }) =>
 			toast.error(
 				t(
-					"failedToUpdatePackageMessage",
-					"Failed to update package: {{message}}",
-					{ message: getErrorMessage(error) },
+					"libraryPackageUpdateFailed",
+					"Couldn't update {{name}}: {{message}}",
+					{
+						name: nameOf(id),
+						message: getErrorMessage(error),
+					},
 				),
 			),
 		onSettled: (_, __, { id }) => settle(id),
@@ -233,17 +276,19 @@ export function useLibraryPackages({
 		onMutate: (id) => start(id, "uninstall"),
 		onSuccess: (_, id) => {
 			toast.success(
-				t("packageUninstalledSuccessfully", "Package uninstalled successfully"),
+				t("libraryPackageUninstalled", "{{name}} uninstalled", {
+					name: nameOf(id),
+				}),
 			);
 			invalidateMachine(queryClient, id);
 			queryClient.invalidateQueries({ queryKey: ["registry-library"] });
 		},
-		onError: (error) =>
+		onError: (error, id) =>
 			toast.error(
 				t(
-					"failedToUninstallPackageMessage",
-					"Failed to uninstall package: {{message}}",
-					{ message: getErrorMessage(error) },
+					"libraryPackageUninstallFailed",
+					"Couldn't uninstall {{name}}: {{message}}",
+					{ name: nameOf(id), message: getErrorMessage(error) },
 				),
 			),
 		onSettled: (_, __, id) => settle(id),
@@ -255,11 +300,24 @@ export function useLibraryPackages({
 		queryClient.invalidateQueries({ queryKey: ["registry-library-lookup"] });
 	}, [queryClient]);
 
+	const loadMore = useCallback(() => {
+		if (library.hasNextPage && !library.isFetchingNextPage) {
+			void library.fetchNextPage();
+		}
+	}, [library.hasNextPage, library.isFetchingNextPage, library.fetchNextPage]);
+
 	return {
 		entries,
 		counts,
 		registryStatus,
 		summariesPending,
+		/** Library rows the registry has, loaded or not; entries also hold installed packages outside it. */
+		libraryTotal,
+		libraryLoaded: libraryPackages.length,
+		hasMore: signedIn === true && !!library.hasNextPage,
+		loadingMore: library.isFetchingNextPage,
+		loadMoreFailed: library.isFetchNextPageError,
+		loadMore,
 		isLoading: installed.isPending,
 		installedError: installed.error,
 		retryInstalled: installed.refetch,

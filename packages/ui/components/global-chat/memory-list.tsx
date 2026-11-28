@@ -31,7 +31,7 @@ type MemoryListState =
 	| { status: "ready"; entries: MemoryEntry[] };
 
 // Human-friendly "how long ago" for a stored memory's epoch-millis timestamp.
-function formatMemoryAge(timestamp: number): string {
+function formatMemoryAge(timestamp: number, locale: string): string {
 	if (!timestamp) return "";
 	const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
 	if (seconds < 60) return i18next.t("bots:memory.justNow", "just now");
@@ -42,7 +42,7 @@ function formatMemoryAge(timestamp: number): string {
 	if (hours < 24) return i18next.t("hourshAgo", "{{hours}}h ago", { hours });
 	const days = Math.floor(hours / 24);
 	if (days < 30) return i18next.t("daysdAgo", "{{days}}d ago", { days });
-	return new Date(timestamp).toLocaleDateString();
+	return new Date(timestamp).toLocaleDateString(locale);
 }
 
 function MemoryRow({
@@ -54,7 +54,8 @@ function MemoryRow({
 	busy: boolean;
 	onDelete: (id: string) => void;
 }>) {
-	const { t } = useTranslation("chat");
+	const { t, i18n } = useTranslation("chat");
+	const locale = i18n.resolvedLanguage ?? i18n.language;
 	const forget = t("forgetThisMemory", "Forget this memory");
 	return (
 		<li className="group rounded-2xl border border-border/65 bg-card p-4 shadow-xs transition-colors hover:border-emerald-500/30">
@@ -74,11 +75,11 @@ function MemoryRow({
 					{Boolean(entry.timestamp) && (
 						<time
 							dateTime={new Date(entry.timestamp).toISOString()}
-							title={new Date(entry.timestamp).toLocaleString()}
+							title={new Date(entry.timestamp).toLocaleString(locale)}
 							className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"
 						>
 							<Clock3Icon className="size-3" aria-hidden />
-							{formatMemoryAge(entry.timestamp)}
+							{formatMemoryAge(entry.timestamp, locale)}
 						</time>
 					)}
 				</div>

@@ -11,6 +11,7 @@
 //! - `open_url` safely retrieves bounded text from a public web page.
 //! - `archive_lookup` locates historical captures through a fixed Internet Archive endpoint.
 //! - `_memory_store` / `_memory_search` run against the core `AssistantMemory`.
+//! - `ui_patterns` returns one static `a2ui` layout recipe; it needs no host, network or grant.
 
 use flow_like_types::data_classification::DataClassification;
 use rig::completion::ToolDefinition;
@@ -23,6 +24,62 @@ pub const ARCHIVE_LOOKUP_TOOL: &str = "archive_lookup";
 pub const HTTP_REQUEST_TOOL: &str = "http_request";
 pub const MEMORY_STORE_TOOL: &str = "_memory_store";
 pub const MEMORY_SEARCH_TOOL: &str = "_memory_search";
+pub use crate::a2ui::authoring::CHAT_UI_PATTERNS_TOOL as UI_PATTERNS_TOOL;
+/// The recipe `ui_patterns` returns for `args`, or the error naming the valid patterns.
+pub fn ui_patterns_recipe(args: &Value) -> Result<&'static str, String> {
+    let names = || {
+        crate::a2ui::authoring::CHAT_UI_PATTERNS
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let pattern = args
+        .get("pattern")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .ok_or_else(|| format!("ui_patterns requires a pattern string: one of {}", names()))?;
+    crate::a2ui::authoring::chat_ui_pattern(pattern).ok_or_else(|| {
+        format!(
+            "Unknown ui_patterns pattern '{pattern}'. Valid patterns: {}",
+            names()
+        )
+    })
+}
+
+/// [`ui_patterns_recipe`] as the tool result string every host returns.
+pub fn run_ui_patterns(args: &Value) -> String {
+    match ui_patterns_recipe(args) {
+        Ok(recipe) => recipe.to_string(),
+        Err(error) => {
+            json!({ "status": "error", "tool": UI_PATTERNS_TOOL, "error": error }).to_string()
+        }
+    }
+}
+
+pub fn ui_patterns_tool_spec() -> PlatformToolSpec {
+    PlatformToolSpec {
+        name: UI_PATTERNS_TOOL,
+        description: "Returns the layout recipe and an example for one kind of `a2ui` reply. Load it before the first fence of that kind in a conversation.",
+        schema: || {
+            let names: Vec<&str> = crate::a2ui::authoring::CHAT_UI_PATTERNS
+                .iter()
+                .map(|(name, _)| *name)
+                .collect();
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "pattern": { "type": "string", "enum": names, "description": "The kind of reply to build." }
+                },
+                "required": ["pattern"]
+            })
+        },
+        approval: ToolApprovalSpec::None,
+        timeout_secs: 10,
+    }
+}
+
 /// Public-web research directed by the calling assistant. Tool-driven backends delegate it to
 /// the nested `Research` scope; the rig/Bits loop runs an equivalent researcher locally.
 pub const RESEARCH_AGENT_TOOL: &str = "research_agent";
@@ -346,7 +403,9 @@ pub fn bot_connector_approval(message: Option<fn(&Value) -> String>) -> ToolAppr
 /// destroys one irreplaceable target scopes its memory to that target: approving one table drop
 /// must never authorize dropping every other table for the rest of the session.
 fn approval_session_key(spec: &PlatformToolSpec, args: &Value) -> String {
-    if flow_like_bot_tools::configuration::requires_approval(spec.name) {
+    if flow_like_bot_tools::configuration::requires_approval(spec.name)
+        || flow_like_bot_tools::computer::room_show(spec.name, args).is_some()
+    {
         return format!(
             "{}:{}",
             spec.name,
@@ -741,19 +800,38 @@ fn forecast_save_message(args: &Value) -> String {
     format!("FlowPilot wants to save the completed prediction '{name}' in {scope} for app '{app}'.")
 }
 
+/// Names how many elements go where, so the person approving sees the write's size and target.
 fn graph_element_message(args: &Value) -> String {
     let operation = spec_arg_str(args, "operation", "operation");
     let label = spec_arg_str(args, "label", "label");
-    let what = if operation == "add_edges" {
-        "edges"
+    let overlay = spec_arg_str(args, "overlay_id", "overlayId");
+    let app = spec_arg_str(args, "app_id", "appId");
+    let count = args
+        .get("rows")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let kind = if operation == "add_edges" {
+        "edge"
     } else {
-        "nodes"
+        "node"
     };
-    if label.is_empty() {
-        format!("The Data Studio agent wants to add graph {what}.")
-    } else {
-        format!("The Data Studio agent wants to add {what} to '{label}'.")
+    let what = match count {
+        0 => format!("graph {kind}s"),
+        1 => format!("1 {kind}"),
+        count => format!("{count} {kind}s"),
+    };
+    let mut message = format!("The Data Studio agent wants to add {what}");
+    if !label.is_empty() {
+        message.push_str(&format!(" labelled '{label}'"));
     }
+    if !overlay.is_empty() {
+        message.push_str(&format!(" to graph '{overlay}'"));
+    }
+    if !app.is_empty() {
+        message.push_str(&format!(" in app '{app}'"));
+    }
+    message.push('.');
+    message
 }
 
 fn ontology_action_message(args: &Value) -> String {
@@ -1858,6 +1936,7 @@ Prefer this over `fork_app` when the existing app already does what the user wan
     // interface discovery/validation; board-scoped agents use `execute_event` from the runtime set.
     specs.push(super::app_build_tool_spec::app_build_tool_spec());
     specs.push(http_request_tool_spec());
+    specs.push(ui_patterns_tool_spec());
     specs.extend(global_runtime_verification_tool_specs());
 
     if memory_enabled {
@@ -2566,6 +2645,25 @@ pub fn find_data_studio_tool_spec(name: &str) -> Option<PlatformToolSpec> {
         .find(|spec| spec.name == name)
 }
 
+/// Overlay operations a bot may run: it reads ontologies, only Flux changes them.
+pub const BOT_GRAPH_OVERLAY_OPERATIONS: &[&str] = &["list_overlays", "get_overlay", "get_schema"];
+
+fn bot_graph_overlay_tool_schema() -> Value {
+    let mut schema = graph_overlay_tool_schema();
+    schema["properties"]["operation"]["enum"] = json!(BOT_GRAPH_OVERLAY_OPERATIONS);
+    schema
+}
+
+/// `graph_overlay_tool` as a bot runs it: read operations only, so the advertised schema lists
+/// just those.
+pub fn bot_graph_overlay_tool_spec(description: &'static str) -> Option<PlatformToolSpec> {
+    find_data_studio_tool_spec("graph_overlay_tool").map(|spec| PlatformToolSpec {
+        description,
+        schema: bot_graph_overlay_tool_schema,
+        ..spec
+    })
+}
+
 /// Database operations a read-only surface (board/UI specialists) may call.
 pub const READ_ONLY_DATABASE_OPERATIONS: &[&str] = &["list_tables", "describe_table", "query"];
 
@@ -2699,7 +2797,12 @@ pub fn database_tool_schema(operations: &[&str]) -> Value {
             "optimize": { "type": "boolean" },
             "keep_versions": {
                 "type": "boolean",
-                "description": "Defaults to true. False prunes versions older than seven days after compaction and index maintenance."
+                "description": "Defaults to true. False prunes old versions after compaction and index maintenance."
+            },
+            "older_than_days": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "With keep_versions false: days of history to keep (default 7). Tagged versions and branches are always kept."
             },
             "nullable": { "type": "boolean" },
             "column_definition": {
@@ -3137,6 +3240,28 @@ pub fn find_scout_tool_spec(name: &str) -> Option<PlatformToolSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graph_write_approvals_name_the_count_label_graph_and_app() {
+        assert_eq!(
+            graph_element_message(&json!({
+                "operation": "add_nodes",
+                "app_id": "app_crm",
+                "overlay_id": "people",
+                "label": "Person",
+                "rows": [{ "id": "p1" }, { "id": "p2" }]
+            })),
+            "The Data Studio agent wants to add 2 nodes labelled 'Person' to graph 'people' in app 'app_crm'."
+        );
+        assert_eq!(
+            graph_element_message(&json!({ "operation": "add_edges", "rows": [{}] })),
+            "The Data Studio agent wants to add 1 edge."
+        );
+        assert_eq!(
+            graph_element_message(&json!({ "operation": "add_edges" })),
+            "The Data Studio agent wants to add graph edges."
+        );
+    }
 
     #[test]
     fn research_brief_resolves_a_conversation_followup() {
@@ -4418,6 +4543,36 @@ mod tests {
     }
 
     #[test]
+    fn ui_patterns_schema_lists_exactly_the_pattern_names_and_dispatch_returns_recipes() {
+        use crate::a2ui::authoring::CHAT_UI_PATTERNS;
+
+        let spec = find_global_tool_spec(UI_PATTERNS_TOOL).expect("ui_patterns global spec");
+        assert_eq!(spec.approval.effect(), ToolEffect::ReadOnly);
+        let schema = (spec.schema)();
+        let names: Vec<&str> = CHAT_UI_PATTERNS.iter().map(|(name, _)| *name).collect();
+        assert_eq!(schema["properties"]["pattern"]["enum"], json!(names));
+        assert_eq!(schema["required"], json!(["pattern"]));
+        assert_eq!(schema["properties"].as_object().unwrap().len(), 1);
+        assert_eq!(schema["additionalProperties"], json!(false));
+
+        for (name, recipe) in CHAT_UI_PATTERNS {
+            assert_eq!(run_ui_patterns(&json!({ "pattern": name })), *recipe);
+        }
+        for bad in [
+            json!({ "pattern": "nope" }),
+            json!({}),
+            json!({ "pattern": 3 }),
+        ] {
+            let error: Value = serde_json::from_str(&run_ui_patterns(&bad)).unwrap();
+            assert_eq!(error["status"], "error");
+            let message = error["error"].as_str().unwrap();
+            for name in &names {
+                assert!(message.contains(name), "{message}");
+            }
+        }
+    }
+
+    #[test]
     fn global_tool_descriptions_stay_within_model_facing_budget() {
         let specs = global_assistant_tool_specs(false);
         let total: usize = specs.iter().map(|spec| spec.description.len()).sum();
@@ -4431,9 +4586,10 @@ mod tests {
         // Direct HTTP adds a compact description; detailed authorization rules stay in the prompt.
         // Reviewed 2026-11-11: +~0.15 KB on `research_agent`, whose caller now writes the brief
         // and has to be told what the researcher does and does not receive.
+        // Reviewed 2026-11-24: +~0.15 KB for `ui_patterns`, offered wherever the chat UI prompt is.
         assert!(
-            total <= 16_900,
-            "global tool descriptions grew beyond the reviewed 16.9 KB budget: {total} bytes"
+            total <= 17_100,
+            "global tool descriptions grew beyond the reviewed 17.1 KB budget: {total} bytes"
         );
         for spec in specs {
             assert!(
@@ -4468,7 +4624,8 @@ mod tests {
         // Direct HTTP adds about 1.1 KB for method, headers, and body schemas.
         // Reviewed 2026-11-11: +~0.4 KB for `research_agent`'s `question` and `context`, which
         // replaced an empty schema when the caller began to direct the research.
-        for (memory_enabled, budget) in [(false, 37_250usize), (true, 38_000usize)] {
+        // Reviewed 2026-11-24: +~0.35 KB for `ui_patterns` and its pattern-name enum.
+        for (memory_enabled, budget) in [(false, 37_650usize), (true, 38_400usize)] {
             let specs = global_assistant_tool_specs(memory_enabled);
             let total: usize = specs
                 .iter()

@@ -362,6 +362,7 @@ public enum FlowLikeNativeRuntime {
         #if os(iOS)
         NotificationCenter.default.addObserver(forName: UIApplication.didFinishLaunchingNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated {
+                NativeFileLock.installAppLifetime()
                 // UIKit delivers launch activities before Rust finishes initializing.
                 NativeActivityBridge.install()
                 NativeSystemIntegration.refreshAppShortcuts?()

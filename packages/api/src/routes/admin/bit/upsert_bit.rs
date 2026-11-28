@@ -5,6 +5,7 @@ use super::mirror_cache::{self, MirroredArtifact};
 use crate::{
     entity::{bit, bit_tree_cache},
     error::ApiError,
+    media_links,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
     state::AppState,
@@ -218,6 +219,22 @@ fn apply_mirrored_artifact(bit: &mut bit::Model, artifact: &MirroredArtifact, cd
     ));
 }
 
+/// Regions a hosted Bit may declare in `parameters.hosting_region`; the UI badges and filters by them.
+const HOSTING_REGIONS: [&str; 1] = ["eu"];
+
+fn validate_hosting_region(bit: &Bit) -> Result<(), ApiError> {
+    match bit.parameters.get("hosting_region") {
+        None | Some(serde_json::Value::Null) => Ok(()),
+        Some(serde_json::Value::String(region)) if HOSTING_REGIONS.contains(&region.as_str()) => {
+            Ok(())
+        }
+        Some(other) => Err(ApiError::bad_request(format!(
+            "Unknown hosting_region {other}; expected one of: {}",
+            HOSTING_REGIONS.join(", ")
+        ))),
+    }
+}
+
 #[tracing::instrument(name = "PUT /admin/bit/{bit_id}", skip(state, user, bit))]
 pub async fn upsert_bit(
     State(state): State<AppState>,
@@ -229,6 +246,7 @@ pub async fn upsert_bit(
         .await?;
 
     crate::bit_pricing::validate_bit_pricing(&bit)?;
+    validate_hosting_region(&bit)?;
 
     let (tx, rx) = mpsc::channel::<StreamMsg>(64);
     let state_cloned = state.clone();
@@ -442,14 +460,23 @@ async fn download_and_hash(
         None => return Ok(()),
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60 * 60 * 2))
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .pool_max_idle_per_host(1)
-        .http2_keep_alive_interval(Some(std::time::Duration::from_secs(30)))
-        .http2_keep_alive_timeout(std::time::Duration::from_secs(60))
-        .build()?;
+    // The body is published to the CDN, so an internal target would hand its response back.
+    let egress = media_links::server_link_egress();
+    let parsed = reqwest::Url::parse(&url)
+        .map_err(|e| flow_like_types::anyhow!("Bit download link is not a valid URL: {e}"))?;
+    egress
+        .check_url(&parsed)
+        .map_err(|refused| flow_like_types::anyhow!("Bit download link refused: {refused}"))?;
+    let client = media_links::guarded_client(
+        egress,
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60 * 60 * 2))
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .pool_max_idle_per_host(1)
+            .http2_keep_alive_interval(Some(std::time::Duration::from_secs(30)))
+            .http2_keep_alive_timeout(std::time::Duration::from_secs(60)),
+    )?;
 
     let response =
         successful_upstream_response(client.head(&url).send().await?, "HEAD").map_err(|error| {
@@ -909,6 +936,29 @@ mod tests {
             ..Bit::default()
         }
         .into()
+    }
+
+    #[test]
+    fn hosting_region_accepts_known_regions_and_absence_only() {
+        let with_region = |region: serde_json::Value| Bit {
+            parameters: json!({ "hosting_region": region }),
+            ..Bit::default()
+        };
+        assert!(validate_hosting_region(&Bit::default()).is_ok());
+        assert!(validate_hosting_region(&with_region(serde_json::Value::Null)).is_ok());
+        assert!(validate_hosting_region(&with_region(json!("eu"))).is_ok());
+        for rejected in [
+            json!("EU"),
+            json!("us"),
+            json!(""),
+            json!(true),
+            json!(["eu"]),
+        ] {
+            assert!(
+                validate_hosting_region(&with_region(rejected.clone())).is_err(),
+                "{rejected} must be rejected"
+            );
+        }
     }
 
     #[test]

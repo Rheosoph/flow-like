@@ -18,6 +18,9 @@ fn main() -> Result<()> {
     for proto in PROTOS {
         println!("cargo:rerun-if-changed={proto}");
     }
-    prost_build::compile_protos(PROTOS, &["protobufs/"])?;
+    // Ordered maps make identical documents encode to identical bytes.
+    prost_build::Config::new()
+        .btree_map(["."])
+        .compile_protos(PROTOS, &["protobufs/"])?;
     Ok(())
 }

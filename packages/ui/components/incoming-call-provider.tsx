@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConversationRoom } from "../hooks/use-conversation-room";
 import { useSpeechModel } from "../hooks/use-speech-model";
 import { useUserAvailability } from "../hooks/use-user-availability";
+import { adaptiveRefetchInterval } from "../lib/adaptive-polling";
 import { shouldPresentUserNotification } from "../lib/availability-notifications";
 import { offersCalls } from "../lib/realtime/call-listening";
 import { deriveLiveCall } from "../lib/realtime/conversation-call";
@@ -46,6 +47,16 @@ interface IncomingCallProviderProps {
 	userId: string;
 }
 
+/**
+ * A call notification also arrives as a realtime invalidation of this query; the poll is the
+ * net for a lost one, and the only way in while no push connection is live.
+ */
+const INCOMING_CALL_POLL = adaptiveRefetchInterval({
+	baseMs: 10_000,
+	liveBaseMs: 30_000,
+	requireLive: true,
+});
+
 /** Mounted with the account shell so calls can reach readers outside their conversation. */
 export function IncomingCallProvider({
 	enabled = true,
@@ -82,7 +93,7 @@ function IncomingCallSession({
 		],
 		queryFn: () => backend.userState.listNotifications(false, "SYSTEM", 0, 50),
 		enabled: Boolean(backend.inboxState),
-		refetchInterval: 10_000,
+		refetchInterval: INCOMING_CALL_POLL,
 		refetchIntervalInBackground: true,
 	});
 	useEffect(() => {

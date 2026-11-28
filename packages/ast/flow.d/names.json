@@ -2798,6 +2798,15 @@
     "class": "bool",
     "category": "Utils/Bool"
   },
+  "bots_ask_bot": {
+    "qualified": "bots::askBot",
+    "namespace": "bots",
+    "alias": "askBot",
+    "flat": "botsAskBot",
+    "receiver": null,
+    "class": null,
+    "category": "Bots"
+  },
   "browser_attach": {
     "qualified": "browser::attach",
     "namespace": "browser",
@@ -5741,6 +5750,15 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_get_contributor_stats": {
+    "qualified": "github::getContributorStats",
+    "namespace": "github",
+    "alias": "getContributorStats",
+    "flat": "dataGithubGetContributorStats",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub"
+  },
   "data_github_get_file_contents": {
     "qualified": "github::getFileContents",
     "namespace": "github",
@@ -5822,11 +5840,29 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_list_code_scanning_alerts": {
+    "qualified": "github::listCodeScanningAlerts",
+    "namespace": "github",
+    "alias": "listCodeScanningAlerts",
+    "flat": "dataGithubListCodeScanningAlerts",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub"
+  },
   "data_github_list_commits": {
     "qualified": "github::listCommits",
     "namespace": "github",
     "alias": "listCommits",
     "flat": "dataGithubListCommits",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub"
+  },
+  "data_github_list_dependabot_alerts": {
+    "qualified": "github::listDependabotAlerts",
+    "namespace": "github",
+    "alias": "listDependabotAlerts",
+    "flat": "dataGithubListDependabotAlerts",
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
@@ -5939,6 +5975,15 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_list_secret_scanning_alerts": {
+    "qualified": "github::listSecretScanningAlerts",
+    "namespace": "github",
+    "alias": "listSecretScanningAlerts",
+    "flat": "dataGithubListSecretScanningAlerts",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub"
+  },
   "data_github_local_diff": {
     "qualified": "github::diffRepository",
     "namespace": "github",
@@ -5998,6 +6043,15 @@
     "namespace": "github",
     "alias": "providerApp",
     "flat": "dataGithubProviderApp",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub"
+  },
+  "data_github_provider_app_key": {
+    "qualified": "github::providerAppKey",
+    "namespace": "github",
+    "alias": "providerAppKey",
+    "flat": "dataGithubProviderAppKey",
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
@@ -8846,6 +8900,15 @@
     "class": "Attachment",
     "category": "Events/Chat/Attachments"
   },
+  "events_chat_clear_main_widget": {
+    "qualified": "chat::clearMainWidget",
+    "namespace": "chat",
+    "alias": "clearMainWidget",
+    "flat": "eventsChatClearMainWidget",
+    "receiver": null,
+    "class": null,
+    "category": "Events/Chat"
+  },
   "events_chat_push_attachment": {
     "qualified": "chat::pushAttachment",
     "namespace": "chat",
@@ -8977,6 +9040,15 @@
     "namespace": "chat",
     "alias": "removeStep",
     "flat": "eventsChatRemoveStep",
+    "receiver": null,
+    "class": null,
+    "category": "Events/Chat"
+  },
+  "events_chat_set_main_widget": {
+    "qualified": "chat::setMainWidget",
+    "namespace": "chat",
+    "alias": "setMainWidget",
+    "flat": "eventsChatSetMainWidget",
     "receiver": null,
     "class": null,
     "category": "Events/Chat"
@@ -16595,6 +16667,15 @@
     "class": "FlowPath",
     "category": "Data/Files/Path"
   },
+  "path_search_files": {
+    "qualified": "files::searchFiles",
+    "namespace": "files",
+    "alias": "searchFiles",
+    "flat": "pathSearchFiles",
+    "receiver": "directory",
+    "class": "FlowPath",
+    "category": "Data/Files/Operations"
+  },
   "path_virtual_dir": {
     "qualified": "files::virtualDir",
     "namespace": "files",
@@ -19295,6 +19376,15 @@
     "class": null,
     "category": "Utils/Types"
   },
+  "utils_types_is_null": {
+    "qualified": "types::isNull",
+    "namespace": "types",
+    "alias": "isNull",
+    "flat": "utilsTypesIsNull",
+    "receiver": "value",
+    "class": null,
+    "category": "Utils/Types"
+  },
   "utils_types_select": {
     "qualified": "types::select",
     "namespace": "types",
@@ -19564,6 +19654,15 @@
     "receiver": "database",
     "class": "NodeDBConnection",
     "category": "Data/Database/Search"
+  },
+  "verify_webhook_signature": {
+    "qualified": "auth::verifyWebhookSignature",
+    "namespace": "auth",
+    "alias": "verifyWebhookSignature",
+    "flat": "verifyWebhookSignature",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Auth"
   },
   "video_add_subtitle_track": {
     "qualified": "video::addSubtitleTrack",

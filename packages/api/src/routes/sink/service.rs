@@ -787,14 +787,17 @@ fn cron_schedule_needs_rebuild(
     new_scheduled_for.is_some()
 }
 
-/// Delete a sink and its external scheduler
+/// Delete the sink of an event of `app_id` and its external scheduler. A sink of the same event
+/// id under another app is left alone.
 pub async fn delete_sink(
     db: &DatabaseConnection,
     state: &AppState,
+    app_id: &str,
     event_id: &str,
 ) -> flow_like_types::Result<()> {
     let sink = event_sink::Entity::find()
         .filter(event_sink::Column::EventId.eq(event_id))
+        .filter(event_sink::Column::AppId.eq(app_id))
         .one(db)
         .await?;
 

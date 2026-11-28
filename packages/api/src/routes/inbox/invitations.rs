@@ -58,6 +58,8 @@ pub(crate) struct Invitee {
     pub principal: Principal,
     pub mode: InviteMode,
     pub owner_id: Option<String>,
+    /// Why a bot invites them, as its owner approved it; the invitee reads it.
+    pub reason: Option<String>,
 }
 
 fn cannot_invite(principal_id: &str) -> ApiError {
@@ -65,7 +67,7 @@ fn cannot_invite(principal_id: &str) -> ApiError {
         StatusCode::FORBIDDEN,
         INBOX_MEMBER_NOT_ALLOWED,
         format!(
-            "You can't invite '{principal_id}': it is neither a person on this hub nor a live bot"
+            "You can't invite '{principal_id}': it is neither a person on this hub, nor your own live bot, nor a live bot whose owner lets others invite it"
         ),
     )
 }
@@ -109,9 +111,10 @@ async fn known_people<C: ConnectionTrait>(
 }
 
 /// The server's rule for who `caller` may bring into a room, in the order asked: their own live
-/// bots at once; any other person on the hub, and other people's live bots, by invitation, which
-/// the person (or the bot's owner) accepts or declines. The first id that is neither a known
-/// person nor a live bot fails with [`INBOX_MEMBER_NOT_ALLOWED`].
+/// bots at once; any other person on the hub, and other people's live bots whose owner lets
+/// others invite them, by invitation, which the person (or the bot's owner) accepts or declines.
+/// The first id that is none of these fails with [`INBOX_MEMBER_NOT_ALLOWED`], the same way for
+/// a hidden bot as for an unknown id.
 pub(crate) async fn classify<C: ConnectionTrait>(
     db: &C,
     caller: &str,
@@ -120,16 +123,18 @@ pub(crate) async fn classify<C: ConnectionTrait>(
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
-    let bots: HashMap<String, String> = bot::Entity::find()
+    let bots: HashMap<String, (String, bool)> = bot::Entity::find()
         .select_only()
         .column(bot::Column::Id)
         .column(bot::Column::OwnerId)
+        .column(bot::Column::OthersCanInvite)
         .filter(bot::Column::Id.is_in(candidates.iter().cloned()))
         .filter(bot::Column::DeletedAt.is_null())
-        .into_tuple::<(String, String)>()
+        .into_tuple::<(String, String, Option<bool>)>()
         .all(db)
         .await?
         .into_iter()
+        .map(|(id, owner, open)| (id, (owner, open.unwrap_or(false))))
         .collect();
     let people: Vec<String> = candidates
         .iter()
@@ -140,18 +145,19 @@ pub(crate) async fn classify<C: ConnectionTrait>(
     candidates
         .iter()
         .map(|id| match bots.get(id) {
-            Some(owner) if owner == caller => Ok(invitee(
+            Some((owner, _)) if owner == caller => Ok(invitee(
                 id,
                 PrincipalKind::Bot,
                 InviteMode::AddNow,
                 Some(owner),
             )),
-            Some(owner) => Ok(invitee(
+            Some((owner, true)) => Ok(invitee(
                 id,
                 PrincipalKind::Bot,
                 InviteMode::Invite,
                 Some(owner),
             )),
+            Some((_, false)) => Err(cannot_invite(id)),
             None if known.contains(id) => {
                 Ok(invitee(id, PrincipalKind::User, InviteMode::Invite, None))
             }
@@ -168,10 +174,11 @@ fn invitee(id: &str, kind: PrincipalKind, mode: InviteMode, owner: Option<&Strin
         },
         mode,
         owner_id: owner.cloned(),
+        reason: None,
     }
 }
 
-fn validate_limits(limits: &BotRoomLimits) -> Result<(), ApiError> {
+pub(crate) fn validate_limits(limits: &BotRoomLimits) -> Result<(), ApiError> {
     if limits.mask.is_some_and(|mask| mask < 0) {
         return Err(ApiError::bad_request(
             "Room limits: the permission mask can't be negative",
@@ -200,6 +207,7 @@ pub(super) fn pending_row(
     conversation_id: &str,
     principal: &Principal,
     inviter: &str,
+    reason: Option<&str>,
     now: DateTime<FixedOffset>,
 ) -> conversation_member::ActiveModel {
     conversation_member::ActiveModel {
@@ -215,10 +223,13 @@ pub(super) fn pending_row(
         invited_by: Set(Some(inviter.to_string())),
         invited_at: Set(Some(now)),
         accepted_at: Set(None),
+        invite_reason: Set(reason.map(str::to_string)),
         hidden_at: Set(None),
         cleared_at: Set(None),
         cleared_legacy_at: Set(None),
         cleared_seq: Set(None),
+        unread_count: Set(None),
+        last_entry_id: Set(None),
     }
 }
 
@@ -230,7 +241,7 @@ pub(crate) struct InviteOutcome {
     pub wake: Vec<String>,
 }
 
-async fn set_member_limits<C: ConnectionTrait>(
+pub(super) async fn set_member_limits<C: ConnectionTrait>(
     txn: &C,
     conversation_id: &str,
     bot_id: &str,
@@ -347,11 +358,15 @@ pub(crate) async fn invite_in<C: ConnectionTrait>(
             ),
         ));
     }
-    conversation_member::Entity::insert_many(
-        asked
-            .iter()
-            .map(|invitee| pending_row(conversation_id, &invitee.principal, inviter, now)),
-    )
+    conversation_member::Entity::insert_many(asked.iter().map(|invitee| {
+        pending_row(
+            conversation_id,
+            &invitee.principal,
+            inviter,
+            invitee.reason.as_deref(),
+            now,
+        )
+    }))
     .on_conflict(
         OnConflict::columns([
             conversation_member::Column::ConversationId,
@@ -367,6 +382,9 @@ pub(crate) async fn invite_in<C: ConnectionTrait>(
             conversation_member::Column::InvitedBy,
             conversation_member::Column::InvitedAt,
             conversation_member::Column::AcceptedAt,
+            conversation_member::Column::InviteReason,
+            conversation_member::Column::UnreadCount,
+            conversation_member::Column::LastEntryId,
         ])
         .to_owned(),
     )
@@ -606,6 +624,8 @@ pub struct Invitation {
     pub bot_name: Option<String>,
     pub invited_by: Option<String>,
     pub invited_at: Option<DateTime<FixedOffset>>,
+    /// Why a bot invited you, in its words as its owner approved them.
+    pub reason: Option<String>,
     /// `direct` for a message request, `group` for a room invitation.
     pub conversation_kind: String,
     /// A request's messages held for you: how many, and the newest few.
@@ -718,6 +738,7 @@ pub(crate) async fn invitations_for<C: ConnectionTrait>(
                 principal_id: row.principal_id,
                 invited_by: row.invited_by,
                 invited_at: row.invited_at,
+                reason: row.invite_reason,
             }
         })
         .collect())
@@ -780,8 +801,9 @@ async fn bot_page<C: ConnectionTrait>(
 }
 
 /// Who `caller` likely brings into a room, filtered by `q`: their own bots, the people they share
-/// an app with and those people's bots. [`classify`] accepts every entry, and anyone else on the
-/// hub too, whom clients find through the user directory.
+/// an app with and those people's bots whose owner lets others invite them; other bots stay
+/// unlisted. [`classify`] accepts every entry, and anyone else on the hub too, whom clients find
+/// through the user directory.
 pub(crate) async fn invitable<C: ConnectionTrait>(
     db: &C,
     caller: &str,
@@ -797,7 +819,9 @@ pub(crate) async fn invitable<C: ConnectionTrait>(
     .await?;
     let shared = bot_page(
         db,
-        Condition::all().add(bot::Column::OwnerId.in_subquery(co_members(caller))),
+        Condition::all()
+            .add(bot::Column::OwnerId.in_subquery(co_members(caller)))
+            .add(bot::Column::OthersCanInvite.eq(true)),
         needle,
     )
     .await?;
@@ -918,7 +942,7 @@ async fn display_name(state: &AppState, principal_id: &str) -> String {
     }
 }
 
-async fn person_name(state: &AppState, user_id: &str) -> String {
+pub(crate) async fn person_name(state: &AppState, user_id: &str) -> String {
     user::Entity::find_by_id(user_id)
         .select_only()
         .column(user::Column::Name)
@@ -934,8 +958,9 @@ async fn person_name(state: &AppState, user_id: &str) -> String {
         .unwrap_or_else(|| "Someone".to_string())
 }
 
-/// Tells each invitee, or the owner of an invited bot, through the notification pipeline.
-/// Failures are logged: an invitation stands without its notice.
+/// Tells each invitee, or the owner of an invited bot, through the notification pipeline, with
+/// the inviting bot's reason when there is one. Failures are logged: an invitation stands without
+/// its notice.
 pub(crate) async fn notify_invited(
     state: &AppState,
     inviter: &str,
@@ -996,7 +1021,12 @@ pub(crate) async fn notify_invited(
                 user_id,
                 app_id: None,
                 title,
-                description: Some("Accept or decline in your invitations.".to_string()),
+                description: Some(
+                    invitee
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| "Accept or decline in your invitations.".to_string()),
+                ),
                 icon: Some("users".to_string()),
                 image: None,
                 link: Some("/chat?invitations=1".to_string()),
@@ -1356,7 +1386,7 @@ pub async fn set_limits(
     tag = "Inbox",
     params(InvitableQuery),
     responses(
-        (status = 200, description = "Suggestions for who to bring into a room, at most 50 of each: your own bots join at once (`add_now`), people who share an app with you and their bots by invitation (`invite`). Anyone else on the hub can be invited too; find them through the user search.", body = InvitableList),
+        (status = 200, description = "Suggestions for who to bring into a room, at most 50 of each: your own bots join at once (`add_now`), people who share an app with you, and those of their bots they let others invite, by invitation (`invite`). Anyone else on the hub can be invited too; find them through the user search.", body = InvitableList),
         (status = 401, description = "Not signed in"),
         (status = 403, description = "Only people use the picker, not API keys or running flows")
     ),

@@ -3,14 +3,24 @@ import DatabaseIcon from "lucide-react/dist/esm/icons/database.js";
 import FoldVerticalIcon from "lucide-react/dist/esm/icons/fold-vertical.js";
 import type { UsageEfficiency } from "./usage-efficiency";
 
-const number = (value: number) => Math.round(value).toLocaleString();
-const percent = (value: number) => `${Math.round(value * 100)}%`;
-const duration = (value: number) =>
-	value < 1_000 ? `${Math.round(value)} ms` : `${(value / 1_000).toFixed(1)} s`;
 const bounded = (value: number) => Math.min(100, Math.max(0, value));
 
 export function UsageEfficiencyPanel({ data }: { data: UsageEfficiency }) {
-	const { t } = useTranslation("chat");
+	const { t, i18n } = useTranslation("chat");
+	const locale = i18n.resolvedLanguage ?? i18n.language;
+	const number = (value: number) => Math.round(value).toLocaleString(locale);
+	const percent = (value: number) =>
+		value.toLocaleString(locale, {
+			style: "percent",
+			maximumFractionDigits: 0,
+		});
+	const duration = (value: number) =>
+		value < 1_000
+			? `${number(value)} ms`
+			: `${(value / 1_000).toLocaleString(locale, {
+					minimumFractionDigits: 1,
+					maximumFractionDigits: 1,
+				})} s`;
 	const unknown = t("usageEfficiency.notReported", "Not reported");
 	const readShare = data.cacheShare;
 	const context = data.context;
@@ -25,6 +35,8 @@ export function UsageEfficiencyPanel({ data }: { data: UsageEfficiency }) {
 		if (status === "reused") return t("usageEfficiency.reused", "Reused");
 		if (status === "stale") return t("usageEfficiency.stale", "Superseded");
 		if (status === "busy") return t("usageEfficiency.deferred", "Deferred");
+		if (status === "skipped")
+			return t("usageEfficiency.skipped", "Nothing to compact");
 		return t("usageEfficiency.pending", "Pending");
 	};
 	const triggerLabel = (trigger: string) => {
@@ -36,6 +48,8 @@ export function UsageEfficiencyPanel({ data }: { data: UsageEfficiency }) {
 			return t("usageEfficiency.requested", "Requested");
 		if (trigger === "reused" || trigger === "reuse" || trigger === "carry")
 			return t("usageEfficiency.previousTurn", "Previous turn");
+		if (trigger === "fallback")
+			return t("usageEfficiency.withoutModel", "Without a model");
 		return t("usageEfficiency.contextLimit", "Context threshold");
 	};
 
@@ -244,6 +258,13 @@ export function UsageEfficiencyPanel({ data }: { data: UsageEfficiency }) {
 											{statusLabel(event.status)}
 										</span>
 									</div>
+									{event.status === "failed" && event.error && (
+										<p className="text-[11px] text-muted-foreground">
+											{t("usageEfficiency.failureCode", "Reason: {{code}}", {
+												code: event.error,
+											})}
+										</p>
+									)}
 									<div className="flex flex-wrap items-baseline justify-between gap-2">
 										<span className="text-sm tabular-nums">
 											{number(event.before_tokens)}{" "}

@@ -497,7 +497,10 @@ pub fn fingerprint(public_key: &[u8]) -> String {
 
 pub fn key_id_of(public_key: &[u8]) -> String {
     let digest = Sha256::digest(public_key);
-    let hex: String = digest[..8].iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex: String = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     format!("ik_{hex}")
 }
 
@@ -569,7 +572,9 @@ impl InboxKeyring {
             return Ok(Vec::new());
         };
         if bytes.len() > MAX_STORED_BYTES {
-            return Err(CryptoError::InvalidInput("the stored inbox keys are damaged"));
+            return Err(CryptoError::InvalidInput(
+                "the stored inbox keys are damaged",
+            ));
         }
         let stored: StoredKeys = serde_json::from_slice(&bytes)
             .map_err(|_| CryptoError::InvalidInput("the stored inbox keys are damaged"))?;
@@ -643,12 +648,7 @@ impl InboxKeyring {
     }
 
     /// Opens an envelope sent to `owner` with whichever retained key it names.
-    pub fn open(
-        &self,
-        owner: &str,
-        scope: &Scope,
-        envelope: &Value,
-    ) -> Result<Zeroizing<Vec<u8>>> {
+    pub fn open(&self, owner: &str, scope: &Scope, envelope: &Value) -> Result<Zeroizing<Vec<u8>>> {
         open_with(&self.secrets(owner)?, scope, owner, envelope)
     }
 
@@ -780,7 +780,10 @@ mod tests {
         assert_eq!(envelopes.len(), 2);
         let for_bot = &envelopes["bot"];
         let for_person = &envelopes["person"];
-        assert_eq!(&**bot_ring.open("bot", &scope(), for_bot).unwrap(), b"hello");
+        assert_eq!(
+            &**bot_ring.open("bot", &scope(), for_bot).unwrap(),
+            b"hello"
+        );
         assert_eq!(
             &**person_ring.open("person", &scope(), for_person).unwrap(),
             b"hello"
@@ -795,9 +798,18 @@ mod tests {
         let (key, _) = ring.ensure("bot").unwrap();
         let envelope = seal(&scope(), &recipient("bot", &key), b"secret").unwrap();
         for other in [
-            Scope { conversation_id: "other", ..scope() },
-            Scope { message_id: "m2", ..scope() },
-            Scope { sender_id: "mallory", ..scope() },
+            Scope {
+                conversation_id: "other",
+                ..scope()
+            },
+            Scope {
+                message_id: "m2",
+                ..scope()
+            },
+            Scope {
+                sender_id: "mallory",
+                ..scope()
+            },
         ] {
             assert!(ring.open("bot", &other, &envelope).is_err());
         }
@@ -886,10 +898,17 @@ mod tests {
         let (phone_key, _) = phone.ensure("person").unwrap();
         let (laptop_key, _) = laptop.ensure("person").unwrap();
         stranger.ensure("person").unwrap();
-        let envelope =
-            seal_member(&scope(), &member("person", &[&phone_key, &laptop_key]), b"hi").unwrap();
+        let envelope = seal_member(
+            &scope(),
+            &member("person", &[&phone_key, &laptop_key]),
+            b"hi",
+        )
+        .unwrap();
         assert_eq!(&**phone.open("person", &scope(), &envelope).unwrap(), b"hi");
-        assert_eq!(&**laptop.open("person", &scope(), &envelope).unwrap(), b"hi");
+        assert_eq!(
+            &**laptop.open("person", &scope(), &envelope).unwrap(),
+            b"hi"
+        );
         assert!(stranger.open("person", &scope(), &envelope).is_err());
         assert_eq!(
             envelope_key_ids(&envelope),
@@ -904,9 +923,18 @@ mod tests {
         let (key, _) = ring.ensure("bot").unwrap();
         let envelope = seal_member(&scope(), &member("bot", &[&key]), b"secret").unwrap();
         for other in [
-            Scope { conversation_id: "other", ..scope() },
-            Scope { message_id: "m2", ..scope() },
-            Scope { sender_id: "mallory", ..scope() },
+            Scope {
+                conversation_id: "other",
+                ..scope()
+            },
+            Scope {
+                message_id: "m2",
+                ..scope()
+            },
+            Scope {
+                sender_id: "mallory",
+                ..scope()
+            },
         ] {
             assert!(ring.open("bot", &other, &envelope).is_err());
         }
@@ -927,7 +955,12 @@ mod tests {
         let mut names: Vec<_> = envelope.as_object().unwrap().keys().cloned().collect();
         names.sort();
         assert_eq!(names, ["ct", "enc", "keys", "v"]);
-        let mut wrapped: Vec<_> = envelope["keys"][0].as_object().unwrap().keys().cloned().collect();
+        let mut wrapped: Vec<_> = envelope["keys"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
         wrapped.sort();
         assert_eq!(wrapped, ["ck", "enc_key", "key_id"]);
     }

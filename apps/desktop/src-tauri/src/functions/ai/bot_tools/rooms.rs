@@ -34,7 +34,7 @@ fn refusal_in(error: &str) -> Option<InviteOutcome> {
 
 #[async_trait]
 impl RoomInvites for HubRooms {
-    async fn invite(&self, person: &InviteTarget) -> Result<InviteOutcome> {
+    async fn invite(&self, person: &InviteTarget, reason: &str) -> Result<InviteOutcome> {
         let path = format!(
             "bots/{}/rooms/{}/invitations",
             super::super::native_platform_tools::segment(&self.bot_id),
@@ -45,7 +45,7 @@ impl RoomInvites for HubRooms {
             .request(
                 Method::POST,
                 &path,
-                Some(&json!({ "person": person.value() })),
+                Some(&json!({ "person": person.value(), "reason": reason })),
             )
             .await
         {
@@ -117,14 +117,14 @@ mod tests {
         let (api, rooms) = rooms(Ok(json!({ "status": "invited", "name": "Ana" })));
         let target = InviteTarget::parse("@ana").unwrap();
         assert_eq!(
-            rooms.invite(&target).await.unwrap(),
+            rooms.invite(&target, "Owns the sheet").await.unwrap(),
             InviteOutcome::Invited { name: "Ana".into() }
         );
         assert_eq!(
             *api.calls.lock().unwrap(),
             [(
                 "bots/bot_1/rooms/room-1/invitations".to_string(),
-                json!({ "person": "ana" })
+                json!({ "person": "ana", "reason": "Owns the sheet" })
             )]
         );
     }
@@ -136,19 +136,19 @@ mod tests {
             "The hub returned HTTP 404 for this tool request. {NO_SUCH_PERSON_CODE}: No account has the email address 'ana@example.org'"
         )));
         assert_eq!(
-            missing.invite(&target).await.unwrap(),
+            missing.invite(&target, "x").await.unwrap(),
             InviteOutcome::NoSuchPerson
         );
         let (_, refused) = rooms(Err(format!(
             "The hub returned HTTP 409 for this tool request. {REFUSED_CODE}: they don't take invitations from this bot"
         )));
         assert_eq!(
-            refused.invite(&target).await.unwrap(),
+            refused.invite(&target, "x").await.unwrap(),
             InviteOutcome::NotInvitable {
                 why: "they don't take invitations from this bot".into()
             }
         );
         let (_, offline) = rooms(Err("The hub request could not be completed.".into()));
-        assert!(offline.invite(&target).await.is_err());
+        assert!(offline.invite(&target, "x").await.is_err());
     }
 }

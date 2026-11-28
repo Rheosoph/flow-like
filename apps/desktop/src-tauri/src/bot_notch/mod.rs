@@ -43,6 +43,13 @@ struct Inner {
     tracker_running: bool,
 }
 
+impl Inner {
+    /// In a fullscreen Space the den stays out of sight until the cursor reaches the top edge.
+    fn hides_at_edge(&self) -> bool {
+        self.layout.as_ref().is_some_and(|layout| layout.fullscreen)
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct NotchState {
     inner: Mutex<Inner>,
@@ -72,6 +79,7 @@ impl NotchState {
             hitboxes: inner.hitboxes.clone(),
             capture: inner.capture,
             proximity: inner.proximity,
+            hidden_at_edge: inner.hides_at_edge(),
         })
     }
 
@@ -275,6 +283,34 @@ fn start_watcher(app: &AppHandle, state: &Arc<NotchState>) {
     });
 }
 
+/// A Space switch changes whether the display shows a fullscreen Space. The layout is read at
+/// once and again after the switch settled, so the den hides and returns with the Space.
+#[cfg(target_os = "macos")]
+async fn watch_spaces(app: &AppHandle, state: &Arc<NotchState>) {
+    const SETTLED: Duration = Duration::from_millis(600);
+    let (handle, state) = (app.clone(), state.clone());
+    let watching = on_main(app, move || {
+        macos::watch_spaces(move || {
+            let (app, state) = (handle.clone(), state.clone());
+            tauri::async_runtime::spawn(async move {
+                for delay in [Duration::ZERO, SETTLED] {
+                    flow_like_types::tokio::time::sleep(delay).await;
+                    if !state.lock().active {
+                        return;
+                    }
+                    if let Err(error) = refresh_layout(&app, &state).await {
+                        tracing::debug!(%error, "Bot notch: layout check after a Space switch failed");
+                    }
+                }
+            });
+        });
+    })
+    .await;
+    if let Err(error) = watching {
+        tracing::warn!(%error, "Bot notch: Space switches are not watched");
+    }
+}
+
 async fn activate(app: &AppHandle) -> Result<(), String> {
     let state = state(app);
     let _guard = state.lifecycle.lock().await;
@@ -290,6 +326,8 @@ async fn activate(app: &AppHandle) -> Result<(), String> {
     overlay::ensure(app, &geometry).await?;
     state.lock().active = true;
     start_watcher(app, &state);
+    #[cfg(target_os = "macos")]
+    watch_spaces(app, &state).await;
     tracker::ensure(app, &state);
     if state.lock().wanted_visible {
         reveal(app, &state).await?;

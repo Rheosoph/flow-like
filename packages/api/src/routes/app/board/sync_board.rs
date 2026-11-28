@@ -153,10 +153,20 @@ pub(crate) async fn seed_board_revision(
     app_id: &str,
     board_id: &str,
     board: flow_like::flow::board::Board,
-    put: &flow_like::flow_like_storage::object_store::PutResult,
+    saved: &flow_like::flow::board::SavedBoard,
 ) -> Option<Arc<CachedBoard>> {
-    let cached = state.seed_board_cache(app_id, board_id, board, put)?;
-    if let Err(error) = snapshot_for_cached(state, app_id, board_id, &cached, None).await {
+    let cached = state.seed_board_cache(app_id, board_id, board, &saved.put)?;
+    let (snapshot, ()) = flow_like_types::tokio::join!(
+        snapshot_for_cached(state, app_id, board_id, &cached, None),
+        crate::routes::app::prerun_shared::prewarm_draft_revision(
+            state,
+            app_id,
+            board_id,
+            &cached,
+            &saved.source
+        ),
+    );
+    if let Err(error) = snapshot {
         tracing::warn!(
             app_id,
             board_id,

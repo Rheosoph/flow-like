@@ -16,11 +16,19 @@ With **Memory** on and an embedding model chosen, a bot remembers what matters f
 
 Every fact is tied to evidence: the message it came from and a short verbatim quote. Facts are typed as profile, preference, event, decision or knowledge, and can carry a validity period, an expiry, places on a map and where they came from (said by a person, inferred by the bot or read from external content).
 
-When the bot has just read untrusted content, such as a web page, a mail or a tool result, it can't quietly save facts from it. Saving needs your confirmation, so a crafted page can't plant false memories.
+When the bot has just read untrusted content, such as a web page, a mail or a tool result, what it saves is marked as coming from outside content, and facts about you or your preferences need your confirmation. A crafted page can't plant false memories about you.
+
+### People, places and things
+
+The bot keeps one entry for every person, place, organization, project or thing your facts are about, with every name the conversation used for it. "My sister", "Mia" and "the user's sister" become one entry once a message connects them, so a newer fact about Mia replaces an older one about "my sister". A fact can also connect two entries, for example "Mia lives in Lyon" links Mia with Lyon.
+
+Names are only joined when the conversation connects them, never because they look alike. Two entries for the same thing can be merged by you in the Memory tab. What another person in a room says about their own family stays theirs and never joins your entries.
 
 ### How recall works
 
-Before the bot answers, it searches its memory with both keywords and meaning, favors recent events and respects time cues like "last week". Outdated facts that were replaced only come back when you ask how things used to be.
+Before the bot answers, it searches its memory with both keywords and meaning, favors recent events and respects time cues like "last week". When your message names someone or something it knows, such as "my sister", it also brings the facts about that entry. Outdated facts that were replaced only come back when you ask how things used to be.
+
+The bot can also look up everything it knows about one entry and follow its connections, for example from Mia to the company she works for.
 
 ### Long histories
 
@@ -34,6 +42,7 @@ Open a bot's **Memory** tab to review what it knows:
 
 - **Timeline** lists facts by time, with search and a category filter.
 - **Map** shows facts that carry places.
+- **People & things** lists the entries the facts are about, grouped by kind. Pick one to see its facts and what it connects to, rename it, change its kind, merge it into another entry, or forget everything about it.
 - **Forget this fact** removes a single fact.
 - **Explore chat history** opens the full history.
 

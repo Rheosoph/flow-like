@@ -1,8 +1,9 @@
 use flow_like_platform::{
-    Auth, BotCapability, BotClassification, BotLocation, BotModelPolicy, BotSecretEncryption,
-    Client, ConversationEncryption, CreateBot, CreateConversation, DataClassification, Error,
-    InboxEntriesQuery, InboxEntry, InboxEntryKind, ReactionOp, RegisterInboxKey, SendInboxEntry,
-    SetBotSecret, UpdateBot, Value, json, new_inbox_message_id, plain_envelope,
+    Auth, BotCapability, BotClassification, BotLocation, BotMemoryEntityKind, BotModelPolicy,
+    BotSecretEncryption, Client, ConversationEncryption, CreateBot, CreateConversation,
+    DataClassification, Error, InboxEntriesQuery, InboxEntry, InboxEntryKind, ReactionOp,
+    RegisterInboxKey, SendInboxEntry, SetBotSecret, UpdateBot, UpdateBotMemoryEntity, Value, json,
+    new_inbox_message_id, plain_envelope,
 };
 use futures_util::{StreamExt, TryStreamExt};
 use reqwest::Url;
@@ -851,4 +852,207 @@ fn entries_expose_plain_bodies_and_text_but_not_sealed_ones() {
         serde_json::to_value(InboxEntryKind::Other("typing".into())).unwrap(),
         json!("typing")
     );
+}
+
+fn memory_fact() -> Value {
+    json!({
+        "id": "f_1",
+        "text": "Anna lives in Berlin",
+        "kind": "fact",
+        "subject": "Anna",
+        "subject_id": "e_anna",
+        "source": "chat",
+        "confidence": 0.9,
+        "recorded_at": NOW,
+        "valid_from": null,
+        "valid_to": null,
+        "superseded_by": null,
+        "evidence": [{
+            "seq": 3,
+            "message_id": "msg_1",
+            "quote": "I live in Berlin",
+            "at": NOW,
+            "speaker": { "id": "user_1", "name": "Anna" },
+        }],
+        "conversation_scope": "conv_1",
+    })
+}
+
+fn memory_entity() -> Value {
+    json!({
+        "id": "e_anna",
+        "name": "Anna",
+        "kind": "person",
+        "owner": false,
+        "aliases": ["Ann"],
+        "fact_count": 2,
+        "created_at": NOW,
+        "updated_at": NOW,
+    })
+}
+
+#[tokio::test]
+async fn memory_facts_are_listed_and_forgotten() {
+    let mut server = Server::start(vec![
+        ok(json!({ "facts": [memory_fact()] })),
+        ok(json!({ "facts": [] })),
+        ok(memory_fact()),
+        ok(json!({ "status": "ok" })),
+    ])
+    .await;
+    let client = server.client();
+
+    let facts = client.list_bot_memory_facts("bot_1", false).await.unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].evidence[0].quote, "I live in Berlin");
+    assert_eq!(
+        facts[0].evidence[0]
+            .speaker
+            .as_ref()
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("Anna")
+    );
+    assert_eq!(facts[0].conversation_scope.as_deref(), Some("conv_1"));
+    assert_eq!(facts[0].superseded_by, None);
+    let request = server.take().await;
+    assert_eq!(request.route(), ("GET", "/api/v1/bots/bot_1/memory/facts"));
+    assert!(request.query.is_empty());
+    assert_eq!(request.headers["authorization"], "pat_owner");
+
+    client.list_bot_memory_facts("bot_1", true).await.unwrap();
+    assert_eq!(server.take().await.query["include_superseded"], "true");
+
+    let forgotten = client.forget_bot_memory_fact("bot/1", "f 1").await.unwrap();
+    assert_eq!(forgotten.id, "f_1");
+    assert_eq!(
+        server.take().await.route(),
+        ("DELETE", "/api/v1/bots/bot%2F1/memory/facts/f%201")
+    );
+
+    client.reset_bot_memory("bot_1").await.unwrap();
+    assert_eq!(
+        server.take().await.route(),
+        ("DELETE", "/api/v1/bots/bot_1/memory")
+    );
+}
+
+#[tokio::test]
+async fn memory_entities_are_listed_updated_merged_and_forgotten_in_their_scope() {
+    let mut server = Server::start(vec![
+        ok(json!({ "entities": [memory_entity()] })),
+        ok(memory_entity()),
+        ok(memory_entity()),
+        ok(memory_entity()),
+        ok(json!({ "forgotten": [memory_fact()] })),
+    ])
+    .await;
+    let client = server.client();
+
+    let entities = client.list_bot_memory_entities("bot_1").await.unwrap();
+    assert_eq!(entities[0].kind, BotMemoryEntityKind::Person);
+    assert_eq!(entities[0].aliases, ["Ann"]);
+    assert_eq!(entities[0].fact_count, 2);
+    assert_eq!(
+        server.take().await.route(),
+        ("GET", "/api/v1/bots/bot_1/memory/entities")
+    );
+
+    client
+        .update_bot_memory_entity(
+            "bot_1",
+            "e_anna",
+            &UpdateBotMemoryEntity {
+                name: Some("Anna B.".into()),
+                ..UpdateBotMemoryEntity::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let request = server.take().await;
+    assert_eq!(
+        request.route(),
+        ("PATCH", "/api/v1/bots/bot_1/memory/entities/e_anna")
+    );
+    assert!(request.query.is_empty());
+    assert_eq!(request.body, Some(json!({ "name": "Anna B." })));
+
+    client
+        .update_bot_memory_entity(
+            "bot_1",
+            "e_anna",
+            &UpdateBotMemoryEntity {
+                kind: Some(BotMemoryEntityKind::Organization),
+                ..UpdateBotMemoryEntity::default()
+            },
+            Some("room/1 a&b"),
+        )
+        .await
+        .unwrap();
+    let request = server.take().await;
+    assert_eq!(request.query["scope"], "room/1 a&b");
+    assert_eq!(request.body, Some(json!({ "kind": "organization" })));
+
+    client
+        .merge_bot_memory_entity("bot_1", "e_ann", "e_anna", Some("conv_1"))
+        .await
+        .unwrap();
+    let request = server.take().await;
+    assert_eq!(
+        request.route(),
+        ("POST", "/api/v1/bots/bot_1/memory/entities/e_ann/merge")
+    );
+    assert_eq!(request.query["scope"], "conv_1");
+    assert_eq!(request.body, Some(json!({ "into": "e_anna" })));
+
+    let forgotten = client
+        .forget_bot_memory_entity("bot_1", "e_anna", Some("conv_1"))
+        .await
+        .unwrap();
+    assert_eq!(forgotten.len(), 1);
+    let request = server.take().await;
+    assert_eq!(
+        request.route(),
+        ("DELETE", "/api/v1/bots/bot_1/memory/entities/e_anna")
+    );
+    assert_eq!(request.query["scope"], "conv_1");
+}
+
+#[tokio::test]
+async fn memory_busy_refused_and_missing_surface_as_api_errors() {
+    let mut server = Server::start(vec![
+        failure(409, "MEMORY_BUSY", "Memory is busy"),
+        failure(400, "BAD_REQUEST", "Owner entity"),
+        failure(404, "NOT_FOUND", "No such entity"),
+    ])
+    .await;
+    let client = server.client();
+
+    let busy = client.reset_bot_memory("bot_1").await.unwrap_err();
+    let Error::Api { status, body, .. } = &busy else {
+        panic!("expected an API error, got {busy:?}");
+    };
+    assert_eq!(*status, 409);
+    assert_eq!(body["error"]["code"], "MEMORY_BUSY");
+    let refused = client
+        .merge_bot_memory_entity("bot_1", "e_user", "e_anna", None)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.status(), Some(400));
+    assert!(
+        client
+            .forget_bot_memory_entity("bot_1", "e_nobody", None)
+            .await
+            .unwrap_err()
+            .is_not_found()
+    );
+    for _ in 0..3 {
+        server.take().await;
+    }
+    assert!(matches!(
+        client.forget_bot_memory_fact("bot_1", "..").await,
+        Err(Error::Configuration(_))
+    ));
 }

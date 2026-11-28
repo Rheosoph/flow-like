@@ -1,6 +1,5 @@
-use crate::{bit::BitPack, state::FlowLikeState};
+use crate::{bit::BitPack, state::FlowLikeState, utils::http::HTTPClient};
 use flow_like_storage::files::store::FlowLikeStore;
-use flow_like_types::reqwest;
 use flow_like_types::tokio::{fs as async_fs, time};
 use flow_like_types::{Result, anyhow};
 use std::{sync::Arc, time::Duration};
@@ -62,7 +61,7 @@ async fn should_refresh_pack(pack: &BitPack, app_state: &Arc<FlowLikeState>) -> 
         return Ok(false);
     };
 
-    let client = app_state.http_client.client();
+    let http_client = &app_state.http_client;
     let timeout = Duration::from_millis(1200);
 
     for bit in &pack.bits {
@@ -82,7 +81,7 @@ async fn should_refresh_pack(pack: &BitPack, app_state: &Arc<FlowLikeState>) -> 
             .map(|meta| meta.len())
             .unwrap_or(0);
 
-        let remote_size = match quick_remote_size(&client, download_link, timeout).await? {
+        let remote_size = match quick_remote_size(http_client, download_link, timeout).await? {
             Some(size) => size,
             None => return Ok(false),
         };
@@ -96,11 +95,14 @@ async fn should_refresh_pack(pack: &BitPack, app_state: &Arc<FlowLikeState>) -> 
 }
 
 async fn quick_remote_size(
-    client: &reqwest::Client,
+    http_client: &HTTPClient,
     url: &str,
     timeout: Duration,
 ) -> Result<Option<u64>> {
-    let response = match time::timeout(timeout, client.head(url).send()).await {
+    let Ok(request) = http_client.client().head(url).build() else {
+        return Ok(None);
+    };
+    let response = match time::timeout(timeout, http_client.execute(request)).await {
         Ok(Ok(response)) => response,
         Ok(Err(_)) => return Ok(None),
         Err(_) => return Ok(None),

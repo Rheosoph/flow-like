@@ -9,7 +9,9 @@ use flow_like_types::Result;
 use crate::facts::{Fact, FactKind};
 use crate::model::FactSource;
 use crate::store::{FactFilter, FactQuery, MemoryStores};
-use crate::text::{escape_angles, estimate_tokens, format_day, one_line, truncate_chars, truncate_to_tokens};
+use crate::text::{
+    escape_angles, estimate_tokens, format_day, one_line, truncate_chars, truncate_to_tokens,
+};
 use crate::tools::ToolOutput;
 
 #[derive(Default)]

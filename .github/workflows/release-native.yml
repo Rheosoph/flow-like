@@ -30,6 +30,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   CARGO_INCREMENTAL: 0
@@ -42,6 +43,11 @@ jobs:
     env:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      AZURE_CLIENT_ID: ${{ vars.WINDOWS_SIGNING_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.WINDOWS_SIGNING_TENANT_ID }}
+      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ vars.WINDOWS_SIGNING_ACCOUNT_NAME }}
+      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_PROFILE_NAME }}
     steps:
       - name: Free Disk Space (Ubuntu)
         if: runner.os == 'Linux' && !startsWith(inputs.platform, 'namespace-profile-')
@@ -76,6 +82,23 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 1
+
+      - name: Set up .NET for Windows signing
+        if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Test Windows signing failure handling
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/tests/windows-signing.test.ps1
+
+      - name: Configure Windows signing
+        if: runner.os == 'Windows'
+        id: windows-signing
+        shell: pwsh
+        run: ./.github/scripts/setup-windows-signing.ps1
 
       - name: Download frontend
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -425,7 +448,7 @@ jobs:
           includeUpdaterJson: false
           projectPath: "./apps/desktop"
           tauriScript: "bun tauri"
-          args: ${{ inputs.args }}
+          args: ${{ inputs.args }} ${{ steps.windows-signing.outputs.args }}
 
       - name: Retry upload on failure
         if: steps.build_release.outcome == 'failure'
@@ -444,6 +467,30 @@ jobs:
         shell: bash
         run: |
           echo "::warning::Tauri's initial release upload failed, but all built installer assets were recovered and verified by digest."
+
+      - name: Verify Windows installer signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_BUNDLE_DIR: ${{ inputs.release_bundle_dir }}
+        run: |
+          if (Test-Path -LiteralPath $env:FLOW_LIKE_WINDOWS_SIGNING_FAILURE_FILE) {
+            throw 'A Windows signing operation failed. Refusing to finalize this release.'
+          }
+          foreach ($bundle in @(@{ Folder = 'msi'; Filter = '*.msi' }, @{ Folder = 'nsis'; Filter = '*.exe' })) {
+            $folder = Join-Path $env:RELEASE_BUNDLE_DIR $bundle.Folder
+            $installers = @(Get-ChildItem -LiteralPath $folder -Filter $bundle.Filter -File)
+            if ($installers.Count -eq 0) {
+              throw "No Windows installer found in $folder"
+            }
+            foreach ($installer in $installers) {
+              $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
+              if ($signature.Status -ne 'Valid' -or $null -eq $signature.TimeStamperCertificate) {
+                throw "Invalid or missing timestamped Windows signature: $($installer.FullName)"
+              }
+              Write-Host "Verified $($installer.Name): $($signature.SignerCertificate.Subject)"
+            }
+          }
 
       # These run after the upload because tauri-action builds and publishes in
       # one step. A failure keeps the release as a draft and blocks the updater

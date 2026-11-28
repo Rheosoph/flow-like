@@ -5,12 +5,15 @@ use axum::{
 
 use crate::{
     error::ApiError,
-    middleware::jwt::AppUser,
+    middleware::jwt::{AppPermissionResponse, AppUser},
+    query::{self, LanceRead},
     routes::app::db::{ScopeParams, resolve_connection, resolve_write_connection},
     state::AppState,
 };
+use flow_like_query::{Operation, graph::GraphOperation};
 use flow_like_storage::databases::graph::lancegraph::{self, GraphOverlayDef};
 use flow_like_storage::lancedb::Connection;
+use serde::de::DeserializeOwned;
 
 pub mod actions;
 pub mod analytics;
@@ -36,6 +39,9 @@ pub mod upsert_edges;
 pub mod upsert_nodes;
 pub mod validate;
 
+/// Most rows one label sample previews.
+pub(crate) const MAX_SAMPLE_ROWS: usize = 500;
+
 /// Resolves the scoped connection and loads the overlay, mapping a missing
 /// overlay to 404 and enforcing the `exposed` contract for connected apps on
 /// every query surface — not just actions.
@@ -56,6 +62,45 @@ pub(crate) async fn load_scoped_overlay(
         ));
     }
     Ok((connection, overlay))
+}
+
+/// Runs the graph read `build` makes from the overlay on the query service. The caller passed
+/// its read check; the overlay loads through [`load_scoped_overlay`], and the service reads with
+/// the columns `permission` may see in the database `scope` names.
+pub(crate) async fn read_overlay<T: DeserializeOwned>(
+    state: &AppState,
+    user: &AppUser,
+    permission: &AppPermissionResponse,
+    app_id: &str,
+    overlay_id: &str,
+    scope: &ScopeParams,
+    build: impl FnOnce(GraphOverlayDef) -> GraphOperation,
+) -> Result<T, ApiError> {
+    let (_, overlay) = load_scoped_overlay(state, user, app_id, overlay_id, scope).await?;
+    let read = LanceRead::scoped(user, permission, app_id, scope)?;
+    read_graph(state, user, &read, build(overlay)).await
+}
+
+/// One graph read on the query service against the database `read` names, answered as the
+/// result type its route returns.
+pub(crate) async fn read_graph<T: DeserializeOwned>(
+    state: &AppState,
+    user: &AppUser,
+    read: &LanceRead,
+    operation: GraphOperation,
+) -> Result<T, ApiError> {
+    let source = state.query.lance_source(state, read, None).await?;
+    let request = query::request(
+        vec![source],
+        operation.row_limit(),
+        Operation::Graph { graph: operation },
+    );
+    let response = state.query.run(&query::subject(user), &request).await?;
+    serde_json::from_value(query::json_answer(response)?).map_err(|error| {
+        ApiError::bad_gateway(format!(
+            "The query service sent an unexpected graph result: {error}"
+        ))
+    })
 }
 
 /// Write-capable counterpart to [`load_scoped_overlay`]. This is deliberately

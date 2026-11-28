@@ -16,10 +16,11 @@ import {
 	SelectValue,
 	Switch,
 	Textarea,
-	cn,
 } from "@flow-like/flow-like-ui";
+import { typeToColor } from "@flow-like/flow-like-ui/components/flow/utils";
 import type { IBit } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
 import type { WasmPinDefinition } from "@flow-like/flow-like-ui/lib/schema/developer";
+import type { IVariableType } from "@flow-like/flow-like-ui/lib/schema/flow/variable";
 import { useTranslation } from "@flow-like/locales";
 import { ChevronRight, Code2, Minus, Plus } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
@@ -88,7 +89,7 @@ function ModelBitInput({
 					</p>
 				</div>
 			) : (
-				<p className="text-xs text-amber-600">
+				<p className="text-xs text-warning">
 					{t(
 						"noLlmOrVlmBitsAreAvailableInTheCurrentProfile",
 						"No LLM or VLM bits are available in the current profile.",
@@ -607,24 +608,17 @@ export function PinInput({
 	}
 }
 
-const DATA_TYPE_TONE: Record<string, string> = {
-	String: "bg-green-500/10 text-green-700 dark:text-green-400",
-	Integer: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
-	Float: "bg-cyan-500/10 text-cyan-700 dark:text-cyan-400",
-	Boolean: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-	Struct: "bg-purple-500/10 text-purple-700 dark:text-purple-400",
-	Execution: "bg-red-500/10 text-red-700 dark:text-red-400",
-	Date: "bg-orange-500/10 text-orange-700 dark:text-orange-400",
-	PathBuf: "bg-slate-500/10 text-slate-700 dark:text-slate-400",
-	Byte: "bg-gray-500/10 text-gray-700 dark:text-gray-400",
-	Generic: "bg-pink-500/10 text-pink-700 dark:text-pink-400",
-};
-
+/** The board's own pin colours, so a type reads the same here as on the canvas. */
 export function DataTypeBadge({ dataType }: { dataType: string }) {
+	const color = typeToColor(dataType as IVariableType);
 	return (
 		<Badge
 			variant="outline"
-			className={cn("text-[10px] font-mono", DATA_TYPE_TONE[dataType])}
+			className="font-mono text-[10px]"
+			style={{
+				color,
+				backgroundColor: `color-mix(in oklch, ${color} 12%, transparent)`,
+			}}
 		>
 			{dataType}
 		</Badge>

@@ -58,7 +58,7 @@ class MatrixTests(unittest.TestCase):
                            for entry in expanded]
                 self.assertEqual(merge(records, cloud), merge(make_records(cloud), cloud))
         jobs = containers.build_matrix("all")["include"]
-        self.assertEqual(len(jobs), 51)
+        self.assertEqual(len(jobs), 56)
         self.assertEqual(sum(len(job["targets"]) for job in jobs if job["workload"] == "helpers"), 15)
 
     def test_build_matrix_cli_emits_batched_jobs(self):
@@ -69,9 +69,9 @@ class MatrixTests(unittest.TestCase):
 
     def test_matrix_covers_portable_targets_and_real_recipes(self):
         entries = containers.matrix("all")["include"]
-        self.assertEqual(len(entries), 64)
-        self.assertEqual(len({entry["id"] for entry in entries}), 64)
-        self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("aws", "gcp", "azure")], [15, 8, 9])
+        self.assertEqual(len(entries), 69)
+        self.assertEqual(len({entry["id"] for entry in entries}), 69)
+        self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("aws", "gcp", "azure")], [16, 9, 10])
         self.assertIn("gcp-api", {entry["id"] for entry in entries})
         self.assertIn("azure-api", {entry["id"] for entry in entries})
         self.assertEqual({entry["cloud"] for entry in entries if entry["workload"] == "web"}, {"docker-compose", "kubernetes"})
@@ -133,6 +133,21 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual({entry["image_suffix"] for entry in entries}, {"flow-like-aws-api-ecs"})
         self.assertEqual({entry["dockerfile"] for entry in entries}, {"apps/backend/aws/api-ecs/Dockerfile"})
 
+    def test_api_consumers_receive_serial_builds_across_clouds(self):
+        entries = {entry["id"]: entry for entry in containers.build_matrix("all")["include"]}
+        expected = {
+            "aws-api", "aws-api-ecs-amd64", "aws-api-ecs-arm64", "aws-audit-worker",
+            "azure-api", "azure-audit-worker", "gcp-api", "gcp-audit-worker",
+            *{f"docker-compose-{workload}-{arch}"
+              for workload in ("api", "audit-worker", "runtime") for arch in ("amd64", "arm64")},
+            "kubernetes-api-amd64", "kubernetes-api-arm64",
+        }
+        self.assertEqual({key for key, entry in entries.items() if entry.get("cargo_build_jobs") == 1}, expected)
+        # Serial compilation also selects the existing 8 GiB swap step.
+        workflow = (containers.REPOSITORY_ROOT / ".github/workflows/containers.yml").read_text()
+        self.assertIn("if: matrix.workload == 'web' || matrix.cargo_build_jobs == 1", workflow)
+        self.assertIn("CARGO_BUILD_JOBS=${{ matrix.cargo_build_jobs }}", workflow)
+
     def test_dedicated_audit_workers_bind_their_cloud_features(self):
         entries = {entry["id"]: entry for entry in containers.matrix("all")["include"]}
         expected = {"docker-compose-audit-worker-amd64": ("flow-like-audit-worker", "aws,azure,gcp"),
@@ -172,7 +187,7 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(policies[0], policies[1])
 
     def test_self_hosted_selectors_cover_both_native_architectures(self):
-        self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("self-hosted", "docker-compose", "kubernetes")], [32, 20, 22])
+        self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("self-hosted", "docker-compose", "kubernetes")], [34, 22, 24])
         workloads = {}
         for entry in containers.matrix("self-hosted")["include"]:
             architecture = entry["platform"].split("/")[1]
@@ -180,7 +195,7 @@ class MatrixTests(unittest.TestCase):
             expected = "flow-like-audit-worker" if entry["workload"] == "audit-worker" else f"flow-like-{entry['cloud']}-{entry['workload']}"
             self.assertEqual(entry["image_suffix"], expected)
             workloads.setdefault(entry["image_suffix"], set()).add(entry["platform"])
-        self.assertEqual(len(workloads), 16)
+        self.assertEqual(len(workloads), 17)
         self.assertTrue(all(platforms == {"linux/amd64", "linux/arm64"} for platforms in workloads.values()))
 
     def test_kubernetes_reuses_exact_compose_dependency_targets(self):
@@ -188,7 +203,7 @@ class MatrixTests(unittest.TestCase):
         kubernetes = containers.matrix("kubernetes")["include"]
         shared = {entry["id"]: entry for entry in kubernetes if entry["cloud"] == "docker-compose"}
         expected_ids = {f"docker-compose-{workload}-{architecture}"
-                        for workload in ("runtime", "compiler", "signaling", "object-store-init", "audit-worker")
+                        for workload in ("runtime", "compiler", "query", "signaling", "object-store-init", "audit-worker")
                         for architecture in ("amd64", "arm64")}
         self.assertEqual(set(shared), expected_ids)
         self.assertEqual(shared, {target_id: compose[target_id] for target_id in expected_ids})
@@ -212,14 +227,14 @@ class ManifestTests(unittest.TestCase):
 
     def test_kubernetes_manifest_requires_shared_dependencies(self):
         records = make_records("kubernetes")
-        self.assertEqual(len(merge(records, "kubernetes")["images"]), 22)
+        self.assertEqual(len(merge(records, "kubernetes")["images"]), 24)
         own_records = [entry for entry in records if entry["cloud"] == "kubernetes"]
         with self.assertRaisesRegex(ValueError, "missing image records"):
             merge(own_records, "kubernetes")
 
     def test_architectures_share_a_repository_but_not_records_or_tags(self):
         records = make_records("self-hosted")
-        self.assertEqual(len(merge(records, "self-hosted")["images"]), 32)
+        self.assertEqual(len(merge(records, "self-hosted")["images"]), 34)
         entries = {entry["id"]: entry for entry in records}
         amd64 = entries["docker-compose-api-amd64"]
         arm64 = entries["docker-compose-api-arm64"]
@@ -594,7 +609,7 @@ class PublishTests(unittest.TestCase):
         document, run, _ = self.publish(release, "refs/tags/v1.2.3")
         self.assertEqual(containers.validate_indexes(document, release), document)
         self.assertEqual(document["ref"], "refs/tags/v1.2.3")
-        self.assertEqual(len(document["images"]), 16)
+        self.assertEqual(len(document["images"]), 17)
         immutable = f"sha-{SOURCE_SHA}-run-{RUN_ID}-{RUN_ATTEMPT}"
         for image in document["images"]:
             self.assertEqual(image["kind"], "index")
@@ -611,7 +626,7 @@ class PublishTests(unittest.TestCase):
             for tag in image["tags"]:
                 self.assertIs(run.references[f"{image['repository']}:{tag}"], created)
         creates = [command for command in run.commands if command[3] == "create"]
-        self.assertEqual(len(creates), 32)
+        self.assertEqual(len(creates), 34)
         self.assertTrue(all("--prefer-index=false" not in command for command in creates[::2]))
         self.assertTrue(all("--prefer-index=false" in command and "--annotation" not in command for command in creates[1::2]))
         sources = {source for command in creates[::2] for source in command[-2:]}
@@ -620,7 +635,7 @@ class PublishTests(unittest.TestCase):
     def test_cloud_repositories_are_carbon_copied_without_annotations(self):
         release = release_manifest("aws")
         document, run, _ = self.publish(release, "refs/heads/main")
-        self.assertEqual(len(document["images"]), 14)
+        self.assertEqual(len(document["images"]), 15)
         ecs_api = self.repository("aws-api-ecs")
         records = {entry["repository"]: entry for entry in release["images"]}
         for image in document["images"]:
@@ -707,7 +722,7 @@ class PublishTests(unittest.TestCase):
         release = release_manifest("azure")
         document, run, _ = self.publish(release, "refs/heads/feature")
         self.assertTrue(all(len(image["tags"]) == 1 and not image["skipped_tags"] for image in document["images"]))
-        self.assertEqual(len([command for command in run.commands if command[3] == "create"]), 9)
+        self.assertEqual(len([command for command in run.commands if command[3] == "create"]), 10)
         self.assertNotIn(containers.VERSION_ANNOTATION, json.dumps(run.commands))
 
 

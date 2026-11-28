@@ -1,93 +1,27 @@
+//! Git backend built on libgit2 (the `git2` crate).
+//!
+//! The cloud executors have no `git` program, so no code in this module spawns a process. libgit2
+//! never runs hooks, credential helpers, `fsmonitor`, GPG programs or submodule updates, which keeps
+//! the isolation guarantees the CLI backend had to configure explicitly.
 use super::provider::GitHubProvider;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use flow_like::flow::execution::{ExecutionEnvironment, egress};
 use flow_like_types::{Result, anyhow, bail, reqwest::Url};
-use std::{
-    path::Path,
-    process::{Command, Output, Stdio},
+use git2::{
+    AutotagOption, FetchOptions, FetchPrune, ObjectType, Oid, ProxyOptions, PushOptions,
+    RemoteCallbacks, RemoteRedirect, Repository, RepositoryOpenFlags,
+    build::{CheckoutBuilder, RepoBuilder},
 };
+use std::path::Path;
 
-type Config = Vec<(String, String)>;
-
-#[cfg(windows)]
-const NULL_DEVICE: &str = "NUL";
-#[cfg(not(windows))]
-const NULL_DEVICE: &str = "/dev/null";
-
-fn command(path: &Path, args: &[&str], config: &[(String, String)]) -> Command {
-    let mut command = Command::new("git");
-    command.current_dir(path).arg("--no-pager").args(args);
-    command.stdin(Stdio::null());
-
-    // Inherited Git state must not redirect an operation to a different checkout or log tokens.
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("GIT_") {
-            command.env_remove(key);
-        }
-    }
-    command
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "")
-        .env("GIT_EDITOR", "true")
-        .env("GIT_SEQUENCE_EDITOR", "true")
-        .env("GIT_MERGE_AUTOEDIT", "no")
-        .env("GIT_CONFIG_COUNT", config.len().to_string());
-    for (index, (key, value)) in config.iter().enumerate() {
-        command
-            .env(format!("GIT_CONFIG_KEY_{index}"), key)
-            .env(format!("GIT_CONFIG_VALUE_{index}"), value);
-    }
-    command
-}
-
-fn local_config() -> Config {
-    [
-        ("core.hooksPath", NULL_DEVICE),
-        ("core.fsmonitor", "false"),
-        ("credential.helper", ""),
-        ("credential.interactive", "false"),
-        ("commit.gpgSign", "false"),
-        ("tag.gpgSign", "false"),
-        ("push.gpgSign", "false"),
-        ("submodule.recurse", "false"),
-        ("fetch.recurseSubmodules", "false"),
-        ("push.recurseSubmodules", "no"),
-    ]
-    .into_iter()
-    .map(|(key, value)| (key.into(), value.into()))
-    .collect()
-}
-
-fn execute(path: &Path, args: &[&str], config: &Config) -> Result<Output> {
-    command(path, args, config).output().map_err(|error| {
-        anyhow!("Could not execute Git: {error}. Install Git on the execution host.")
-    })
-}
-
-fn checked_output(output: Output, secrets: &[String]) -> Result<Vec<u8>> {
-    if output.status.success() {
-        return Ok(output.stdout);
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let details = [stdout.trim(), stderr.trim()]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    let detail = if details.is_empty() {
-        format!("Git exited with {}", output.status)
-    } else {
-        details.join("\n")
-    };
-    Err(anyhow!("{}", redact_secrets(&detail, secrets)))
-}
-
-pub(crate) fn run_bytes(path: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    checked_output(execute(path, args, &local_config())?, &[])
-}
-
-pub(crate) fn run(path: &Path, args: &[&str]) -> Result<String> {
-    Ok(redact(&String::from_utf8_lossy(&run_bytes(path, args)?)))
+/// Opens the repository whose working tree is exactly `path`. Parent directories are never searched
+/// and no `GIT_*` environment variable can redirect the operation to a different checkout.
+pub(crate) fn open(path: &Path) -> Result<Repository> {
+    Ok(Repository::open_ext(
+        path,
+        RepositoryOpenFlags::NO_SEARCH,
+        std::iter::empty::<&std::ffi::OsStr>(),
+    )?)
 }
 
 pub(crate) fn validate_ref(value: &str) -> Result<()> {
@@ -119,27 +53,62 @@ pub(crate) fn validate_remote(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validates a literal branch name the way `git check-ref-format --branch` does.
+pub(crate) fn validate_branch_name(name: &str) -> Result<()> {
+    validate_ref(name)?;
+    if name.contains("@{") || !git2::Branch::name_is_valid(name)? {
+        bail!("'{name}' is not a valid branch name");
+    }
+    Ok(())
+}
+
+/// Validates a tag name the way `git check-ref-format refs/tags/<name>` does.
+pub(crate) fn validate_tag_name(name: &str) -> Result<()> {
+    validate_ref(name)?;
+    if !git2::Reference::is_valid_name(&format!("refs/tags/{name}")) {
+        bail!("'{name}' is not a valid tag name");
+    }
+    Ok(())
+}
+
+pub(crate) fn short(oid: Oid) -> String {
+    oid.to_string().chars().take(7).collect()
+}
+
+/// Resolves a branch, tag, or revision expression to a commit id.
+pub(crate) fn resolve_commit(repo: &Repository, revision: &str) -> Result<Oid> {
+    validate_ref(revision)?;
+    let object = repo
+        .revparse_single(revision)
+        .map_err(|_| anyhow!("Unknown revision or path not in the working tree: {revision}"))?;
+    Ok(object.peel_to_commit()?.id())
+}
+
 pub(crate) fn ensure_repository(path: &Path) -> Result<()> {
     if !path.is_dir() || !path.join(".git").exists() {
         bail!(
             "Select a Git working tree with its .git metadata. For a stored file snapshot, clone again with Include .git enabled."
         );
     }
-    if run(path, &["rev-parse", "--is-inside-work-tree"])?.trim() != "true" {
+    let repo = open(path)?;
+    if repo.is_bare() {
         bail!("This operation requires a Git working tree; bare repositories are not supported");
     }
-    let root = run(path, &["rev-parse", "--show-toplevel"])?;
-    let root = Path::new(root.trim_end_matches(['\n', '\r'])).canonicalize()?;
+    let root = repo
+        .workdir()
+        .ok_or_else(|| anyhow!("This operation requires a Git working tree"))?
+        .canonicalize()?;
     if path.canonicalize()? != root {
         bail!("Select the repository root, not a directory inside another repository");
     }
     Ok(())
 }
 
+/// Fails while a merge, rebase, cherry-pick, revert or apply operation is unfinished or the working
+/// tree has staged, unstaged, or untracked changes.
 pub(crate) fn require_clean(path: &Path) -> Result<()> {
     ensure_repository(path)?;
-    let metadata = run(path, &["rev-parse", "--absolute-git-dir"])?;
-    let metadata = Path::new(metadata.trim_end_matches(['\n', '\r']));
+    let repo = open(path)?;
     for marker in [
         "MERGE_HEAD",
         "CHERRY_PICK_HEAD",
@@ -148,23 +117,88 @@ pub(crate) fn require_clean(path: &Path) -> Result<()> {
         "rebase-merge",
         "sequencer",
     ] {
-        if metadata.join(marker).exists() {
+        if repo.path().join(marker).exists() {
             bail!(
                 "A merge, rebase, cherry-pick, revert, or apply operation is in progress. Complete or abort it before this operation."
             );
         }
     }
-    if !run_bytes(
-        path,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-    )?
-    .is_empty()
-    {
+    if repo.state() != git2::RepositoryState::Clean {
+        bail!(
+            "A merge, rebase, cherry-pick, revert, or apply operation is in progress. Complete or abort it before this operation."
+        );
+    }
+    let mut options = git2::StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false);
+    if !repo.statuses(Some(&mut options))?.is_empty() {
         bail!(
             "The working tree has staged, unstaged, or untracked changes. Commit or stash them before this operation."
         );
     }
     Ok(())
+}
+
+/// True when `ancestor` equals `descendant` or is reachable from it.
+pub(crate) fn is_ancestor(repo: &Repository, ancestor: Oid, descendant: Oid) -> Result<bool> {
+    Ok(ancestor == descendant || repo.graph_descendant_of(descendant, ancestor)?)
+}
+
+/// Checks out `commit` without overwriting local modifications or untracked files.
+pub(crate) fn checkout_commit(repo: &Repository, commit: Oid) -> Result<()> {
+    let commit = repo.find_commit(commit)?;
+    repo.checkout_tree(commit.as_object(), Some(CheckoutBuilder::new().safe()))?;
+    Ok(())
+}
+
+/// Name of the branch HEAD points at, also when that branch has no commit yet.
+pub(crate) fn head_branch(repo: &Repository) -> Option<String> {
+    let head = repo.find_reference("HEAD").ok()?;
+    head.symbolic_target()?
+        .strip_prefix("refs/heads/")
+        .map(str::to_owned)
+}
+
+/// Moves the current branch (or a detached HEAD) forward to `target`; refuses divergent history.
+pub(crate) fn fast_forward(repo: &Repository, target: Oid) -> Result<String> {
+    let current = match repo.head() {
+        Ok(head) => head,
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => {
+            let branch = head_branch(repo).ok_or_else(|| anyhow!("HEAD is not a branch"))?;
+            checkout_commit(repo, target)?;
+            repo.reference(
+                &format!("refs/heads/{branch}"),
+                target,
+                false,
+                "fast-forward",
+            )?;
+            return Ok(format!("Fast-forward to {}\n", short(target)));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let from = current.peel_to_commit()?.id();
+    if is_ancestor(repo, target, from)? {
+        return Ok("Already up to date.\n".into());
+    }
+    if !repo.graph_descendant_of(target, from)? {
+        bail!("Not possible to fast-forward, aborting.");
+    }
+    checkout_commit(repo, target)?;
+    if current.is_branch() {
+        let name = current
+            .name()
+            .ok_or_else(|| anyhow!("The current branch name is not UTF-8"))?;
+        repo.reference(name, target, true, "fast-forward")?;
+    } else {
+        repo.set_head_detached(target)?;
+    }
+    Ok(format!(
+        "Updating {}..{}\nFast-forward\n",
+        short(from),
+        short(target)
+    ))
 }
 
 /// Removes credentials left in remote URLs by older clones.
@@ -221,9 +255,9 @@ fn provider_origin(provider: &GitHubProvider) -> Result<Url> {
     Ok(url)
 }
 
-/// Git runs as a child process the egress resolver cannot reach, so the
-/// provider origin every authenticated network command is pinned to is vetted
-/// once up front.
+/// libgit2 opens its own connections, which the egress resolver cannot see, so
+/// the provider origin every authenticated network operation is pinned to is
+/// vetted once up front.
 pub(crate) async fn ensure_origin_allowed(
     environment: ExecutionEnvironment,
     provider: &GitHubProvider,
@@ -264,181 +298,755 @@ fn validated_url(value: &str, origin: &Url, secrets: &mut Vec<String>) -> Result
     Ok(url.to_string())
 }
 
-fn destination_index(args: &[&str]) -> Result<usize> {
-    if !matches!(args.first(), Some(&"clone" | &"fetch" | &"pull" | &"push")) {
-        bail!("Authenticated Git commands must be clone, fetch, pull, or push");
-    }
-    let mut index = 1;
-    while index < args.len() {
-        let argument = args[index];
-        if argument == "--" {
-            if index + 1 < args.len() {
-                return Ok(index + 1);
-            }
-            break;
-        }
-        if !argument.starts_with('-') {
-            return Ok(index);
-        }
-        let option = argument.split('=').next().unwrap_or(argument);
-        if matches!(
-            option,
-            "--upload-pack" | "--receive-pack" | "--exec" | "-u" | "--config" | "-c"
-        ) {
-            bail!("This Git network option is not supported");
-        }
-        if !argument.contains('=')
-            && matches!(
-                option,
-                "--branch"
-                    | "-b"
-                    | "--depth"
-                    | "--deepen"
-                    | "--shallow-since"
-                    | "--shallow-exclude"
-                    | "--filter"
-                    | "--jobs"
-                    | "-j"
-            )
-        {
-            index += 1;
-        }
-        index += 1;
-    }
-    bail!("The Git network command requires an explicit repository URL or remote name");
+/// Everything a network operation needs besides the repository: the single vetted destination and
+/// the secrets that must never appear in an error message or an output.
+pub(crate) struct Prepared {
+    pub url: String,
+    header: String,
+    secrets: Vec<String>,
 }
 
-fn network_config(
-    path: &Path,
-    args: &[&str],
-    provider: &GitHubProvider,
-) -> Result<(Config, Vec<String>)> {
-    let origin = provider_origin(provider)?;
-    let destination = destination_index(args)?;
+pub(crate) struct FetchRequest<'a> {
+    pub remote: &'a str,
+    /// Empty uses the refspecs configured for the remote.
+    pub refspecs: Vec<String>,
+    pub prune: bool,
+    pub tags: bool,
+    pub depth: Option<i32>,
+}
+
+pub(crate) struct PushRequest<'a> {
+    pub remote: &'a str,
+    /// Always an explicit `refs/heads/<local>:refs/heads/<remote>` mapping.
+    pub refspec: String,
+    pub follow_tags: bool,
+}
+
+/// Transport used by the repository nodes. The production implementation pins every request to the
+/// GitHub provider's origin; tests substitute a local bare repository.
+pub(crate) trait Network {
+    fn clone_repo(
+        &self,
+        url: &str,
+        target: &Path,
+        branch: Option<&str>,
+        depth: Option<i32>,
+    ) -> Result<()>;
+    fn fetch(&self, repo: &Repository, request: &FetchRequest) -> Result<String>;
+    fn push(&self, repo: &Repository, request: &PushRequest) -> Result<String>;
+}
+
+/// Authenticated transport restricted to the provider origin.
+pub(crate) struct ProviderNetwork<'a>(pub &'a GitHubProvider);
+
+fn auth_secrets(provider: &GitHubProvider) -> (String, Vec<String>) {
     let authorization = STANDARD.encode(format!("x-access-token:{}", provider.access_token));
-    let mut secrets = vec![provider.access_token.clone(), authorization.clone()];
-    let config = local_config();
-    let settings = checked_output(
-        execute(path, &["config", "--null", "--list"], &config)?,
-        &secrets,
-    )?;
-    for setting in settings.split(|byte| *byte == 0) {
-        let key = setting
-            .split(|byte| *byte == b'\n')
-            .next()
-            .unwrap_or_default();
-        let key = String::from_utf8_lossy(key).to_ascii_lowercase();
+    let secrets = vec![provider.access_token.clone(), authorization.clone()];
+    (authorization, secrets)
+}
+
+pub(crate) fn config_values(repo: &Repository, key: &str) -> Result<Vec<String>> {
+    let config = repo.config()?;
+    let mut values = Vec::new();
+    config.multivar(key, None)?.for_each(|entry| {
+        if let Some(value) = entry.value() {
+            values.push(value.to_owned());
+        }
+    })?;
+    Ok(values)
+}
+
+/// Rejects configuration that could silently redirect an authenticated request.
+fn reject_url_rewrites(repo: &Repository) -> Result<()> {
+    let config = repo.config()?;
+    let mut rewritten = false;
+    config.entries(None)?.for_each(|entry| {
+        let key = entry.name().unwrap_or_default().to_ascii_lowercase();
         if (key.starts_with("url.")
             && (key.ends_with(".insteadof") || key.ends_with(".pushinsteadof")))
             || (key.starts_with("remote.") && key.ends_with(".vcs"))
         {
-            bail!(
-                "Authenticated Git operations do not support configured URL rewrites or remote helpers. Remove that configuration before retrying."
-            );
+            rewritten = true;
         }
+    })?;
+    if rewritten {
+        bail!(
+            "Authenticated Git operations do not support configured URL rewrites or remote helpers. Remove that configuration before retrying."
+        );
     }
-    let urls = if args[0] == "clone" {
-        vec![args[destination].to_string()]
-    } else {
-        validate_remote(args[destination])?;
-        let query = if args[0] == "push" {
-            vec!["remote", "get-url", "--push", "--all", args[destination]]
-        } else {
-            vec!["remote", "get-url", "--all", args[destination]]
-        };
-        let output = checked_output(execute(path, &query, &config)?, &secrets)?;
-        String::from_utf8_lossy(&output)
-            .lines()
-            .map(str::to_owned)
-            .collect()
+    Ok(())
+}
+
+/// Repository-level proxy settings would send the request to an address the repository controls
+/// instead of the vetted provider host; user and system level proxies stay honored.
+fn reject_repository_proxy(repo: &Repository) -> Result<()> {
+    let config = repo.config()?;
+    let Ok(local) = config.open_level(git2::ConfigLevel::Local) else {
+        return Ok(());
     };
+    let mut proxied = false;
+    local.entries(None)?.for_each(|entry| {
+        let key = entry.name().unwrap_or_default().to_ascii_lowercase();
+        if (key.starts_with("http.") && key.ends_with(".proxy") || key == "http.proxy")
+            || (key.starts_with("remote.") && key.ends_with(".proxy"))
+        {
+            proxied = true;
+        }
+    })?;
+    if proxied {
+        bail!(
+            "Authenticated Git operations do not support repository-level proxy settings. Remove http.proxy and remote.*.proxy from the repository configuration."
+        );
+    }
+    Ok(())
+}
+
+/// Validates a clone destination and prepares the credentials for it.
+pub(crate) fn prepare_clone(url: &str, provider: &GitHubProvider) -> Result<Prepared> {
+    let origin = provider_origin(provider)?;
+    let (authorization, mut secrets) = auth_secrets(provider);
+    let clean = validated_url(url, &origin, &mut secrets)?;
+    if clean != url {
+        bail!("Clone requires a normalized HTTPS URL without embedded credentials");
+    }
+    Ok(Prepared {
+        url: clean,
+        header: format!("Authorization: Basic {authorization}"),
+        secrets,
+    })
+}
+
+/// Validates every URL of a remote and prepares the credentials for it. Credentials left in legacy
+/// remote URLs are never sent: the request uses the stripped URL only.
+pub(crate) fn prepare_remote(
+    repo: &Repository,
+    remote: &str,
+    push: bool,
+    provider: &GitHubProvider,
+) -> Result<Prepared> {
+    let origin = provider_origin(provider)?;
+    validate_remote(remote)?;
+    let (authorization, mut secrets) = auth_secrets(provider);
+    reject_url_rewrites(repo)?;
+    reject_repository_proxy(repo)?;
+    let mut urls = if push {
+        config_values(repo, &format!("remote.{remote}.pushurl"))?
+    } else {
+        Vec::new()
+    };
+    if urls.is_empty() {
+        urls = config_values(repo, &format!("remote.{remote}.url"))?;
+    }
     if urls.is_empty() {
         bail!("The Git remote does not have a URL");
     }
-    let mut config = config;
-    if matches!(args[0], "fetch" | "pull") {
-        config.push(("fetch.pruneTags".into(), "false".into()));
-        config.push((
-            format!("remote.{}.pruneTags", args[destination]),
-            "false".into(),
-        ));
+    let mut clean_urls = Vec::new();
+    for url in &urls {
+        clean_urls.push(validated_url(url, &origin, &mut secrets)?);
     }
-    if args[0] == "push" {
-        if args.len() <= destination + 1 {
-            bail!("Push requires an explicit refspec");
-        }
-        config.push((
-            format!("remote.{}.mirror", args[destination]),
-            "false".into(),
-        ));
-        config.push(("push.default".into(), "nothing".into()));
-        config.push(("push.followTags".into(), "false".into()));
-        config.push(("push.autoSetupRemote".into(), "false".into()));
-    }
-    config.extend(
-        [
-            ("protocol.allow", "never"),
-            ("protocol.https.allow", "always"),
-            ("http.followRedirects", "false"),
-            ("http.sslVerify", "true"),
-            ("http.extraHeader", ""),
-        ]
-        .into_iter()
-        .map(|(key, value)| (key.to_string(), value.to_string())),
-    );
-    for url in urls {
-        let clean = validated_url(&url, &origin, &mut secrets)?;
-        if args[0] == "clone" && clean != url {
-            bail!("Clone requires a normalized HTTPS URL without embedded credentials");
-        }
-        if clean != url {
-            // Keep remote tracking behavior while stripping credentials from legacy origin URLs.
-            config.push((format!("url.{clean}.insteadOf"), url));
-        }
-        let key = format!("http.{clean}.extraHeader");
-        config.push((key.clone(), String::new()));
-        config.push((key, format!("Authorization: Basic {authorization}")));
-        config.push((format!("http.{clean}.followRedirects"), "false".into()));
-        config.push((format!("http.{clean}.sslVerify"), "true".into()));
-        config.push((format!("credential.{clean}.helper"), String::new()));
-    }
-    Ok((config, secrets))
+    Ok(Prepared {
+        url: clean_urls.remove(0),
+        header: format!("Authorization: Basic {authorization}"),
+        secrets,
+    })
 }
 
-/// Credentials exist only in the child environment, scoped to validated HTTPS destinations.
-pub(crate) fn run_network(path: &Path, args: &[&str], provider: &GitHubProvider) -> Result<String> {
-    let (config, secrets) = network_config(path, args, provider)?;
-    let mut output = execute(path, args, &config)?;
-    if output.status.success() {
-        output.stdout.extend_from_slice(&output.stderr);
+fn git_error(error: git2::Error, secrets: &[String]) -> flow_like_types::Error {
+    anyhow!("{}", redact_secrets(error.message(), secrets))
+}
+
+fn proxy_options<'a>() -> ProxyOptions<'a> {
+    let mut proxy = ProxyOptions::new();
+    proxy.auto();
+    proxy
+}
+
+// The token is sent only to the vetted URL: libgit2 refuses redirects to another host (a same-host
+// redirect, including to another port, can still be followed; there is no hook to forbid it) and no credential prompt or
+// helper can supply a different identity.
+fn fetch_options<'a>(header: Option<&str>, callbacks: RemoteCallbacks<'a>) -> FetchOptions<'a> {
+    let mut options = FetchOptions::new();
+    options
+        .follow_redirects(RemoteRedirect::None)
+        .proxy_options(proxy_options())
+        .remote_callbacks(callbacks);
+    if let Some(header) = header {
+        options.custom_headers(&[header]);
     }
-    let output = checked_output(output, &secrets)?;
-    Ok(redact_secrets(&String::from_utf8_lossy(&output), &secrets))
+    options
+}
+
+fn push_options<'a>(header: Option<&str>, callbacks: RemoteCallbacks<'a>) -> PushOptions<'a> {
+    let mut options = PushOptions::new();
+    options
+        .follow_redirects(RemoteRedirect::None)
+        .proxy_options(proxy_options())
+        .remote_callbacks(callbacks);
+    if let Some(header) = header {
+        options.custom_headers(&[header]);
+    }
+    options
+}
+
+fn base_callbacks<'a>() -> RemoteCallbacks<'a> {
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(|_, _, _| {
+        Err(git2::Error::from_str(
+            "Authentication failed: the access token was not accepted",
+        ))
+    });
+    callbacks
+}
+
+pub(crate) fn clone_with(
+    url: &str,
+    header: Option<&str>,
+    secrets: &[String],
+    target: &Path,
+    branch: Option<&str>,
+    depth: Option<i32>,
+) -> Result<()> {
+    let mut fetch = fetch_options(header, base_callbacks());
+    if let Some(depth) = depth {
+        fetch.depth(depth);
+    }
+    let mut builder = RepoBuilder::new();
+    builder.fetch_options(fetch);
+    if let Some(branch) = branch {
+        validate_ref(branch)?;
+        builder.branch(branch);
+    }
+    builder
+        .clone(url, target)
+        .map_err(|error| git_error(error, secrets))?;
+    Ok(())
+}
+
+pub(crate) fn fetch_with(
+    repo: &Repository,
+    url: &str,
+    header: Option<&str>,
+    secrets: &[String],
+    request: &FetchRequest,
+) -> Result<String> {
+    let refspecs = if request.refspecs.is_empty() {
+        let configured = repo.find_remote(request.remote)?;
+        configured
+            .fetch_refspecs()?
+            .iter()
+            .flatten()
+            .map(str::to_owned)
+            .collect()
+    } else {
+        request.refspecs.clone()
+    };
+    // libgit2 ignores explicit refspecs whose source is missing on the remote; git fails with
+    // "couldn't find remote ref". Detach the stale destination refs so a missing source is detectable.
+    let mut detached: Vec<(String, Oid)> = Vec::new();
+    if !request.refspecs.is_empty() {
+        for spec in &request.refspecs {
+            let spec = spec.trim_start_matches('+');
+            if let Some((src, dst)) = spec.split_once(':')
+                && !src.contains('*')
+                && dst.starts_with("refs/")
+                && let Ok(mut reference) = repo.find_reference(dst)
+                && let Some(oid) = reference.target()
+                && reference.delete().is_ok()
+            {
+                detached.push((dst.to_owned(), oid));
+            }
+        }
+    }
+    let restore = |detached: &[(String, Oid)]| {
+        for (name, oid) in detached {
+            if repo.find_reference(name).is_err() {
+                let _ = repo.reference(name, *oid, true, "restore stale tracking ref");
+            }
+        }
+    };
+    let mut lines = Vec::new();
+    {
+        let mut callbacks = base_callbacks();
+        callbacks.update_tips(|name, old, new| {
+            if old.is_zero() {
+                lines.push(format!(" * [new]     {name} {}", short(new)));
+            } else if !new.is_zero() {
+                lines.push(format!(
+                    "   [updated] {name} {}..{}",
+                    short(old),
+                    short(new)
+                ));
+            } else {
+                lines.push(format!(" - [deleted] {name}"));
+            }
+            true
+        });
+        let mut options = fetch_options(header, callbacks);
+        options
+            .prune(if request.prune {
+                FetchPrune::On
+            } else {
+                FetchPrune::Off
+            })
+            .download_tags(if request.tags {
+                AutotagOption::All
+            } else {
+                AutotagOption::Auto
+            })
+            .update_fetchhead(true);
+        if let Some(depth) = request.depth {
+            options.depth(depth);
+        }
+        let mut remote = repo.remote_anonymous(url)?;
+        if let Err(error) = remote.fetch(&refspecs, Some(&mut options), None) {
+            restore(&detached);
+            return Err(git_error(error, secrets));
+        }
+    }
+    if let Some((name, _)) = detached
+        .iter()
+        .find(|(name, _)| repo.find_reference(name).is_err())
+    {
+        restore(&detached);
+        bail!("Couldn't find remote ref for {name}");
+    }
+    Ok(if lines.is_empty() {
+        format!("From {url}\nAlready up to date.\n")
+    } else {
+        format!("From {url}\n{}\n", lines.join("\n"))
+    })
+}
+
+pub(crate) fn push_with(
+    repo: &Repository,
+    url: &str,
+    header: Option<&str>,
+    secrets: &[String],
+    request: &PushRequest,
+) -> Result<String> {
+    let (source, destination) = request
+        .refspec
+        .trim_start_matches('+')
+        .split_once(':')
+        .ok_or_else(|| anyhow!("Push requires an explicit refspec"))?;
+    if request.refspec.starts_with('+') {
+        bail!("Forced pushes are not supported");
+    }
+    let pushed = repo.refname_to_id(source)?;
+    let mut summary = format!("To {url}\n");
+    push_refspecs(
+        repo,
+        url,
+        header,
+        secrets,
+        std::slice::from_ref(&request.refspec),
+        &mut summary,
+        true,
+    )?;
+    if destination.starts_with("refs/heads/") {
+        update_tracking_ref(repo, request.remote, destination, pushed)?;
+    }
+    if request.follow_tags {
+        let tags = followed_tags(repo, pushed)?;
+        if !tags.is_empty() {
+            push_refspecs(repo, url, header, secrets, &tags, &mut summary, false)?;
+        }
+    }
+    Ok(summary)
+}
+
+fn push_refspecs(
+    repo: &Repository,
+    url: &str,
+    header: Option<&str>,
+    secrets: &[String],
+    refspecs: &[String],
+    summary: &mut String,
+    strict: bool,
+) -> Result<()> {
+    let mut rejected = Vec::new();
+    let mut accepted = Vec::new();
+    {
+        let mut callbacks = base_callbacks();
+        callbacks.push_update_reference(|name, status| {
+            match status {
+                Some(reason) => rejected.push(format!("{name}: {reason}")),
+                None => accepted.push(name.to_owned()),
+            }
+            Ok(())
+        });
+        let mut options = push_options(header, callbacks);
+        let mut remote = repo.remote_anonymous(url)?;
+        remote
+            .push(refspecs, Some(&mut options))
+            .map_err(|error| git_error(error, secrets))?;
+    }
+    for name in &accepted {
+        summary.push_str(&format!(" * {name}\n"));
+    }
+    if !rejected.is_empty() {
+        let detail = redact_secrets(&rejected.join("; "), secrets);
+        if strict {
+            bail!("The remote rejected the push: {detail}");
+        }
+        summary.push_str(&format!("Not pushed: {detail}\n"));
+    }
+    Ok(())
+}
+
+/// Mirrors the remote-tracking update `git push` performs after a successful push.
+fn update_tracking_ref(repo: &Repository, remote: &str, destination: &str, oid: Oid) -> Result<()> {
+    let Ok(configured) = repo.find_remote(remote) else {
+        return Ok(());
+    };
+    for spec in configured.refspecs() {
+        if spec.direction() == git2::Direction::Fetch && spec.src_matches(destination) {
+            let tracking = spec.transform(destination)?;
+            if let Some(name) = tracking.as_str() {
+                repo.reference(name, oid, true, "update by push")?;
+            }
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Annotated tags whose commit is contained in the pushed history (`push --follow-tags`).
+fn followed_tags(repo: &Repository, pushed: Oid) -> Result<Vec<String>> {
+    let mut tags = Vec::new();
+    for reference in repo.references_glob("refs/tags/*")? {
+        let reference = reference?;
+        let (Some(name), Some(target)) = (reference.name(), reference.target()) else {
+            continue;
+        };
+        let object = repo.find_object(target, None)?;
+        if object.kind() != Some(ObjectType::Tag) {
+            continue;
+        }
+        if let Ok(commit) = object.peel_to_commit()
+            && is_ancestor(repo, commit.id(), pushed)?
+        {
+            tags.push(format!("{name}:{name}"));
+        }
+    }
+    tags.sort();
+    Ok(tags)
+}
+
+impl Network for ProviderNetwork<'_> {
+    fn clone_repo(
+        &self,
+        url: &str,
+        target: &Path,
+        branch: Option<&str>,
+        depth: Option<i32>,
+    ) -> Result<()> {
+        let prepared = prepare_clone(url, self.0)?;
+        clone_with(
+            &prepared.url,
+            Some(&prepared.header),
+            &prepared.secrets,
+            target,
+            branch,
+            depth,
+        )
+    }
+
+    fn fetch(&self, repo: &Repository, request: &FetchRequest) -> Result<String> {
+        let prepared = prepare_remote(repo, request.remote, false, self.0)?;
+        let output = fetch_with(
+            repo,
+            &prepared.url,
+            Some(&prepared.header),
+            &prepared.secrets,
+            request,
+        )?;
+        Ok(redact_secrets(&output, &prepared.secrets))
+    }
+
+    fn push(&self, repo: &Repository, request: &PushRequest) -> Result<String> {
+        let prepared = prepare_remote(repo, request.remote, true, self.0)?;
+        let output = push_with(
+            repo,
+            &prepared.url,
+            Some(&prepared.header),
+            &prepared.secrets,
+            request,
+        )?;
+        Ok(redact_secrets(&output, &prepared.secrets))
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+    use git2::RepositoryInitOptions;
+    use std::path::PathBuf;
+
+    /// Scratch directory removed on drop.
+    pub(crate) struct TempDir(pub PathBuf);
+
+    impl TempDir {
+        pub(crate) fn new(prefix: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path.canonicalize().unwrap())
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    pub(crate) fn identity(repo: &Repository) {
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Git Node Test").unwrap();
+        config
+            .set_str("user.email", "git-node@example.invalid")
+            .unwrap();
+    }
+
+    /// Initializes a repository on `main` with a test identity.
+    pub(crate) fn init(path: &Path) -> Repository {
+        let repo = Repository::init_opts(
+            path,
+            RepositoryInitOptions::new()
+                .initial_head("main")
+                .mkpath(true),
+        )
+        .unwrap();
+        identity(&repo);
+        repo
+    }
+
+    /// Writes one file and commits it on the current branch.
+    pub(crate) fn write_commit(path: &Path, file: &str, content: &str, message: &str) -> String {
+        std::fs::write(path.join(file), content).unwrap();
+        let repo = open(path).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(file)).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = repo.signature().unwrap();
+        let parents: Vec<_> = repo
+            .head()
+            .ok()
+            .map(|head| head.peel_to_commit().unwrap())
+            .into_iter()
+            .collect();
+        let parents: Vec<_> = parents.iter().collect();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parents,
+        )
+        .unwrap()
+        .to_string()
+    }
+
+    pub(crate) fn head(path: &Path) -> String {
+        open(path)
+            .unwrap()
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string()
+    }
+
+    /// `git status --porcelain=v1`-style lines for the working tree.
+    pub(crate) fn porcelain(path: &Path) -> Vec<String> {
+        use git2::Status;
+        let repo = open(path).unwrap();
+        let mut options = git2::StatusOptions::new();
+        options.include_untracked(true).recurse_untracked_dirs(true);
+        let statuses = repo.statuses(Some(&mut options)).unwrap();
+        statuses
+            .iter()
+            .map(|entry| {
+                let flags = entry.status();
+                let code = if flags.contains(Status::CONFLICTED) {
+                    "UU".to_string()
+                } else if flags == Status::WT_NEW {
+                    "??".to_string()
+                } else {
+                    let pick = |table: &[(Status, char)]| {
+                        table
+                            .iter()
+                            .find(|(flag, _)| flags.contains(*flag))
+                            .map_or(' ', |(_, letter)| *letter)
+                    };
+                    format!(
+                        "{}{}",
+                        pick(&[
+                            (Status::INDEX_NEW, 'A'),
+                            (Status::INDEX_MODIFIED, 'M'),
+                            (Status::INDEX_DELETED, 'D'),
+                        ]),
+                        pick(&[(Status::WT_MODIFIED, 'M'), (Status::WT_DELETED, 'D')])
+                    )
+                };
+                format!("{code} {}", entry.path().unwrap())
+            })
+            .collect()
+    }
+
+    /// Content of a blob addressed like `git show`: `HEAD:file` or `:file` for the index.
+    pub(crate) fn show(path: &Path, spec: &str) -> String {
+        let repo = open(path).unwrap();
+        let blob = match spec.strip_prefix(':') {
+            // libgit2 does not implement the `:path` index syntax of revparse.
+            Some(file) => {
+                let entry = repo.index().unwrap().get_path(Path::new(file), 0).unwrap();
+                repo.find_blob(entry.id).unwrap()
+            }
+            None => repo.revparse_single(spec).unwrap().peel_to_blob().unwrap(),
+        };
+        String::from_utf8(blob.content().to_vec()).unwrap()
+    }
+
+    pub(crate) fn current_branch_name(path: &Path) -> String {
+        head_branch(&open(path).unwrap()).unwrap_or_default()
+    }
+
+    pub(crate) fn stage_path(path: &Path, file: &str) {
+        let repo = open(path).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(file)).unwrap();
+        index.write().unwrap();
+    }
+
+    /// Commits whatever is staged.
+    pub(crate) fn commit_index(path: &Path, message: &str) {
+        let repo = open(path).unwrap();
+        let mut index = repo.index().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = repo.signature().unwrap();
+        let parent = repo.head().ok().map(|head| head.peel_to_commit().unwrap());
+        let parents: Vec<_> = parent.iter().collect();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parents,
+        )
+        .unwrap();
+    }
+
+    /// Commit subjects from HEAD, one per line.
+    pub(crate) fn log_subjects(path: &Path, count: usize) -> String {
+        let repo = open(path).unwrap();
+        let mut walk = repo.revwalk().unwrap();
+        walk.push_head().unwrap();
+        walk.take(count)
+            .map(|id| {
+                let commit = repo.find_commit(id.unwrap()).unwrap();
+                format!("{}\n", commit.summary().unwrap())
+            })
+            .collect()
+    }
+
+    /// Creates `name` at HEAD and checks it out.
+    pub(crate) fn switch_new(path: &Path, name: &str) {
+        let repo = open(path).unwrap();
+        let commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch(name, &commit, false).unwrap();
+        repo.set_head(&format!("refs/heads/{name}")).unwrap();
+    }
+
+    pub(crate) fn switch(path: &Path, name: &str) {
+        let repo = open(path).unwrap();
+        repo.set_head(&format!("refs/heads/{name}")).unwrap();
+        repo.checkout_head(Some(CheckoutBuilder::new().force()))
+            .unwrap();
+    }
+
+    /// Merges `name` into HEAD; conflicts leave the merge unfinished and return an error.
+    pub(crate) fn merge(path: &Path, name: &str) -> Result<()> {
+        let repo = open(path)?;
+        let theirs = repo.find_annotated_commit(resolve_commit(&repo, name)?)?;
+        repo.merge(&[&theirs], None, Some(CheckoutBuilder::new().safe()))?;
+        if repo.index()?.has_conflicts() {
+            bail!("merge conflict");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn abort_merge(path: &Path) -> Result<()> {
+        let repo = open(path)?;
+        if repo.state() != git2::RepositoryState::Merge {
+            bail!("no merge to abort");
+        }
+        let head = repo.head()?.peel_to_commit()?;
+        repo.reset(
+            head.as_object(),
+            git2::ResetType::Hard,
+            Some(CheckoutBuilder::new().force()),
+        )?;
+        repo.cleanup_state()?;
+        Ok(())
+    }
+
+    /// Transport that talks to a local bare repository instead of the GitHub origin. Only the
+    /// destination changes: every production code path below the URL checks runs unchanged.
+    pub(crate) struct LocalNetwork {
+        pub remote: PathBuf,
+    }
+
+    impl LocalNetwork {
+        fn url(&self) -> String {
+            format!("file://{}", self.remote.display())
+        }
+    }
+
+    impl Network for LocalNetwork {
+        fn clone_repo(
+            &self,
+            url: &str,
+            target: &Path,
+            branch: Option<&str>,
+            depth: Option<i32>,
+        ) -> Result<()> {
+            // The local transport cannot serve shallow requests; shallow behavior is covered by the
+            // ignored HTTPS test below.
+            let _ = depth;
+            clone_with(&self.url(), None, &[], target, branch, None)?;
+            let repo = open(target)?;
+            repo.remote_set_url("origin", url)?;
+            identity(&repo);
+            Ok(())
+        }
+
+        fn fetch(&self, repo: &Repository, request: &FetchRequest) -> Result<String> {
+            let request = FetchRequest {
+                remote: request.remote,
+                refspecs: request.refspecs.clone(),
+                prune: request.prune,
+                tags: request.tags,
+                depth: None,
+            };
+            fetch_with(repo, &self.url(), None, &[], &request)
+        }
+
+        fn push(&self, repo: &Repository, request: &PushRequest) -> Result<String> {
+            push_with(repo, &self.url(), None, &[], request)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::testing::*;
     use super::*;
-    use std::{fs, path::PathBuf};
-
-    struct Repository(PathBuf);
-
-    impl Repository {
-        fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("flow-like-git-{}", uuid::Uuid::new_v4()));
-            fs::create_dir(&path).unwrap();
-            run(&path, &["init", "--initial-branch=main"]).unwrap();
-            run(&path, &["config", "user.name", "Git Node Test"]).unwrap();
-            run(&path, &["config", "user.email", "git-node@example.invalid"]).unwrap();
-            Self(path)
-        }
-    }
-
-    impl Drop for Repository {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    use std::fs;
 
     fn provider() -> GitHubProvider {
         GitHubProvider {
@@ -471,39 +1079,41 @@ mod tests {
         ] {
             assert!(validate_remote(remote).is_err());
         }
+        validate_branch_name("feature/x").unwrap();
+        for branch in ["a..b", "a b", "@{-1}", "x.lock", "-x", "a~1", "a:b"] {
+            assert!(validate_branch_name(branch).is_err(), "{branch}");
+        }
+        validate_tag_name("v1.0").unwrap();
+        assert!(validate_tag_name("v1..0").is_err());
     }
 
     #[test]
     fn requires_repository_root_and_accepts_linked_worktrees() {
-        let repo = Repository::new();
-        ensure_repository(&repo.0).unwrap();
-        fs::create_dir(repo.0.join("child")).unwrap();
-        assert!(ensure_repository(&repo.0.join("child")).is_err());
-        run(&repo.0, &["commit", "--allow-empty", "-m", "Initial"]).unwrap();
-        let linked = repo.0.join("linked");
-        run(
-            &repo.0,
-            &["worktree", "add", "--detach", linked.to_str().unwrap()],
-        )
-        .unwrap();
+        let dir = TempDir::new("flow-like-git");
+        let repo = init(&dir.0);
+        ensure_repository(&dir.0).unwrap();
+        fs::create_dir(dir.0.join("child")).unwrap();
+        assert!(ensure_repository(&dir.0.join("child")).is_err());
+        write_commit(&dir.0, "file.txt", "x", "Initial");
+        let linked = dir.0.join("linked");
+        repo.worktree("linked", &linked, None).unwrap();
         ensure_repository(&linked).unwrap();
-        let bare = repo.0.join("bare");
-        run(&repo.0, &["init", "--bare", bare.to_str().unwrap()]).unwrap();
+        let bare = dir.0.join("bare");
+        Repository::init_bare(&bare).unwrap();
         assert!(ensure_repository(&bare).is_err());
     }
 
     #[test]
     fn clean_check_covers_untracked_staged_and_unstaged_changes() {
-        let repo = Repository::new();
-        require_clean(&repo.0).unwrap();
-        fs::write(repo.0.join("file.txt"), "initial\n").unwrap();
-        assert!(require_clean(&repo.0).is_err());
-        run(&repo.0, &["add", "--", "file.txt"]).unwrap();
-        assert!(require_clean(&repo.0).is_err());
-        run(&repo.0, &["commit", "-m", "Initial"]).unwrap();
-        require_clean(&repo.0).unwrap();
-        fs::write(repo.0.join("file.txt"), "changed\n").unwrap();
-        assert!(require_clean(&repo.0).is_err());
+        let dir = TempDir::new("flow-like-git");
+        init(&dir.0);
+        require_clean(&dir.0).unwrap();
+        fs::write(dir.0.join("file.txt"), "initial\n").unwrap();
+        assert!(require_clean(&dir.0).is_err());
+        write_commit(&dir.0, "file.txt", "initial\n", "Initial");
+        require_clean(&dir.0).unwrap();
+        fs::write(dir.0.join("file.txt"), "changed\n").unwrap();
+        assert!(require_clean(&dir.0).is_err());
     }
 
     #[test]
@@ -519,180 +1129,100 @@ mod tests {
             "token ***"
         );
         assert_eq!(redact_secrets("unchanged", &[String::new()]), "unchanged");
-        let repo = Repository::new();
-        let error = run(
-            &repo.0,
-            &["rev-parse", "--verify", "https://secret@github.com/x"],
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(!error.contains("secret"));
+        let dir = TempDir::new("flow-like-git");
+        let repo = init(&dir.0);
+        let error = resolve_commit(&repo, "https://secret@github.com/x")
+            .unwrap_err()
+            .to_string();
+        assert!(!redact(&error).contains("secret"));
     }
 
     #[test]
     fn authentication_is_ephemeral_and_legacy_credentials_are_removed() {
-        let repo = Repository::new();
-        run(
-            &repo.0,
-            &[
-                "remote",
-                "add",
-                "origin",
-                "https://old-token@github.com/org/repo.git",
-            ],
-        )
-        .unwrap();
-        let before = fs::read(repo.0.join(".git/config")).unwrap();
+        let dir = TempDir::new("flow-like-git");
+        let repo = init(&dir.0);
+        repo.remote("origin", "https://old-token@github.com/org/repo.git")
+            .unwrap();
+        let before = fs::read(dir.0.join(".git/config")).unwrap();
         let provider = provider();
-        let args = ["fetch", "--prune", "--", "origin"];
-        let (config, secrets) = network_config(&repo.0, &args, &provider).unwrap();
-        let output = checked_output(
-            execute(&repo.0, &["remote", "get-url", "origin"], &config).unwrap(),
-            &secrets,
-        )
-        .unwrap();
-        assert_eq!(
-            String::from_utf8(output).unwrap().trim(),
-            "https://github.com/org/repo.git"
-        );
-        let command = command(&repo.0, &args, &config);
-        let argv: Vec<_> = command.get_args().collect();
-        assert!(
-            argv.iter()
-                .all(|arg| !arg.to_string_lossy().contains(&provider.access_token))
-        );
-        assert!(config.iter().any(|(key, value)| key
-            == "http.https://github.com/org/repo.git.extraHeader"
-            && value.starts_with("Authorization: Basic ")));
-        assert!(
-            config
-                .iter()
-                .any(|(key, value)| key == "http.followRedirects" && value == "false")
-        );
-        assert_eq!(fs::read(repo.0.join(".git/config")).unwrap(), before);
+        let prepared = prepare_remote(&repo, "origin", false, &provider).unwrap();
+        assert_eq!(prepared.url, "https://github.com/org/repo.git");
+        assert!(prepared.header.starts_with("Authorization: Basic "));
+        assert!(prepared.secrets.contains(&"old-token".to_string()));
+        assert!(prepared.secrets.contains(&provider.access_token));
+        assert!(!prepared.url.contains(&provider.access_token));
+        assert_eq!(fs::read(dir.0.join(".git/config")).unwrap(), before);
+    }
+
+    #[test]
+    fn repository_proxy_settings_are_rejected_for_authenticated_operations() {
+        let dir = TempDir::new("flow-like-git");
+        let repo = init(&dir.0);
+        let provider = provider();
+        repo.remote("origin", "https://github.com/org/repo.git")
+            .unwrap();
+        prepare_remote(&repo, "origin", false, &provider).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("http.proxy", "http://127.0.0.1:9")
+            .unwrap();
+        assert!(prepare_remote(&repo, "origin", false, &provider).is_err());
     }
 
     #[test]
     fn rejects_foreign_hosts_rewrites_and_multiple_push_destinations() {
-        let repo = Repository::new();
+        let dir = TempDir::new("flow-like-git");
+        let repo = init(&dir.0);
         let provider = provider();
         for url in [
             "https://attacker.invalid/org/repo.git",
             "http://github.com/org/repo.git",
             "https://github.com:444/org/repo.git",
             "https://github.com/org/repo.git?token=secret",
+            "https://github.com/org/repo.git\n--upload-pack=sh",
+            "file:///tmp/repo",
         ] {
-            assert!(network_config(&repo.0, &["clone", "--", url, "target"], &provider).is_err());
+            assert!(prepare_clone(url, &provider).is_err(), "{url}");
         }
-        run(
-            &repo.0,
-            &["remote", "add", "origin", "https://github.com/org/repo.git"],
-        )
-        .unwrap();
-        run(
-            &repo.0,
-            &[
-                "config",
-                "--add",
+        repo.remote("origin", "https://github.com/org/repo.git")
+            .unwrap();
+        repo.remote_set_pushurl("origin", Some("https://github.com/org/repo.git"))
+            .unwrap();
+        prepare_remote(&repo, "origin", true, &provider).unwrap();
+        repo.config()
+            .unwrap()
+            .set_multivar(
                 "remote.origin.pushurl",
-                "https://github.com/org/repo.git",
-            ],
-        )
-        .unwrap();
-        run(
-            &repo.0,
-            &[
-                "config",
-                "--add",
-                "remote.origin.pushurl",
+                "^$",
                 "https://attacker.invalid/stolen.git",
-            ],
-        )
-        .unwrap();
-        assert!(network_config(&repo.0, &["push", "--", "origin", "main"], &provider).is_err());
-        run(
-            &repo.0,
-            &[
-                "config",
+            )
+            .unwrap();
+        assert!(prepare_remote(&repo, "origin", true, &provider).is_err());
+        // Fetching is unaffected by the extra push destination.
+        prepare_remote(&repo, "origin", false, &provider).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str(
                 "url.https://attacker.invalid/.insteadOf",
                 "https://github.com/",
-            ],
-        )
-        .unwrap();
-        assert!(network_config(&repo.0, &["fetch", "--", "origin"], &provider).is_err());
+            )
+            .unwrap();
+        assert!(prepare_remote(&repo, "origin", false, &provider).is_err());
+        assert!(prepare_remote(&repo, "--all", false, &provider).is_err());
     }
 
     #[test]
-    fn clone_options_and_enterprise_hosts_are_supported() {
-        let repo = Repository::new();
+    fn clone_urls_must_be_normalized_and_enterprise_hosts_are_supported() {
         let provider = GitHubProvider {
             base_url: "https://github.example.com/api/v3".into(),
             ..provider()
         };
-        let args = [
-            "clone",
-            "--branch",
-            "main",
-            "--depth",
-            "1",
-            "--",
-            "https://github.example.com/org/repo.git",
-            "target",
-        ];
-        assert_eq!(destination_index(&args).unwrap(), 6);
-        network_config(&repo.0, &args, &provider).unwrap();
-        assert!(destination_index(&["fetch", "--all"]).is_err());
-        assert!(destination_index(&["fetch", "--upload-pack=sh", "origin"]).is_err());
-    }
-
-    #[test]
-    fn authentication_overrides_url_specific_redirect_and_tls_configuration() {
-        let repo = Repository::new();
-        let url = "https://github.com/org/repo.git";
-        run(&repo.0, &["remote", "add", "origin", url]).unwrap();
-        run(
-            &repo.0,
-            &["config", &format!("http.{url}.followRedirects"), "true"],
-        )
-        .unwrap();
-        run(
-            &repo.0,
-            &["config", &format!("http.{url}.sslVerify"), "false"],
-        )
-        .unwrap();
-        run(
-            &repo.0,
-            &[
-                "config",
-                &format!("http.{url}.extraHeader"),
-                "Authorization: stale",
-            ],
-        )
-        .unwrap();
-        let (config, secrets) =
-            network_config(&repo.0, &["fetch", "--", "origin"], &provider()).unwrap();
-        for (key, expected) in [
-            ("http.followRedirects", "false"),
-            ("http.sslVerify", "true"),
-        ] {
-            let output = checked_output(
-                execute(&repo.0, &["config", "--get-urlmatch", key, url], &config).unwrap(),
-                &secrets,
-            )
-            .unwrap();
-            assert_eq!(String::from_utf8(output).unwrap().trim(), expected);
-        }
-        let output = checked_output(
-            execute(
-                &repo.0,
-                &["config", "--get-urlmatch", "http.extraHeader", url],
-                &config,
-            )
-            .unwrap(),
-            &secrets,
-        )
-        .unwrap();
-        assert!(!String::from_utf8(output).unwrap().contains("stale"));
+        let url = "https://github.example.com/org/repo.git";
+        assert_eq!(prepare_clone(url, &provider).unwrap().url, url);
+        assert!(
+            prepare_clone("https://user:pw@github.example.com/org/repo.git", &provider).is_err()
+        );
+        assert!(prepare_clone("https://github.com/org/repo.git", &provider).is_err());
     }
 
     #[test]
@@ -736,85 +1266,77 @@ mod tests {
     }
 
     #[test]
-    fn byte_output_preserves_git_objects() {
-        let repo = Repository::new();
-        let data = b"blob\0\xff\nhttps://literal@example.invalid/\n";
-        fs::write(repo.0.join("binary"), data).unwrap();
-        let hash = run(&repo.0, &["hash-object", "-w", "--", "binary"]).unwrap();
-        let output = run_bytes(&repo.0, &["cat-file", "blob", hash.trim()]).unwrap();
-        assert_eq!(output, data);
-    }
-
-    #[test]
     fn clean_check_rejects_an_unfinished_merge_with_no_file_changes() {
-        let repo = Repository::new();
-        run(&repo.0, &["commit", "--allow-empty", "-m", "Initial"]).unwrap();
-        run(&repo.0, &["switch", "--create", "topic"]).unwrap();
-        run(&repo.0, &["commit", "--allow-empty", "-m", "Topic"]).unwrap();
-        run(&repo.0, &["switch", "main"]).unwrap();
-        run(&repo.0, &["merge", "--no-ff", "--no-commit", "topic"]).unwrap();
+        let dir = TempDir::new("flow-like-git");
+        let repo = init(&dir.0);
+        write_commit(&dir.0, "file.txt", "x", "Initial");
+        let initial = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("topic", &initial, false).unwrap();
+        repo.set_head("refs/heads/topic").unwrap();
+        write_commit(&dir.0, "other.txt", "y", "Topic");
+        let topic = repo.head().unwrap().peel_to_commit().unwrap().id();
+        repo.set_head("refs/heads/main").unwrap();
+        repo.checkout_head(Some(CheckoutBuilder::new().force()))
+            .unwrap();
+        // `merge --no-ff --no-commit`: MERGE_HEAD is written and the commit is left to the user.
+        let annotated = repo.find_annotated_commit(topic).unwrap();
+        repo.merge(&[&annotated], None, Some(CheckoutBuilder::new().safe()))
+            .unwrap();
         assert!(
-            run_bytes(&repo.0, &["status", "--porcelain=v1", "-z"])
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            require_clean(&repo.0)
+            require_clean(&dir.0)
                 .unwrap_err()
                 .to_string()
                 .contains("in progress")
         );
-        run(&repo.0, &["merge", "--abort"]).unwrap();
-        require_clean(&repo.0).unwrap();
+        repo.cleanup_state().unwrap();
+        repo.checkout_head(Some(CheckoutBuilder::new().force()))
+            .unwrap();
+        require_clean(&dir.0).unwrap();
     }
 
     #[test]
-    fn explicit_push_cannot_inherit_mirror_or_tag_pushes() {
-        let repo = Repository::new();
-        run(
-            &repo.0,
-            &["remote", "add", "origin", "https://github.com/org/repo.git"],
-        )
-        .unwrap();
-        run(&repo.0, &["config", "remote.origin.mirror", "true"]).unwrap();
-        run(&repo.0, &["config", "push.followTags", "true"]).unwrap();
-        let (config, secrets) = network_config(
-            &repo.0,
-            &["push", "--", "origin", "HEAD:refs/heads/main"],
-            &provider(),
-        )
-        .unwrap();
-        for key in ["remote.origin.mirror", "push.followTags"] {
-            let output = checked_output(
-                execute(&repo.0, &["config", "--get", key], &config).unwrap(),
-                &secrets,
+    fn explicit_push_refspecs_are_required_and_forced_pushes_are_refused() {
+        let dir = TempDir::new("flow-like-git");
+        let repo = init(&dir.0);
+        write_commit(&dir.0, "file.txt", "x", "Initial");
+        let request = |refspec: &str| PushRequest {
+            remote: "origin",
+            refspec: refspec.into(),
+            follow_tags: false,
+        };
+        assert!(push_with(&repo, "file:///nowhere", None, &[], &request("main")).is_err());
+        assert!(
+            push_with(
+                &repo,
+                "file:///nowhere",
+                None,
+                &[],
+                &request("+refs/heads/main:refs/heads/main")
             )
-            .unwrap();
-            assert_eq!(String::from_utf8(output).unwrap().trim(), "false");
-        }
-        assert!(network_config(&repo.0, &["push", "--", "origin"], &provider()).is_err());
+            .unwrap_err()
+            .to_string()
+            .contains("Forced")
+        );
     }
 
+    /// Needs network access: `cargo test -p flow-like-catalog-data-github --features execute -- --ignored`.
     #[test]
-    fn pruning_remote_branches_preserves_local_tags() {
-        let repo = Repository::new();
-        run(
-            &repo.0,
-            &["remote", "add", "origin", "https://github.com/org/repo.git"],
-        )
-        .unwrap();
-        for key in ["fetch.pruneTags", "remote.origin.pruneTags"] {
-            run(&repo.0, &["config", key, "true"]).unwrap();
-        }
-        let (config, secrets) =
-            network_config(&repo.0, &["fetch", "--prune", "--", "origin"], &provider()).unwrap();
-        for key in ["fetch.pruneTags", "remote.origin.pruneTags"] {
-            let output = checked_output(
-                execute(&repo.0, &["config", "--get", key], &config).unwrap(),
-                &secrets,
-            )
-            .unwrap();
-            assert_eq!(String::from_utf8(output).unwrap().trim(), "false");
-        }
+    #[ignore = "requires access to github.com"]
+    fn shallow_clone_and_unshallow_over_https() {
+        let dir = TempDir::new("flow-like-https");
+        let target = dir.0.join("hello");
+        let url = "https://github.com/octocat/Hello-World.git";
+        clone_with(url, None, &[], &target, None, Some(1)).unwrap();
+        let repo = open(&target).unwrap();
+        assert!(repo.is_shallow());
+        let request = FetchRequest {
+            remote: "origin",
+            refspecs: Vec::new(),
+            prune: false,
+            tags: false,
+            depth: Some(i32::MAX),
+        };
+        fetch_with(&repo, url, None, &[], &request).unwrap();
+        assert!(!repo.is_shallow());
     }
 }

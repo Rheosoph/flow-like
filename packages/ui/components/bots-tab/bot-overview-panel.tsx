@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { ArrowLeftIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon, PencilIcon, XIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { BotAvatar } from "../bots/bot-avatar";
@@ -9,6 +9,7 @@ import { useChatBotReaction } from "../global-chat/chat-bot-reaction";
 import type { GlobalChatBotView } from "../global-chat/use-global-chat-bot";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
+import { BotCalendarPane } from "./bot-calendar";
 import { BotComputerPane } from "./bot-computer-pane";
 import { BotDetails, type BotPanelActions } from "./bot-details";
 import { BotMailPane } from "./bot-mail";
@@ -26,16 +27,31 @@ import {
 } from "./bot-workspace-panes";
 import type { DockPanelLayout } from "./crew-split-layout";
 
+const ACTION_BUTTON = "h-8 gap-1.5 rounded-full px-3.5 text-[13px]";
+
 function BotPanelPane({
 	tab,
 	view,
 	actions,
+	onTab,
 }: Readonly<{
 	tab: BotPanelTab;
 	view: GlobalChatBotView;
 	actions: BotPanelActions;
+	onTab: (tab: BotPanelTab) => void;
 }>) {
 	const { bot, name } = view;
+	if (tab === "calendar" && bot) {
+		return (
+			<BotCalendarPane
+				key={bot.id}
+				bot={bot}
+				name={name}
+				onEdit={actions.onEdit}
+				onTab={onTab}
+			/>
+		);
+	}
 	if (tab === "memory") {
 		return (
 			<BotMemoryPane
@@ -55,6 +71,46 @@ function BotPanelPane({
 	if (tab === "computer" && bot)
 		return <BotComputerPane key={bot.id} bot={bot} name={name} />;
 	return <BotDetails view={view} actions={actions} />;
+}
+
+/** Changing the bot, and its workspace app where it keeps one. */
+function PanelActions({
+	view,
+	tabs,
+	actions,
+}: Readonly<{
+	view: GlobalChatBotView;
+	tabs: BotPanelTabs;
+	actions: BotPanelActions;
+}>) {
+	const { t } = useTranslation("bots");
+	const { bot } = view;
+	if (!bot) return null;
+	const { onEdit } = actions;
+	return (
+		<div className="mt-1.5 flex flex-wrap items-center justify-center gap-2">
+			{onEdit && (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					className={ACTION_BUTTON}
+					onClick={() => onEdit(bot)}
+				>
+					<PencilIcon className="size-3.5" aria-hidden />
+					{t("panel.editBot", "Edit bot")}
+				</Button>
+			)}
+			{tabs.list.some(isWorkspaceTab) && (
+				<BotWorkspaceLink
+					key={bot.id}
+					bot={bot}
+					name={view.name}
+					className={ACTION_BUTTON}
+				/>
+			)}
+		</div>
+	);
 }
 
 /** The tabs a bot has, the one on screen and how to switch. */
@@ -93,6 +149,7 @@ export function BotOverviewPanel({
 		data: t("workspace.tabs.data", "Data"),
 		computer: t("workspace.tabs.computer", "Computer"),
 		memory: t("workspace.tabs.memory", "Memory"),
+		calendar: t("workspace.tabs.calendar", "Calendar"),
 		mail: t("workspace.tabs.mail", "Mail"),
 	};
 	const sheet = layout === "sheet";
@@ -126,28 +183,26 @@ export function BotOverviewPanel({
 					<div className="ml-auto flex items-center gap-0.5">{trailing}</div>
 				)}
 			</div>
-			<div className="flex shrink-0 flex-col items-center gap-2 px-6 pb-4 text-center">
-				<span className="relative flex h-26 w-full items-end justify-center">
+			<div className="-mt-6 flex shrink-0 flex-col items-center gap-1.5 px-6 pb-4 text-center">
+				<span className="relative flex h-20 w-full items-end justify-center">
 					<span
 						aria-hidden
-						className="absolute bottom-0.5 left-1/2 h-3 w-16 -translate-x-1/2 rounded-full bg-muted blur-sm"
+						className="absolute bottom-0.5 left-1/2 h-2.5 w-12 -translate-x-1/2 rounded-full bg-muted blur-sm"
 					/>
 					<BotAvatar
 						appearance={view.appearance}
 						expression={reaction.expression}
 						expressionOverridesState={reaction.expressionOverridesState}
 						agentState={reaction.agentState}
-						size={96}
+						size={76}
 						decorative
 						className="relative"
 					/>
 				</span>
-				<h2 className="max-w-full truncate text-xl font-semibold tracking-tight">
+				<h2 className="max-w-full truncate text-lg font-semibold tracking-tight">
 					{view.name}
 				</h2>
-				{view.bot && tabs.list.some(isWorkspaceTab) && (
-					<BotWorkspaceLink key={view.bot.id} bot={view.bot} name={view.name} />
-				)}
+				<PanelActions view={view} tabs={tabs} actions={actions} />
 			</div>
 			<Tabs
 				value={tabs.shown}
@@ -160,13 +215,13 @@ export function BotOverviewPanel({
 					aria-label={t("panel.tabs", "{{name}}'s details", {
 						name: view.name,
 					})}
-					className="mx-auto mb-3 h-auto shrink-0 gap-1 bg-transparent p-0"
+					className="h-auto w-full shrink-0 justify-start gap-1 rounded-none border-b bg-transparent px-3 py-0"
 				>
 					{tabs.list.map((item) => (
 						<TabsTrigger
 							key={item}
 							value={item}
-							className="h-8 flex-none rounded-full px-3.5 text-[13px] text-muted-foreground data-[state=active]:bg-muted data-[state=active]:text-foreground data-[state=active]:shadow-none dark:text-muted-foreground dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-muted"
+							className="relative h-10 flex-none rounded-none border-0 bg-transparent px-2.5 text-[13px] text-muted-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full hover:text-foreground data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:after:bg-primary dark:text-muted-foreground dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-transparent"
 						>
 							{labels[item]}
 						</TabsTrigger>
@@ -180,7 +235,12 @@ export function BotOverviewPanel({
 						className="flex min-h-0 flex-col"
 					>
 						{item === tabs.shown && (
-							<BotPanelPane tab={item} view={view} actions={actions} />
+							<BotPanelPane
+								tab={item}
+								view={view}
+								actions={actions}
+								onTab={tabs.onChange}
+							/>
 						)}
 					</TabsContent>
 				))}

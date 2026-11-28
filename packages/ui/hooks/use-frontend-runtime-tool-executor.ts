@@ -1999,13 +1999,22 @@ export function useFrontendRuntimeToolExecutor(
 						}
 						case "optimize": {
 							if (!tableName) throw new Error("optimize requires table_name.");
-							await backend.dbState.optimize(
+							const olderThanDays = getArgNumber(
+								args,
+								"older_than_days",
+								"olderThanDays",
+							);
+							const cleanup = await backend.dbState.optimize(
 								toolAppId,
 								tableName,
 								getArgBool(args, "keep_versions", "keepVersions", true),
 								userScoped,
+								undefined,
+								olderThanDays > 0 ? olderThanDays : undefined,
 							);
-							return { status: "ok", table_name: tableName };
+							return cleanup
+								? { status: "ok", table_name: tableName, cleanup }
+								: { status: "ok", table_name: tableName };
 						}
 						case "add_column": {
 							if (!tableName)

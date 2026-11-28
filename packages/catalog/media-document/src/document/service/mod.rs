@@ -38,7 +38,9 @@ pub(crate) fn image_extension(bytes: &[u8]) -> Option<&'static str> {
 }
 
 /// PNG, JPEG and GIF pass through; anything else the `image` crate reads becomes PNG.
-pub(crate) fn office_image(bytes: &[u8]) -> flow_like_types::Result<(Vec<u8>, &'static str, u32, u32)> {
+pub(crate) fn office_image(
+    bytes: &[u8],
+) -> flow_like_types::Result<(Vec<u8>, &'static str, u32, u32)> {
     use flow_like_types::images::image;
     let decoded = image::load_from_memory(bytes)
         .map_err(|error| flow_like_types::anyhow!("The image cannot be decoded: {error}"))?;
@@ -61,10 +63,7 @@ pub(crate) fn content_type_for(extension: &str) -> &'static str {
     }
 }
 
-pub(crate) fn ensure_default_content_type(
-    files: &mut HashMap<String, Vec<u8>>,
-    extension: &str,
-) {
+pub(crate) fn ensure_default_content_type(files: &mut HashMap<String, Vec<u8>>, extension: &str) {
     ensure_default_content_type_as(files, extension, content_type_for(extension));
 }
 

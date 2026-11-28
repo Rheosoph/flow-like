@@ -13,7 +13,7 @@ use crate::error::ApiError;
 use flow_like_types::anyhow;
 
 /// The rows of each table that go with a deleted bot, selected by the bot's id (`$root`).
-pub fn retired_bot_rows() -> [(&'static str, Predicate); 13] {
+pub fn retired_bot_rows() -> [(&'static str, Predicate); 16] {
     let by = |column: &str| Predicate::Root {
         column: column.to_owned(),
     };
@@ -29,6 +29,9 @@ pub fn retired_bot_rows() -> [(&'static str, Predicate); 13] {
         ),
         ("BotDecisionWait", by("botId")),
         ("BotNote", by("botId")),
+        ("BotChannelLink", by("botId")),
+        ("BotChannelSender", by("botId")),
+        ("BotTeamBot", by("botId")),
         ("BotPermission", by("fromBotId")),
         ("BotPermission", by("toBotId")),
         ("BotHostHeartbeat", by("botId")),
@@ -42,9 +45,22 @@ pub fn retired_bot_rows() -> [(&'static str, Predicate); 13] {
     ]
 }
 
+/// A retired bot leads no team: the soft delete never fires the `leadBotId` SetNull.
+async fn clear_team_lead<C: ConnectionTrait>(db: &C, bot_id: &str) -> Result<(), ApiError> {
+    use crate::entity::bot_team;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, sea_query::Expr};
+    bot_team::Entity::update_many()
+        .col_expr(bot_team::Column::LeadBotId, Expr::value(None::<String>))
+        .filter(bot_team::Column::LeadBotId.eq(bot_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 /// Deletes a deleted bot's rows a bounded page per statement and returns how many went.
 /// Re-runnable: a second call finds nothing.
 pub async fn purge_retired_bot<C: ConnectionTrait>(db: &C, bot_id: &str) -> Result<u64, ApiError> {
+    clear_team_lead(db, bot_id).await?;
     let mut purged = 0;
     for (table, predicate) in retired_bot_rows() {
         let meta = fk_graph().table(table).ok_or_else(|| {
@@ -121,6 +137,10 @@ mod tests {
             schema.create_table_from_entity(crate::entity::bot_turn_checkpoint::Entity),
             schema.create_table_from_entity(crate::entity::bot_decision_wait::Entity),
             schema.create_table_from_entity(crate::entity::bot_note::Entity),
+            schema.create_table_from_entity(crate::entity::bot_channel_link::Entity),
+            schema.create_table_from_entity(crate::entity::bot_channel_sender::Entity),
+            schema.create_table_from_entity(crate::entity::bot_team::Entity),
+            schema.create_table_from_entity(crate::entity::bot_team_bot::Entity),
         ] {
             let mut table = Table::create();
             table.table(source.get_table_name().unwrap().clone());

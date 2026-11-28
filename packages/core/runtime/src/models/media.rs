@@ -81,6 +81,8 @@ const FAILURE_ENTRIES: u64 = 1024;
 const CONCURRENT_FETCHES: usize = 4;
 /// For a host's addresses to resolve when a call decides whether its provider can fetch a link.
 const LINK_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+/// The redirects a download held to public hosts follows, as many as HTTP nodes do.
+const PUBLIC_REDIRECTS: usize = 10;
 /// Object a store signs a link for to show where its links point. The link is never fetched.
 const PROBE_OBJECT: &str = "link-scope-probe";
 const PROBE_TTL: Duration = Duration::from_secs(60);
@@ -846,7 +848,30 @@ impl RemoteMediaModel {
         storage_roots: Vec<PathBuf>,
         own_storage: OwnStorage,
     ) -> Self {
-        let source = EnvironmentSource::reading(environment, storage_roots, own_storage);
+        Self::confined(
+            inner,
+            environment,
+            reader,
+            storage_roots,
+            own_storage,
+            ProviderEgress::Open,
+        )
+    }
+
+    /// [`Self::direct`] on a host with a policy for its users' links: under
+    /// [`ProviderEgress::Public`] a link outside `own_storage` is downloaded over public HTTPS
+    /// only, and one to any other host fails the call. Every other policy keeps the reach of
+    /// `environment`.
+    pub fn confined(
+        inner: Arc<dyn ModelLogic>,
+        environment: ExecutionEnvironment,
+        reader: MediaReader,
+        storage_roots: Vec<PathBuf>,
+        own_storage: OwnStorage,
+        egress: ProviderEgress,
+    ) -> Self {
+        let source =
+            EnvironmentSource::reading(environment, storage_roots, own_storage).confined_to(egress);
         Self::with(
             inner,
             Arc::new(source),
@@ -1363,13 +1388,82 @@ fn transport_error(error: reqwest::Error) -> String {
     message
 }
 
+/// How a direct call downloads the links outside its own store.
+enum Downloads {
+    /// The reach of HTTP nodes in the call's environment.
+    Environment(GuardedHttpClient),
+    /// Public HTTPS only, on every redirect too: a host that calls models for its users (the
+    /// API) keeps the links they hand it out of its own network.
+    Public(reqwest::Client),
+}
+
+impl Downloads {
+    /// Only a host held to public addresses narrows the downloads; any other policy leaves them
+    /// the reach of the environment.
+    fn confines(egress: ProviderEgress) -> bool {
+        egress == ProviderEgress::Public
+    }
+
+    fn new(environment: ExecutionEnvironment, egress: ProviderEgress) -> Result<Self> {
+        if !Self::confines(egress) {
+            return GuardedHttpClient::new(environment).map(Self::Environment);
+        }
+        egress
+            .guard_following_redirects(reqwest::Client::builder(), PUBLIC_REDIRECTS)
+            .build()
+            .map(Self::Public)
+            .map_err(|error| anyhow!("{error}"))
+    }
+
+    /// Starts the GET of `url`. A refusal names the host, never the URL.
+    async fn get(&self, url: &str) -> Result<reqwest::RequestBuilder> {
+        match self {
+            Self::Environment(client) => client.get(url),
+            Self::Public(client) => {
+                let link = Url::parse(url).map_err(|_| anyhow!("the link is not a valid URL"))?;
+                if !publicly_reachable(url).await {
+                    bail!(
+                        "'{}' is refused: this server downloads media only from public HTTPS \
+                         hosts and its own storage",
+                        link.host_str().unwrap_or_default()
+                    );
+                }
+                Ok(client.get(link))
+            }
+        }
+    }
+}
+
+/// The GETs a direct model call makes for the media links it reads, for a caller that checks a
+/// link before a call carries it.
+pub struct MediaLinks(EnvironmentSource);
+
+impl MediaLinks {
+    /// The links of a call in `environment` whose own store is `own_storage`; `egress` is the
+    /// host's policy for every other link.
+    pub fn new(
+        environment: ExecutionEnvironment,
+        own_storage: OwnStorage,
+        egress: ProviderEgress,
+    ) -> Self {
+        Self(EnvironmentSource::reading(environment, Vec::new(), own_storage).confined_to(egress))
+    }
+
+    /// Starts the GET of `url`. Errors name its host at most, never the URL.
+    pub async fn get(&self, url: &str) -> Result<reqwest::RequestBuilder> {
+        self.0.get(url).await
+    }
+}
+
 /// A direct call's downloads, through the egress guard of its environment, and from the own store
 /// of a server as they are. A link the provider fetches itself stays a link when the provider can
 /// reach it; a link into the own store is signed again to expire after [`RESIGNED_TTL`] first, or
 /// sent inline when the store does not serve the fresh link.
 struct EnvironmentSource {
     environment: ExecutionEnvironment,
-    client: OnceLock<std::result::Result<GuardedHttpClient, String>>,
+    /// What confines the links outside the own store; see [`Downloads`].
+    egress: ProviderEgress,
+    downloads: OnceLock<std::result::Result<Downloads, String>>,
     /// The app's storage on this machine, the only files its desktop asset links are read from.
     storage_roots: Vec<PathBuf>,
     own_storage: OwnStorage,
@@ -1391,7 +1485,8 @@ impl EnvironmentSource {
     ) -> Self {
         Self {
             environment,
-            client: OnceLock::new(),
+            egress: ProviderEgress::Open,
+            downloads: OnceLock::new(),
             storage_roots,
             scope: own_storage.cache_scope(environment),
             own_storage,
@@ -1399,11 +1494,31 @@ impl EnvironmentSource {
         }
     }
 
-    fn client(&self) -> Result<&GuardedHttpClient> {
-        self.client
-            .get_or_init(|| GuardedHttpClient::new(self.environment).map_err(|e| e.to_string()))
+    /// On a host that confines what its users' links reach, `egress` is that host's policy for
+    /// the links outside the own store.
+    fn confined_to(mut self, egress: ProviderEgress) -> Self {
+        if Downloads::confines(egress) && !Downloads::confines(self.egress) {
+            self.scope.push_str(" public");
+        }
+        self.egress = egress;
+        self
+    }
+
+    fn downloads(&self) -> Result<&Downloads> {
+        self.downloads
+            .get_or_init(|| {
+                Downloads::new(self.environment, self.egress).map_err(|error| error.to_string())
+            })
             .as_ref()
             .map_err(|error| anyhow!("building the HTTP client for inline media failed: {error}"))
+    }
+
+    /// Starts the GET of `url`: to the own store as it is, to any other host through the guard.
+    async fn get(&self, url: &str) -> Result<reqwest::RequestBuilder> {
+        if self.owns(url) {
+            return self.storage_get(url);
+        }
+        self.downloads()?.get(url).await
     }
 
     fn storage_client(&self) -> Result<&reqwest::Client> {
@@ -1494,7 +1609,7 @@ impl MediaSource for EnvironmentSource {
     }
 
     async fn prepare(&self) -> Result<()> {
-        self.client()?;
+        self.downloads()?;
         if !self.own_storage.is_empty() {
             self.storage_client()?;
         }
@@ -1505,8 +1620,9 @@ impl MediaSource for EnvironmentSource {
         if self.owns(url) {
             return self.send_to_storage(url).await;
         }
-        self.client()?
-            .get(url)?
+        self.downloads()?
+            .get(url)
+            .await?
             .send()
             .await
             .map_err(|error| anyhow!("GET failed: {}", error.without_url()))
@@ -3819,6 +3935,75 @@ pub(crate) mod tests {
             assert!(!error.contains("secret"), "{error}");
         }
         assert_eq!(store.hits() + other.hits(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_host_held_to_public_addresses_downloads_public_links_and_its_own_store() {
+        let store = serve(vec![("/content/report.pdf", Reply::ok(PDF))]).await;
+        let own = own_store(&store.base).await;
+        let links = MediaLinks::new(
+            ExecutionEnvironment::Server,
+            own.clone(),
+            ProviderEgress::Public,
+        );
+
+        let from_store = links
+            .get(&store.url("/content/report.pdf"))
+            .await
+            .expect("the own store is read as it is")
+            .send()
+            .await
+            .unwrap();
+        assert!(from_store.status().is_success());
+        assert_eq!(store.hits(), 1);
+
+        for refused in [
+            store.url("/other-bucket/report.pdf"),
+            "http://images.example.com/a.png?token=secret".to_string(),
+            "https://10.0.0.5/a.png".to_string(),
+            "https://192.168.1.20:8443/a.png".to_string(),
+            "https://169.254.169.254/latest/meta-data/".to_string(),
+            "https://localhost/a.png".to_string(),
+        ] {
+            let error = links.get(&refused).await.expect_err(&refused).to_string();
+            assert!(error.contains("public HTTPS"), "{refused}: {error}");
+            assert!(!error.contains("secret"), "{error}");
+        }
+        assert!(links.get("https://93.184.216.34/a.png").await.is_ok());
+        assert_eq!(store.hits(), 1, "a refused link is never fetched");
+
+        let confined = MediaPreparation {
+            source: Arc::new(
+                EnvironmentSource::reading(ExecutionEnvironment::Server, Vec::new(), own)
+                    .confined_to(ProviderEgress::Public),
+            ),
+            reader: reader("custom:anthropic"),
+            policy: InlinePolicy::direct(ExecutionEnvironment::Server),
+        };
+        let error = failure(&pdf_at("https://10.0.0.5/report.pdf".into()), confined).await;
+        assert!(error.contains("public HTTPS"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn only_a_host_held_to_public_addresses_narrows_its_downloads() {
+        let server = || EnvironmentSource::new(ExecutionEnvironment::Server);
+        for (egress, narrowed) in [
+            (ProviderEgress::Open, false),
+            (ProviderEgress::Private, false),
+            (ProviderEgress::Public, true),
+        ] {
+            let downloads = Downloads::new(ExecutionEnvironment::Server, egress).unwrap();
+            assert_eq!(
+                matches!(downloads, Downloads::Public(_)),
+                narrowed,
+                "{egress:?}"
+            );
+            assert_eq!(
+                server().confined_to(egress).cache_scope() != server().cache_scope(),
+                narrowed,
+                "{egress:?}: downloads through different guards are cached apart"
+            );
+        }
     }
 
     #[tokio::test]

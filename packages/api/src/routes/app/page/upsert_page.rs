@@ -6,16 +6,20 @@ use crate::{
     permission::role_permission::RolePermissions,
     routes::app::board::sink_rebind::{rebind_latest_sinks, try_rebind_latest_sinks},
     state::AppState,
+    utils::fork::upload::upload_id_map,
 };
 use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like::a2ui::{
-    page_targets::{RetargetedAction, retarget_page_workflow_actions},
-    widget::Page,
+use flow_like::{
+    a2ui::{
+        page_targets::{RetargetedAction, retarget_page_workflow_actions},
+        widget::Page,
+    },
+    app::remap::{ForkIdMap, remap_page},
 };
-use flow_like_types::anyhow;
+use flow_like_types::{anyhow, proto};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -34,6 +38,23 @@ fn payload_revision(page: &Page) -> chrono::DateTime<chrono::FixedOffset> {
     let stamped: chrono::DateTime<chrono::Utc> = page.updated_at.into();
     let ceiling = chrono::Utc::now() + chrono::Duration::minutes(5);
     stamped.min(ceiling).fixed_offset()
+}
+
+/// The page an upload pushed, moved into the upload's id space together with its board and the
+/// nodes, pages, widgets and events it names.
+fn rekey_uploaded_page(page: Page, app_id: &str, maps: &ForkIdMap) -> Page {
+    let new_page_id = maps.mint(&page.id);
+    let mut proto = proto::Page::from(page);
+    let unrewritten = remap_page(&mut proto, &new_page_id, maps);
+    if !unrewritten.is_empty() {
+        tracing::warn!(
+            app_id = %app_id,
+            page_id = %new_page_id,
+            payloads = ?unrewritten,
+            "uploaded page has payloads that could not be re-keyed; they keep the local ids"
+        );
+    }
+    Page::from(proto)
 }
 
 #[utoipa::path(
@@ -72,7 +93,11 @@ pub async fn upsert_page(
     }
 
     let mut page = page_data.page;
-    page.id = page_id.clone();
+    page.id = page_id;
+    if let Some(maps) = upload_id_map(&state, &app_id).await? {
+        page = rekey_uploaded_page(page, &app_id, &maps);
+    }
+    let page_id = page.id.clone();
 
     // Pages are owned by a board on disk; the path is
     // `apps/{app}/_{board_id}/{page_id}.page`. Without a board id we
@@ -81,17 +106,6 @@ pub async fn upsert_page(
         .board_id
         .clone()
         .ok_or_else(|| ApiError::bad_request("page payload is missing `board_id`".to_string()))?;
-
-    // Resolve credentials and storage before taking mutation locks so lock holders never wait for
-    // another pooled database connection during app setup.
-    let app = state
-        .scoped_app(
-            &sub,
-            &app_id,
-            &state,
-            crate::credentials::CredentialsAccess::EditApp,
-        )
-        .await?;
 
     // A page copied out of another app keeps that app's `workflow_event` targets, and the runtime
     // prefers the action's context over the surface it renders on. Normalizing before the write is
@@ -138,34 +152,33 @@ pub async fn upsert_page(
         }
     }
 
-    let board = app
-        .open_board(board_id.clone(), None, None)
+    // The lease above keeps every other board writer out, and the shared cache revalidates its
+    // entry against storage, so this is the stored draft without a full reload when it is current.
+    let mut board = match state
+        .master_board(&sub, &app_id, &board_id, &state, None)
         .await
-        .map_err(|e| {
-            if let Some(upgrade) = ApiError::from_board_format_error(&e) {
-                return upgrade;
-            }
-            // A board this app does not own is a bad request, not a server fault — but the
-            // manifest alone cannot decide that. `manifest.app` is a last-write-wins document
-            // several endpoints rewrite without a shared lock, so a board created moments ago can
-            // be missing from it while its file is perfectly readable; only a failed open plus an
-            // absent manifest entry means the board is really not here.
-            if app.boards.contains(&board_id) {
-                ApiError::internal_error(anyhow!("open board {}: {e}", board_id))
-            } else {
-                ApiError::bad_request(format!(
-                    "board '{board_id}' is not a board of app '{app_id}', so page '{page_id}' has nowhere to live"
-                ))
-            }
-        })?;
+    {
+        Ok(board) => board,
+        Err(error) => {
+            return Err(board_open_error(&state, &sub, &app_id, &board_id, &page_id, error).await);
+        }
+    };
 
     // A page is part of its board's draft, so its editor is a board editor.
     try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
-    {
-        let mut board_guard = board.write().await;
+    page_id_guard.ensure_held()?;
+    let board_before_page = board.content_hash();
+    board.save_page(&page, None).await?;
+    // A rewritten board gets a new storage identity even when its content is the same, and every
+    // API instance then rehydrates it on its next read. Persist the board only when the page
+    // changed it: a new page id, or page event nodes whose options follow the page.
+    let mut seeded = None;
+    if board.content_hash() != board_before_page {
         page_id_guard.ensure_held()?;
-        board_guard.save_page(&page, None).await?;
-        board_guard.save(None).await?;
+        let saved = board.save_with_source(None).await?;
+        seeded = state
+            .seed_board_cache(&app_id, &board_id, board, &saved.put)
+            .map(|cached| (cached, saved.source));
     }
     rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
 
@@ -198,6 +211,12 @@ pub async fn upsert_page(
         .await?;
 
     page_id_guard.release().await;
+    if let Some((cached, source)) = &seeded {
+        crate::routes::app::prerun_shared::prewarm_draft_revision(
+            &state, &app_id, &board_id, cached, source,
+        )
+        .await;
+    }
 
     if retargeted.is_empty() {
         audit_branch!(state, user, app_id, "page.upsert", "Page", page_id);
@@ -213,6 +232,32 @@ pub async fn upsert_page(
         );
     }
     Ok(Json(page))
+}
+
+/// A board this app does not own is a bad request, not a server fault — but the manifest alone
+/// cannot decide that. `manifest.app` is a last-write-wins document several endpoints rewrite
+/// without a shared lock, so a board created moments ago can be missing from it while its file is
+/// perfectly readable; only a failed open plus an absent manifest entry means the board is really
+/// not here.
+async fn board_open_error(
+    state: &AppState,
+    sub: &str,
+    app_id: &str,
+    board_id: &str,
+    page_id: &str,
+    error: flow_like_types::Error,
+) -> ApiError {
+    if let Some(upgrade) = ApiError::from_board_format_error(&error) {
+        return upgrade;
+    }
+    match state.master_app(sub, app_id, state).await {
+        Ok(app) if !app.boards.iter().any(|listed| listed == board_id) => {
+            ApiError::bad_request(format!(
+                "board '{board_id}' is not a board of app '{app_id}', so page '{page_id}' has nowhere to live"
+            ))
+        }
+        _ => ApiError::internal_error(anyhow!("open board {board_id}: {error}")),
+    }
 }
 
 const MAX_AUDITED_FOREIGN_APPS: usize = 8;

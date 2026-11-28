@@ -220,6 +220,13 @@ executionManager:
       pullPolicy: IfNotPresent
   objectStoreTlsGateway: true
 
+query:
+  image:
+    repository: flow-like-docker-compose-query
+    tag: "1.0.0"
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    pullPolicy: IfNotPresent
+
 rustfs:
   enabled: true
   existingSecret: flow-like-rustfs-root

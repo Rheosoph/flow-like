@@ -3,14 +3,14 @@
 //! edits replace their message's text; deleted and sealed messages are left out.
 
 use crate::{
-    entity::{bot, inbox_entry, user},
+    entity::{bot, conversation_member, inbox_entry, user},
     error::ApiError,
 };
 use flow_like::flow::copilot::{ChatMessage, ChatRole, ReactionNote};
 use flow_like_types::{
     bot_message::{MessageBody, MessagePart},
     bot_tool_trail::{TrailEntry, TrailSection, trail_of},
-    bot_turn::{clip_keeping_tail, room_message},
+    bot_turn::{RoomLine, clip_keeping_tail, room_message},
     bot_user_context::{ContextHistory, ContextLine},
     inbox::{
         ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, ReactionEvent, TranscriptBody,
@@ -46,6 +46,8 @@ pub(crate) struct Transcript {
     pub trail: Option<TrailSection>,
     /// What the entries read put into the turn's taint.
     pub reads: flow_like::flow::copilot::TurnReads,
+    /// In a group, the member the answered message's sender is talking with.
+    pub talking_with: Option<String>,
 }
 
 #[derive(Debug)]
@@ -100,6 +102,19 @@ fn addressed_to(lines: &[Line], bot_id: &str) -> bool {
                     .any(|own| own.message_id == target && own.sender_id == bot_id)
             })
     })
+}
+
+fn talking_with(lines: &[Line]) -> Option<String> {
+    let room: Vec<RoomLine<'_>> = lines
+        .iter()
+        .map(|line| RoomLine {
+            message_id: &line.message_id,
+            sender_id: &line.sender_id,
+            mentions: &line.mentions,
+            reply_to: line.reply_to.as_deref(),
+        })
+        .collect();
+    flow_like_types::bot_turn::talking_with(&room).map(str::to_owned)
 }
 
 pub(super) fn plain_body(envelope: &serde_json::Value) -> Option<&serde_json::Value> {
@@ -361,21 +376,98 @@ pub(crate) async fn sender_names<C: ConnectionTrait>(
         .all(db)
         .await?;
     for (id, name, system) in bots {
-        let name = name.filter(|name| !name.trim().is_empty()).or_else(|| {
-            use flow_like_types::bot::BotSystemKind;
-            system
-                .as_deref()
-                .and_then(BotSystemKind::parse)
-                .map(|kind| match kind {
-                    BotSystemKind::General => "Assistant".to_owned(),
-                    BotSystemKind::Flux => "Flux".to_owned(),
-                })
-        });
-        if let Some(name) = name {
+        if let Some(name) = bot_display_name(name, system.as_deref()) {
             names.insert(id, name);
         }
     }
+    names.extend(crate::bot_channels::outside_names(db, ids).await?);
     Ok(names)
+}
+
+/// The display names of the room's active bot members other than `bot_id`, the way a bot
+/// @mentions them; a bot without a name is left out, since nothing could name it.
+pub(crate) async fn room_bot_names<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    bot_id: &str,
+) -> Result<Vec<String>, DbErr> {
+    let ids: Vec<String> = conversation_member::Entity::find()
+        .select_only()
+        .column(conversation_member::Column::PrincipalId)
+        .filter(conversation_member::Column::ConversationId.eq(conversation_id))
+        .filter(conversation_member::Column::PrincipalKind.eq("BOT"))
+        .filter(conversation_member::Column::PrincipalId.ne(bot_id))
+        .filter(crate::routes::inbox::active_member())
+        .order_by_asc(conversation_member::Column::PrincipalId)
+        .into_tuple()
+        .all(db)
+        .await?;
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let names = sender_names(db, &refs).await?;
+    Ok(ids.iter().filter_map(|id| names.get(id).cloned()).collect())
+}
+
+/// A bot's name as rooms show it: its own, else its built-in kind's.
+pub(crate) fn bot_display_name(name: Option<String>, system: Option<&str>) -> Option<String> {
+    use flow_like_types::bot::BotSystemKind;
+    name.filter(|name| !name.trim().is_empty()).or_else(|| {
+        system
+            .and_then(BotSystemKind::parse)
+            .map(|kind| match kind {
+                BotSystemKind::General => "Assistant".to_owned(),
+                BotSystemKind::Flux => "Flux".to_owned(),
+            })
+    })
+}
+
+/// The last [`HISTORY_ENTRIES`] spoken entries of `inbox_id`'s copy of the conversation that
+/// `upto` keeps, oldest first.
+async fn spoken_window<C: ConnectionTrait>(
+    db: &C,
+    inbox_id: &str,
+    conversation_id: &str,
+    upto: sea_orm::sea_query::SimpleExpr,
+) -> Result<Vec<inbox_entry::Model>, DbErr> {
+    let mut window = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(inbox_id))
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(upto)
+        .filter(inbox_entry::Column::Kind.is_in(SPOKEN_KINDS))
+        .order_by_desc(inbox_entry::Column::Seq)
+        .order_by_desc(inbox_entry::Column::CreatedAt)
+        .order_by_desc(inbox_entry::Column::Id)
+        .limit(HISTORY_ENTRIES)
+        .all(db)
+        .await?;
+    window.reverse();
+    Ok(window)
+}
+
+/// The member the sender of `message_id`, at `seq` in `inbox_id`'s copy of a group, is talking
+/// with ([`talking_with`]), read as a turn for that message reads it. `None` when the message
+/// isn't the last spoken line there.
+pub(crate) async fn partner_at<C: ConnectionTrait>(
+    db: &C,
+    inbox_id: &str,
+    conversation_id: &str,
+    message_id: &str,
+    seq: i64,
+) -> Result<Option<String>, DbErr> {
+    let window = spoken_window(
+        db,
+        inbox_id,
+        conversation_id,
+        inbox_entry::Column::Seq.lte(seq),
+    )
+    .await?;
+    let lines = lines_of(&window, &[], inbox_id);
+    if lines
+        .last()
+        .is_none_or(|line| line.message_id != message_id)
+    {
+        return Ok(None);
+    }
+    Ok(talking_with(&lines))
 }
 
 /// The turn's transcript: the entries up to `trigger_message_id` in the bot's copy of the
@@ -418,16 +510,7 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
         .limit(LATER_ENTRIES)
         .all(db)
         .await?;
-    let mut window = own(inbox_entry::Entity::find())
-        .filter(upto)
-        .filter(inbox_entry::Column::Kind.is_in(SPOKEN_KINDS))
-        .order_by_desc(inbox_entry::Column::Seq)
-        .order_by_desc(inbox_entry::Column::CreatedAt)
-        .order_by_desc(inbox_entry::Column::Id)
-        .limit(HISTORY_ENTRIES)
-        .all(db)
-        .await?;
-    window.reverse();
+    let window = spoken_window(db, bot_id, conversation_id, upto).await?;
     let mut lines = lines_of(&window, &later, bot_id);
     let context_prompt = flow_like_types::bot_user_context::response_prompt(
         &trigger.envelope["body"],
@@ -485,6 +568,9 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
     if context_prompt.is_none() {
         history.pop();
     }
+    let talking_with = (context_prompt.is_none() && kind == ConversationKind::Group)
+        .then(|| talking_with(&lines))
+        .flatten();
     Ok(Transcript {
         prompt: clip_keeping_tail(&spoken(&answered), answered.keep, MAX_PROMPT_CHARS),
         history,
@@ -494,6 +580,7 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
         topic_at: topic_at_of(&window),
         trail: tool_trail(bot_id, &window),
         reads: super::taint::reads_of(db, &window, bot_id).await?,
+        talking_with,
     })
 }
 
@@ -729,6 +816,7 @@ pub(crate) async fn reaction_turn<C: ConnectionTrait>(
             topic_at: topic_at_of(&window),
             trail: None,
             reads: super::taint::reads_of(db, &window, bot_id).await?,
+            talking_with: None,
         },
         reactions,
     })

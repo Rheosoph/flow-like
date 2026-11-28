@@ -23,7 +23,8 @@ use crate::{
     transcript,
 };
 use flow_like::flow::copilot::{
-    ReplyFiles, ToolTrail, TurnRequester,
+    ReplyFiles, TalkingWith, ToolTrail, TurnRequester,
+    bot_discussion::DiscussionReply,
     bot_notes::NotesHandle,
     bot_talk::AnsweredRound,
     decision::{self, Decision, DecisionParticipant},
@@ -118,6 +119,7 @@ struct Live {
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
     reply_files: Option<ReplyFiles>,
+    discussion: Option<DiscussionReply>,
 }
 
 #[derive(Default)]
@@ -397,6 +399,7 @@ impl Inner {
                     notes: None,
                     trail: None,
                     reply_files: None,
+                    discussion: None,
                 };
                 started.push((live.info.clone(), key.clone(), turn.id, receiver));
                 state.live.insert(key, live);
@@ -776,6 +779,13 @@ impl Inner {
         let no_prompt = transcript.prompt.is_empty();
         let note = resume_note(grants.as_ref()).await;
         let resumed = note.is_some();
+        // The hub can't read a sealed room's bodies, so a hand-over there keeps the hop limit.
+        let in_room =
+            kind == ConversationKind::Group && !continued && answered_round.is_none() && !sealed;
+        let asks = entries.iter().any(|entry| {
+            entry.message_id == lead.trigger_message_id
+                && crate::rule::parse_body(entry).is_some_and(|body| body.ask.is_some())
+        });
         let requester = TurnRequester {
             requester_id: lead
                 .requester_id
@@ -788,7 +798,19 @@ impl Inner {
             room: None,
             addressed: transcript.addressed,
             reactions,
+            talking_with: transcript
+                .talking_with
+                .as_deref()
+                .map(|partner| TalkingWith::of(partner, bot_id, &names)),
+            discussion_hops: (in_room && !asks && lead.hops > 0).then_some(lead.hops),
+            discussion_limit: flow_like_types::bot_turn::hop_limit(true, lead.discussion_hops),
+            room_bots: if in_room {
+                room_bots(room.as_ref(), bot_id)
+            } else {
+                Vec::new()
+            },
         };
+        let discussion = (in_room && !asks && !ephemeral_user_context).then(DiscussionReply::new);
         if reacting && no_prompt {
             return self.stay_silent(lead).await;
         }
@@ -913,6 +935,7 @@ impl Inner {
             live.notes = notes.clone();
             live.trail = trail.clone();
             live.reply_files = reply_files.clone();
+            live.discussion = discussion.clone();
             live.usage = usage.clone();
         }
         let mut job = TurnJob {
@@ -938,6 +961,7 @@ impl Inner {
             notes: notes.clone(),
             trail,
             reply_files,
+            discussion,
             memory: memory.clone(),
             gate: gate.clone(),
             requester: Some(requester.clone()),
@@ -1027,7 +1051,7 @@ impl Inner {
                 ),
             }
             let instruction = if decision_event::monitoring(event) {
-                decision_event::MONITOR_INSTRUCTION
+                decision_event::monitoring_instruction(event)
             } else {
                 event_delivery
                     .map(EventDecision::instruction)
@@ -1118,12 +1142,17 @@ impl Inner {
                         })
                     })
                     .collect::<Vec<_>>();
-                let request =
-                    participation_request(&job, &lead.trigger_message_id, &entries, &participants)
-                        .map_err(|error| RunError::Failed {
-                            code: CODE_SETUP.into(),
-                            message: error.to_string(),
-                        })?;
+                let request = participation_request(
+                    &job,
+                    &lead.trigger_message_id,
+                    &entries,
+                    &participants,
+                    &names,
+                )
+                .map_err(|error| RunError::Failed {
+                    code: CODE_SETUP.into(),
+                    message: error.to_string(),
+                })?;
                 self.runner.decide(&job, &request).await
             };
             let mut decide = Box::pin(tokio::time::timeout(
@@ -1519,6 +1548,7 @@ impl Inner {
             history,
             addressed: true,
             topic_at: transcript::topic_at(&origin),
+            talking_with: None,
         };
         let answered_round = asked.answered_round();
         Ok(Some(LateContinuation {
@@ -1603,7 +1633,7 @@ impl Inner {
         sealed: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
-        let (note, trail, files, usage);
+        let (note, trail, files, discussion, usage);
         {
             let mut state = lock(&self.state);
             let Some(live) = state.live.get_mut(key) else {
@@ -1616,6 +1646,7 @@ impl Inner {
             note = live.notes.as_ref().and_then(NotesHandle::touched);
             trail = live.trail.clone();
             files = live.reply_files.clone();
+            discussion = live.discussion.clone();
             usage = live.usage.clone();
         }
         let message_id = if failure.is_some() {
@@ -1631,6 +1662,9 @@ impl Inner {
             }
             if let Some(trail) = &trail {
                 trail.attach(&mut body);
+            }
+            if let Some(reply) = &discussion {
+                reply.attach(&mut body);
             }
         }
         if failure.is_none() && acknowledgement {
@@ -1806,6 +1840,26 @@ impl Inner {
         };
         self.events.turn(&info);
     }
+}
+
+/// The display names of a room's other bots, from the members the hub lists for it.
+fn room_bots(room: Option<&serde_json::Value>, bot_id: &str) -> Vec<String> {
+    room.and_then(|room| room.get("members"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|member| {
+            member
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("bot"))
+                && member
+                    .get("principal_id")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(bot_id)
+        })
+        .filter_map(|member| Some(member.get("name")?.as_str()?.to_owned()))
+        .collect()
 }
 
 fn info_of(turn: &BotTurn, status: TurnStatus) -> TurnInfo {

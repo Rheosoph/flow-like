@@ -41,15 +41,16 @@ WORKDIR /app
 
 COPY . .
 
-# Limit build parallelism to reduce memory pressure during lance compilation
-ARG CARGO_BUILD_JOBS=2
+# Limit build parallelism while compiling the API and runtime dependencies.
+ARG CARGO_BUILD_JOBS=1
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
 # Use BuildKit cache mounts for faster rebuilds
 RUN --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sharing=shared \
     --mount=type=cache,target=/app/target,id=cargo-target-runtime-rust-beta-2026-09-27,sharing=locked \
-    CARGO_HOME=/cargo-home cargo build --locked --release --package docker-compose-runtime && \
-    cp /app/target/release/docker-compose-runtime /tmp/docker-compose-runtime
+    CARGO_HOME=/cargo-home cargo build --locked --profile server --package docker-compose-runtime && \
+    cp /app/target/server/docker-compose-runtime /tmp/docker-compose-runtime && \
+    strip --strip-all /tmp/docker-compose-runtime
 
 # ============================================================
 # Stage 2: Runtime

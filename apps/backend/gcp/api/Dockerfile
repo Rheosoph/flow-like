@@ -14,7 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY . .
 
-ENV CARGO_BUILD_JOBS=2
+ARG CARGO_BUILD_JOBS=1
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
 # Shared images embed the reviewed public default. Deployments replace it at
 # startup with FLOW_LIKE_CONFIG_JSON, FLOW_LIKE_CONFIG_FILE, or
@@ -33,9 +34,9 @@ RUN --mount=type=secret,id=flow_like_config,target=/tmp/flow-like.gcp.config.jso
         && grep -Eq '"provider"[[:space:]]*:[[:space:]]*"gcp"' /tmp/flow-like.gcp.config.json \
         && cp /tmp/flow-like.gcp.config.json /app/flow-like.config.json; \
     else test -z "$FLOW_LIKE_CONFIG_SHA256"; fi \
-    && CARGO_HOME=/cargo-home cargo build --locked --release --package gcp-api \
-    && strip -s /app/target/release/gcp-api \
-    && cp /app/target/release/gcp-api /tmp/gcp-api \
+    && CARGO_HOME=/cargo-home cargo build --locked --profile server --package gcp-api \
+    && strip -s /app/target/server/gcp-api \
+    && cp /app/target/server/gcp-api /tmp/gcp-api \
     && rm /app/flow-like.config.json
 
 FROM debian:bookworm-slim AS runtime

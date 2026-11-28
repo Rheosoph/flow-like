@@ -1,12 +1,17 @@
 use crate::{
     audit_branch, ensure_permission, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
+    utils::fork::upload::upload_id_map,
 };
 use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like::flow::{board::VersionType, event::Event};
+use flow_like::{
+    app::remap::{ForkIdMap, remap_event},
+    flow::{board::VersionType, event::Event},
+};
+use flow_like_types::{FromProto, ToProto};
 use serde::Deserialize;
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -72,7 +77,12 @@ pub async fn upsert_event(
         .await?;
 
     let mut event = params.event;
-    event.id = event_id.clone();
+    event.id = event_id;
+    let upload = upload_id_map(&state, &app_id).await?;
+    if let Some(maps) = upload.as_ref() {
+        event = rekey_uploaded_event(event, maps);
+    }
+    let event_id = event.id.clone();
     let saved_event = super::db::get_event_from_db_opt(&state.db, &event_id, &app_id).await?;
     apply_register_source(&mut event, params.register_source, saved_event.as_ref())?;
     if saved_event.as_ref().is_some_and(Event::is_device_source)
@@ -96,7 +106,8 @@ pub async fn upsert_event(
         ));
     }
 
-    let preserve_id = event.is_device_source().then_some(true);
+    // An upload's id was minted from the upload's seed, and its pages and routes already name it.
+    let preserve_id = (upload.is_some() || event.is_device_source()).then_some(true);
     if preserve_id.is_some() && saved_event.is_none() {
         ensure_client_event_id_available(&state, &event_id).await?;
     }
@@ -224,6 +235,14 @@ fn apply_register_source(
         _ => Ok(()),
     };
     outcome.map_err(|error| ApiError::bad_request(error.to_string()))
+}
+
+/// The event an upload pushed, moved into the upload's id space together with the board, node
+/// and page it targets.
+fn rekey_uploaded_event(event: Event, maps: &ForkIdMap) -> Event {
+    let mut proto = event.to_proto();
+    remap_event(&mut proto, maps);
+    Event::from_proto(proto)
 }
 
 async fn ensure_client_event_id_available(
@@ -376,7 +395,7 @@ async fn rollback_failed_setup(
             "rollback: failed to persist bucket cleanup"
         );
     }
-    if let Err(e) = super::db::delete_event_with_sink(&state.db, state, event_id).await {
+    if let Err(e) = super::db::delete_event_with_sink(&state.db, state, app_id, event_id).await {
         tracing::warn!(
             app_id = %app_id,
             event_id = %event_id,

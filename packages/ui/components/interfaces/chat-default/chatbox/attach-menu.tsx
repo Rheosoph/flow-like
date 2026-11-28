@@ -8,6 +8,7 @@ import FolderIcon from "lucide-react/dist/esm/icons/folder.js";
 import HardDrive from "lucide-react/dist/esm/icons/hard-drive.js";
 import Loader2 from "lucide-react/dist/esm/icons/loader-2.js";
 import MapPin from "lucide-react/dist/esm/icons/map-pin.js";
+import Paperclip from "lucide-react/dist/esm/icons/paperclip.js";
 import Plus from "lucide-react/dist/esm/icons/plus.js";
 import ScanBarcode from "lucide-react/dist/esm/icons/scan-barcode.js";
 import ScanLine from "lucide-react/dist/esm/icons/scan-line.js";
@@ -16,6 +17,7 @@ import ScanText from "lucide-react/dist/esm/icons/scan-text.js";
 import type { ComponentType } from "react";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { cn } from "../../../../lib/utils";
 import {
 	COMPOSER_ATTACH_KINDS,
 	COMPOSER_TEXT_KINDS,
@@ -50,6 +52,9 @@ export interface AttachMenuProps {
 	readonly onFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
 	readonly onAddFiles: (files: File[]) => void;
 	readonly onInsertText: (text: string) => void;
+	/** "+" opens the menu where it is the composer's only extra; inside a tray of controls a paperclip. */
+	readonly icon?: "plus" | "paperclip";
+	readonly triggerClassName?: string;
 }
 
 /** Picks one source per kind in menu order; file sources need a chat that takes files. */
@@ -72,6 +77,8 @@ export function AttachMenu({
 	onFileUpload,
 	onAddFiles,
 	onInsertText,
+	icon = "plus",
+	triggerClassName,
 }: AttachMenuProps) {
 	const { t } = useTranslation();
 	const deviceSources = useComposerCaptureStore((state) => state.sources);
@@ -146,10 +153,15 @@ export function AttachMenu({
 					type="button"
 					size="sm"
 					variant="ghost"
-					className="h-11 w-11 sm:h-8 sm:w-8 p-0 hover:bg-accent rounded-lg transition-colors"
+					className={cn(
+						"h-11 w-11 sm:h-8 sm:w-8 p-0 hover:bg-accent rounded-lg transition-colors",
+						triggerClassName,
+					)}
 				>
 					{busy ? (
 						<Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+					) : icon === "paperclip" ? (
+						<Paperclip className="w-4 h-4 text-muted-foreground" />
 					) : (
 						<Plus className="w-4 h-4 text-muted-foreground" />
 					)}

@@ -10,7 +10,9 @@ import {
 	type IBitState,
 	type IBoardState,
 	type IBotState,
+	type IBotTeamState,
 	type ICapabilities,
+	type IDataSourceState,
 	type IDatabaseState,
 	type IEventState,
 	type IGenericCommand,
@@ -57,6 +59,7 @@ import {
 	WebAudioState,
 	WebBitState,
 	WebBoardState,
+	WebDataSourceState,
 	WebDatabaseState,
 	WebEventState,
 	WebGraphState,
@@ -78,6 +81,7 @@ import {
 import { WebAnalyticsState } from "../lib/web-states/analytics-state";
 import type { WebBackendRef } from "../lib/web-states/api-utils";
 import { WebBotState } from "../lib/web-states/bot-state";
+import { WebBotTeamState } from "../lib/web-states/bot-team-state";
 import { WebInboxState } from "../lib/web-states/inbox-state";
 import { createWebMeetingClient } from "../lib/web-states/meeting-client";
 import { WebSalesState } from "../lib/web-states/sales-state";
@@ -101,12 +105,14 @@ export class WebBackend implements IBackendState {
 	dbState: IDatabaseState;
 	graphState: IGraphState;
 	queryState: IQueryState;
+	dataSourceState: IDataSourceState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	registryState: IRegistryState;
 	sinkState: ISinkState;
 	salesState: ISalesState;
 	botState: IBotState;
+	botTeamState: IBotTeamState;
 	inboxState: IInboxState;
 	meetingClient: MeetingClient;
 	usageState: IUsageState;
@@ -141,12 +147,14 @@ export class WebBackend implements IBackendState {
 		this.dbState = new WebDatabaseState(this.backendRef);
 		this.graphState = new WebGraphState(this.backendRef);
 		this.queryState = new WebQueryState(this.backendRef);
+		this.dataSourceState = new WebDataSourceState(this.backendRef);
 		this.widgetState = new WebWidgetState(this.backendRef);
 		this.pageState = new WebPageState(this.backendRef);
 		this.registryState = new WebRegistryState(this.backendRef);
 		this.sinkState = new WebSinkState(this.backendRef);
 		this.salesState = new WebSalesState(this.backendRef);
 		this.botState = new WebBotState(this.backendRef);
+		this.botTeamState = new WebBotTeamState(this.backendRef);
 		this.inboxState = withEndToEnd(
 			new WebInboxState(this.backendRef),
 			browserInboxCrypto,

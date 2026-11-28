@@ -32,7 +32,7 @@ percent-encoding.workspace = true
 redis = { version = "0.27", default-features = false, features = ["tokio-rustls-comp", "disable-client-setinfo"] }
 regex.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled", "fallible_uint"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde.workspace = true
 serde_json.workspace = true

@@ -13,6 +13,8 @@ mod sql_functions;
 pub mod sql_guard;
 #[cfg(feature = "database-runtime")]
 pub use sql_functions::register_sql_functions;
+#[cfg(all(feature = "database-runtime", feature = "graph"))]
+pub mod showcase;
 pub mod sql_params;
 #[cfg(all(feature = "database-runtime", feature = "graph"))]
 pub mod table_cascade;

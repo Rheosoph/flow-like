@@ -10,6 +10,8 @@ use crate::generative::embedding::CachedEmbeddingModelObject;
 #[cfg(feature = "execute")]
 use ahash::AHashSet;
 #[cfg(feature = "execute")]
+use flow_like::a2ui::authoring::{CHAT_UI_PATTERNS, CHAT_UI_PATTERNS_TOOL, chat_ui_pattern};
+#[cfg(feature = "execute")]
 use flow_like::flow::execution::LogLevel;
 #[cfg(feature = "execute")]
 use flow_like::flow::{
@@ -1214,6 +1216,46 @@ impl StreamHandler for AgentStreamState {
     }
 }
 
+#[cfg(feature = "execute")]
+fn ui_patterns_tool_definition() -> ToolDefinition {
+    let names: Vec<&str> = CHAT_UI_PATTERNS.iter().map(|(name, _)| *name).collect();
+    ToolDefinition {
+        name: CHAT_UI_PATTERNS_TOOL.to_string(),
+        description: "Returns the layout recipe and an example for one kind of `a2ui` reply. \
+                      Load it before the first fence of that kind in a conversation."
+            .to_string(),
+        parameters: json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "pattern": { "type": "string", "enum": names, "description": "The kind of reply to build." }
+            },
+            "required": ["pattern"]
+        }),
+    }
+}
+
+#[cfg(feature = "execute")]
+fn ui_patterns_result(arguments: &Value) -> Value {
+    let pattern = arguments
+        .get("pattern")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    match chat_ui_pattern(pattern) {
+        Some(recipe) => json::json!(recipe),
+        None => {
+            let names: Vec<&str> = CHAT_UI_PATTERNS.iter().map(|(name, _)| *name).collect();
+            json::json!({
+                "error": format!(
+                    "Unknown {CHAT_UI_PATTERNS_TOOL} pattern '{pattern}'. Valid patterns: {}",
+                    names.join(", ")
+                )
+            })
+        }
+    }
+}
+
 /// Execute an agent with streaming support.
 /// Emits chunks through the provided stream state as the agent generates responses.
 #[cfg(feature = "execute")]
@@ -1552,6 +1594,10 @@ pub async fn execute_agent_streaming(
                 "required": ["query"]
             }),
         });
+    }
+
+    if agent.generative_ui {
+        tool_definitions.push(ui_patterns_tool_definition());
     }
 
     // Expose built-in memory tools when the agent has a memory config
@@ -2228,6 +2274,8 @@ pub async fn execute_agent_streaming(
                         |e| json::json!({ "error": format!("Lazy tool search failed: {}", e) }),
                     );
                     (output, Vec::new())
+                } else if name == CHAT_UI_PATTERNS_TOOL && agent.generative_ui {
+                    (ui_patterns_result(&arguments), Vec::new())
                 } else if name.starts_with("_memory_") && agent.memory.is_some() {
                     let output = handle_memory_tool_call(context, agent, name, arguments)
                         .await
@@ -3086,6 +3134,26 @@ async fn embed_memory_document(
 #[cfg(all(test, feature = "execute"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_patterns_tool_lists_every_pattern_and_returns_recipes() {
+        let definition = ui_patterns_tool_definition();
+        let names: Vec<&str> = CHAT_UI_PATTERNS.iter().map(|(name, _)| *name).collect();
+        assert_eq!(definition.name, CHAT_UI_PATTERNS_TOOL);
+        assert_eq!(
+            definition.parameters["properties"]["pattern"]["enum"],
+            json::json!(names)
+        );
+        for (name, recipe) in CHAT_UI_PATTERNS {
+            assert_eq!(
+                ui_patterns_result(&json::json!({ "pattern": name })),
+                json::json!(recipe)
+            );
+        }
+        let error = ui_patterns_result(&json::json!({ "pattern": "nope" }));
+        let message = error["error"].as_str().unwrap();
+        assert!(names.iter().all(|name| message.contains(name)));
+    }
     use ahash::AHashMap;
     use flow_like::{
         flow::{

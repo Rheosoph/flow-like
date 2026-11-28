@@ -38,7 +38,9 @@ pub mod alerting;
 pub mod audit;
 mod bit_pricing;
 pub(crate) mod bot_app_gate;
+pub mod bot_calendar_feed;
 pub(crate) mod bot_caller;
+pub(crate) mod bot_channels;
 pub(crate) mod bot_flow;
 pub mod bot_host;
 pub(crate) mod bot_mail;
@@ -57,6 +59,7 @@ pub(crate) mod upload_lifecycle;
 #[cfg(feature = "cosmos")]
 pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
+pub mod data_source_secrets;
 pub mod db;
 pub mod deletion;
 pub(crate) mod devices;
@@ -64,6 +67,7 @@ pub use devices::certificates::spawn_sweeper as spawn_device_certificate_sweeper
 pub mod error;
 pub mod execution_usage_rollup;
 pub(crate) mod instances;
+mod interval_lease;
 pub mod locked_storage;
 pub mod mail;
 pub mod mail_ingress;
@@ -74,6 +78,7 @@ pub mod payments;
 pub mod permission;
 pub mod publication;
 pub mod push_notifications;
+pub mod query;
 pub mod quota;
 #[cfg(test)]
 mod quota_integration_tests;
@@ -89,7 +94,9 @@ pub mod storage_config;
 pub mod storage_identity;
 #[cfg(feature = "storage-queue")]
 mod storage_queue;
+pub mod storage_reconciler;
 pub mod stripe_connect;
+pub mod table_maintenance;
 pub mod teams;
 pub mod telemetry;
 pub mod usage_accounting;
@@ -209,6 +216,11 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/user", routes::user::routes())
         .nest("/profile", routes::profile::routes())
         .nest("/bots", routes::bots::routes())
+        .nest("/bot-teams", routes::bot_teams::routes())
+        .nest(
+            "/calendar-feeds",
+            routes::bots::calendar_feed::public_routes(),
+        )
         .nest("/inbox", routes::inbox::routes())
         .nest("/meetings", routes::meetings::routes())
         .nest("/apps", routes::app::routes())

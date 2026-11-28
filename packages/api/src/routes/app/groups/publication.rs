@@ -119,7 +119,7 @@ pub async fn change_group_visibility(
             review_requested: false,
             visibility: visibility_to_string(&current),
             request_id: None,
-            group: single_group(&state, &group_id).await?.0,
+            group: single_group(&state, &user, &group_id).await?.0,
         }));
     }
 
@@ -161,7 +161,7 @@ pub async fn change_group_visibility(
             review_requested: false,
             visibility: visibility_to_string(&target_visibility),
             request_id: None,
-            group: single_group(&state, &group_id).await?.0,
+            group: single_group(&state, &user, &group_id).await?.0,
         }));
     }
 
@@ -237,7 +237,7 @@ pub async fn change_group_visibility(
         review_requested: true,
         visibility: visibility_to_string(&current),
         request_id: Some(request_id),
-        group: single_group(&state, &group_id).await?.0,
+        group: single_group(&state, &user, &group_id).await?.0,
     }))
 }
 

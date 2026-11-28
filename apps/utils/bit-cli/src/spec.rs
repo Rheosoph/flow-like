@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use anyhow::{Result, anyhow, bail};
 use flow_like::{
     bit::{Bit, BitTypes, ForecastingAssetRef, ForecastingModelParameters, Metadata},
-    flow_like_model_provider::provider::is_hosted_provider_name,
+    flow_like_model_provider::{
+        embedding::interface::EmbeddingSpec, provider::is_hosted_provider_name,
+    },
     flow_like_types::create_id,
 };
 use serde::{Deserialize, Serialize};
@@ -25,6 +27,7 @@ pub struct Planned {
     pub payload: Value,
     pub dependencies: Vec<Dependency>,
     forecasting_assets: Vec<Dependency>,
+    embedding_artifacts: BTreeMap<String, Dependency>,
     pub meta: BTreeMap<String, Metadata>,
 }
 
@@ -58,6 +61,18 @@ impl Planned {
             }
             for (asset, dependency) in assets.iter_mut().zip(&self.forecasting_assets) {
                 asset["bit"] = Value::String(reference(dependency, stored, hub)?);
+            }
+        }
+        if !self.embedding_artifacts.is_empty() {
+            let artifacts = payload
+                .pointer_mut("/parameters/embedding/artifacts")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| anyhow!("entry {} has no embedding artifacts", self.id))?;
+            for (role, dependency) in &self.embedding_artifacts {
+                let artifact = artifacts
+                    .get_mut(role)
+                    .ok_or_else(|| anyhow!("entry {} has no embedding artifact {role}", self.id))?;
+                artifact["bit"] = Value::String(reference(dependency, stored, hub)?);
             }
         }
         Ok(payload)
@@ -192,6 +207,7 @@ pub fn plan(spec: &Spec, hub: &str) -> Result<Vec<Planned>> {
             .map_err(|err| anyhow!("entry {id} is not a valid bit: {err}"))?;
         let forecasting_assets =
             resolve_forecasting_assets(&mut payload, &bit, &aliases, &mut dependencies)?;
+        let embedding_artifacts = resolve_embedding_artifacts(&bit, &aliases, &mut dependencies)?;
 
         planned.push(Planned {
             id: id.clone(),
@@ -203,6 +219,7 @@ pub fn plan(spec: &Spec, hub: &str) -> Result<Vec<Planned>> {
             payload,
             dependencies,
             forecasting_assets,
+            embedding_artifacts,
             meta,
         });
     }
@@ -213,7 +230,6 @@ pub fn plan(spec: &Spec, hub: &str) -> Result<Vec<Planned>> {
 /// Build a spec out of bits the hub already stores, so an existing entry is
 /// the starting point for the next one.
 pub fn from_bits(bits: &[Bit]) -> Spec {
-    let known: HashSet<&str> = bits.iter().map(|bit| bit.id.as_str()).collect();
     let aliases: HashMap<&str, String> = bits
         .iter()
         .enumerate()
@@ -248,9 +264,16 @@ pub fn from_bits(bits: &[Bit]) -> Spec {
                     let Some(reference) = dependency.as_str() else {
                         continue;
                     };
-                    let id = reference.split_once(':').map_or(reference, |(_, id)| id);
-                    if known.contains(id) {
-                        *dependency = Value::String(format!("@{}", aliases[id]));
+                    let reference = ForecastingAssetRef {
+                        bit: reference.to_string(),
+                        relative_path: String::new(),
+                    };
+                    if let Some((index, target)) = bits.iter().enumerate().find(|(_, candidate)| {
+                        reference
+                            .matches_reference(candidate, &bit.hub)
+                            .unwrap_or(false)
+                    }) {
+                        *dependency = Value::String(format!("@{}", alias_for(target, index)));
                     }
                 }
             }
@@ -275,6 +298,32 @@ pub fn from_bits(bits: &[Bit]) -> Spec {
                         })
                     {
                         asset["bit"] = Value::String(format!("@{}", alias_for(dependency, index)));
+                    }
+                }
+            }
+            if matches!(bit.bit_type, BitTypes::Embedding | BitTypes::ImageEmbedding)
+                && let Some(artifacts) = body
+                    .get_mut("parameters")
+                    .and_then(|parameters| parameters.pointer_mut("/embedding/artifacts"))
+                    .and_then(Value::as_object_mut)
+            {
+                for artifact in artifacts.values_mut() {
+                    let Some(reference) = artifact.get("bit").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let reference = ForecastingAssetRef {
+                        bit: reference.to_string(),
+                        relative_path: String::new(),
+                    };
+                    if let Some((index, dependency)) =
+                        bits.iter().enumerate().find(|(_, candidate)| {
+                            reference
+                                .matches_reference(candidate, &bit.hub)
+                                .unwrap_or(false)
+                        })
+                    {
+                        artifact["bit"] =
+                            Value::String(format!("@{}", alias_for(dependency, index)));
                     }
                 }
             }
@@ -423,6 +472,37 @@ fn resolve_forecasting_assets(
     })?;
     *assets = kept;
     Ok(resolved)
+}
+
+fn resolve_embedding_artifacts(
+    bit: &Bit,
+    aliases: &HashMap<String, String>,
+    dependencies: &mut Vec<Dependency>,
+) -> Result<BTreeMap<String, Dependency>> {
+    if !matches!(bit.bit_type, BitTypes::Embedding | BitTypes::ImageEmbedding) {
+        return Ok(BTreeMap::new());
+    }
+    let Some(value) = bit
+        .parameters
+        .get("embedding")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(BTreeMap::new());
+    };
+    let spec: EmbeddingSpec = serde_json::from_value(value.clone())
+        .map_err(|error| anyhow!("entry {} has invalid embedding parameters: {error}", bit.id))?;
+    spec.validate()
+        .map_err(|error| anyhow!("entry {} has invalid embedding parameters: {error}", bit.id))?;
+    spec.artifacts
+        .into_iter()
+        .map(|(role, artifact)| {
+            let dependency = resolve_reference(&artifact.bit, aliases, &bit.id)?;
+            if !dependencies.contains(&dependency) {
+                dependencies.push(dependency.clone());
+            }
+            Ok((role, dependency))
+        })
+        .collect()
 }
 
 fn order(planned: Vec<Planned>) -> Result<Vec<Planned>> {

@@ -71,21 +71,29 @@ export function awaitingAnswer(
 	);
 }
 
-/** What the nav badge counts: unread messages of person chats you are an active member of. */
+/** What a conversation adds to a badge: one the reader only watches adds nothing. */
+export function unreadOf(
+	conversation: Pick<IConversation, "unread_count" | "watching">,
+): number {
+	return conversation.watching ? 0 : conversation.unread_count;
+}
+
+/** What the nav badge counts: unread messages of person chats you are an active member of, not the ones you only watch. */
 export function personUnreadTotal(
 	conversations: readonly Pick<
 		IConversation,
-		"members" | "unread_count" | "local"
+		"members" | "unread_count" | "local" | "watching"
 	>[],
 ): number {
 	return conversations
 		.filter(
 			(conversation) =>
 				!conversation.local &&
+				!conversation.watching &&
 				conversation.members.filter((member) => member.kind === "user").length >
 					1,
 		)
-		.reduce((total, conversation) => total + conversation.unread_count, 0);
+		.reduce((total, conversation) => total + unreadOf(conversation), 0);
 }
 
 /**

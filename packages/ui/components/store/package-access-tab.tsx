@@ -1,177 +1,143 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Clock, Users, X } from "lucide-react";
-import { toast } from "sonner";
-import { useInvoke } from "../../hooks/use-invoke";
-import { asArray } from "../../lib/response-shape";
+import { Check, Inbox, X } from "lucide-react";
 import type { AccessRequest } from "../../lib/schema/wasm";
-import { useBackend } from "../../state/backend-state";
-import type { GenericFetcher } from "../pages/store/store-package-detail";
 import {
-	Badge,
-	Button,
-	Card,
-	CardContent,
-	CardHeader,
-	CardTitle,
-	RelativeTime,
-} from "../ui";
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+	userSecondaryLabel,
+} from "../../lib/user-display";
+import { Button, RelativeTime, Skeleton } from "../ui";
+import { UserAvatar } from "../ui/user-identity";
+import { LoadError } from "./package-users-tab";
+import type { PackageAccessModel } from "./package-workspace/use-package-access";
+import {
+	CountBadge,
+	WorkspaceSection,
+} from "./package-workspace/workspace-parts";
 
-export interface PackageAccessTabProps {
-	packageId: string;
-	fetcher: GenericFetcher;
-	auth?: unknown;
-}
-
-export function PackageAccessTab({
-	packageId,
-	fetcher,
-	auth,
-}: PackageAccessTabProps) {
+function RequestRow({
+	request,
+	busy,
+	onAnswer,
+}: Readonly<{
+	request: AccessRequest;
+	busy: boolean;
+	onAnswer: (approve: boolean) => void;
+}>) {
 	const { t } = useTranslation("store");
-	const backend = useBackend();
-	const profile = useInvoke(
-		backend.userState.getSettingsProfile,
-		backend.userState,
-		[],
-	);
-	const queryClient = useQueryClient();
-
-	const queryKey = ["access-requests", packageId];
-
-	const { data: requestData, isLoading } = useQuery<AccessRequest[]>({
-		queryKey,
-		queryFn: () =>
-			fetcher<AccessRequest[]>(
-				profile.data!.hub_profile,
-				`registry/package/${packageId}/access`,
-				{ method: "GET" },
-				auth,
-			),
-		enabled: !!profile.data,
-	});
-	const requests = asArray(requestData);
-
-	const accept = useMutation({
-		mutationFn: (requestId: string) =>
-			fetcher<void>(
-				profile.data!.hub_profile,
-				`registry/package/${packageId}/access/${requestId}`,
-				{ method: "POST" },
-				auth,
-			),
-		onSuccess: () => {
-			toast.success(t("accessRequestAccepted", "Access request accepted"));
-			queryClient.invalidateQueries({ queryKey });
-		},
-		onError: () =>
-			toast.error(t("failedToAcceptRequest", "Failed to accept request")),
-	});
-
-	const reject = useMutation({
-		mutationFn: (requestId: string) =>
-			fetcher<void>(
-				profile.data!.hub_profile,
-				`registry/package/${packageId}/access/${requestId}`,
-				{ method: "DELETE" },
-				auth,
-			),
-		onSuccess: () => {
-			toast.success(t("accessRequestRejected", "Access request rejected"));
-			queryClient.invalidateQueries({ queryKey });
-		},
-		onError: () =>
-			toast.error(t("failedToRejectRequest", "Failed to reject request")),
-	});
-
-	const isMutating = accept.isPending || reject.isPending;
-
-	if (isLoading) {
-		return (
-			<Card>
-				<CardContent className="flex items-center justify-center py-12">
-					<Clock className="mr-2 h-4 w-4 animate-spin text-muted-foreground" />
-					<span className="text-sm text-muted-foreground">
-						{t("loading", "Loading…")}
-					</span>
-				</CardContent>
-			</Card>
-		);
-	}
+	const name = userDisplayName(request, request.userId);
+	const secondary = userSecondaryLabel(request);
 
 	return (
-		<Card>
-			<CardHeader className="flex flex-row items-center justify-between pb-4">
-				<CardTitle className="text-base font-medium">
-					{t("accessRequests", "Access Requests")}
-				</CardTitle>
-				<Badge variant="secondary">
-					{t("lengthPending", "{{length}} pending", {
-						length: requests.length,
-					})}
-				</Badge>
-			</CardHeader>
-
-			<CardContent>
-				{requests.length === 0 ? (
-					<div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
-						<Users className="h-8 w-8" />
-						<p className="text-sm">
-							{t("noPendingAccessRequests", "No pending access requests")}
+		<li className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
+			<div className="flex min-w-0 flex-1 basis-56 items-center gap-3">
+				<UserAvatar
+					avatarUrl={userAvatarUrl(request)}
+					initials={userInitials(request)}
+					label={name}
+				/>
+				<div className="min-w-0">
+					<p className="truncate text-sm font-medium" title={name}>
+						{name}
+					</p>
+					<p className="truncate text-xs text-muted-foreground">
+						{secondary && <span>{secondary} · </span>}
+						<RelativeTime
+							value={request.createdAt}
+							className="whitespace-nowrap"
+						/>
+					</p>
+					{request.comment && (
+						<p className="mt-1 line-clamp-2 text-xs text-foreground/80">
+							“{request.comment}”
 						</p>
-					</div>
-				) : (
-					<div className="divide-y">
-						{requests.map((req) => (
-							<div
-								key={req.id}
-								className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
-							>
-								<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium uppercase">
-									{req.userId.charAt(0)}
-								</div>
+					)}
+				</div>
+			</div>
+			<div className="ml-auto flex shrink-0 gap-1.5">
+				<Button
+					size="sm"
+					variant="outline"
+					disabled={busy}
+					onClick={() => onAnswer(false)}
+					aria-label={t("packageDeclineRequestFrom", {
+						defaultValue: "Decline the request from {{name}}",
+						name,
+					})}
+				>
+					<X className="size-3.5" />
+					{t("decline", "Decline")}
+				</Button>
+				<Button
+					size="sm"
+					disabled={busy}
+					onClick={() => onAnswer(true)}
+					aria-label={t("packageApproveRequestFrom", {
+						defaultValue: "Approve the request from {{name}}",
+						name,
+					})}
+				>
+					<Check className="size-3.5" />
+					{t("approve", "Approve")}
+				</Button>
+			</div>
+		</li>
+	);
+}
 
-								<div className="min-w-0 flex-1">
-									<p className="truncate text-sm font-medium">{req.userId}</p>
-									{req.comment && (
-										<p className="truncate text-xs text-muted-foreground">
-											{req.comment}
-										</p>
-									)}
-								</div>
+/** People asking for access to a request-access package; approving makes them a User. */
+export function PackageAccessTab({
+	access,
+}: Readonly<{ access: PackageAccessModel }>) {
+	const { t } = useTranslation("store");
+	const { requests, answerRequest } = access;
 
-								<RelativeTime
-									className="shrink-0 text-xs text-muted-foreground"
-									value={req.createdAt}
-								/>
-
-								<div className="flex shrink-0 gap-1">
-									<Button
-										size="icon"
-										variant="ghost"
-										className="h-8 w-8 text-green-600 hover:bg-green-50 hover:text-green-700"
-										disabled={isMutating}
-										onClick={() => accept.mutate(req.id)}
-									>
-										<Check className="h-4 w-4" />
-									</Button>
-									<Button
-										size="icon"
-										variant="ghost"
-										className="h-8 w-8 text-destructive hover:bg-destructive/10"
-										disabled={isMutating}
-										onClick={() => reject.mutate(req.id)}
-									>
-										<X className="h-4 w-4" />
-									</Button>
-								</div>
-							</div>
-						))}
-					</div>
-				)}
-			</CardContent>
-		</Card>
+	return (
+		<WorkspaceSection
+			icon={Inbox}
+			title={
+				<span className="flex items-center gap-2">
+					{t("accessRequests", "Access Requests")}
+					{requests.list.length > 0 && (
+						<CountBadge value={requests.list.length} />
+					)}
+				</span>
+			}
+		>
+			{requests.isLoading ? (
+				<Skeleton className="h-10 w-full" />
+			) : requests.isError ? (
+				<LoadError
+					message={t(
+						"packageAccessRequestsLoadFailed",
+						"Couldn't load access requests.",
+					)}
+					onRetry={() => void requests.refetch()}
+				/>
+			) : requests.list.length === 0 ? (
+				<p className="text-sm text-muted-foreground">
+					{t(
+						"packageNoAccessRequests",
+						"Nobody is waiting for access. Requests arrive here while the package's visibility is “On request”.",
+					)}
+				</p>
+			) : (
+				<ul className="divide-y divide-border/60">
+					{requests.list.map((request) => (
+						<RequestRow
+							key={request.id}
+							request={request}
+							busy={answerRequest.isPending}
+							onAnswer={(approve) =>
+								answerRequest.mutate({ id: request.id, approve })
+							}
+						/>
+					))}
+				</ul>
+			)}
+		</WorkspaceSection>
 	);
 }

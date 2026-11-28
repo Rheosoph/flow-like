@@ -12,6 +12,7 @@ aws-sdk-s3.workspace = true
 blake3.workspace = true
 flow-like-aws-data.workspace = true
 flow-like-db.workspace = true
+flow-like-file-accounting.workspace = true
 flow-like-secrets = { workspace = true, features = ["aws"] }
 
 sea-orm.workspace = true

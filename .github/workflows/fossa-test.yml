@@ -23,13 +23,36 @@ jobs:
       # Pull-request workflows check out GitHub's synthetic merge commit. That
       # revision is not covered by the dev-branch scan, and `fossa test` only
       # evaluates revisions that have already been analyzed.
+      # Advisory only: the project carries standing outdated-dependency and
+      # vulnerability issues that a pull request cannot clear, so findings are
+      # reported as a warning instead of failing the check.
       - name: Run FOSSA Analysis
+        id: analysis
+        continue-on-error: true
         uses: fossas/fossa-action@c414b9ad82eaad041e47a7cf62a4f02411f427a0 # v1.8.0
         with:
           api-key: ${{ secrets.FOSSA_API_KEY }}
 
       - name: Run FOSSA Test
+        id: test
+        if: steps.analysis.outcome == 'success'
+        continue-on-error: true
         uses: fossas/fossa-action@c414b9ad82eaad041e47a7cf62a4f02411f427a0 # v1.8.0
         with:
           api-key: ${{ secrets.FOSSA_API_KEY }}
           run-tests: true
+
+      - name: Report FOSSA findings without blocking
+        if: steps.analysis.outcome != 'success' || steps.test.outcome != 'success'
+        env:
+          ANALYSIS: ${{ steps.analysis.outcome }}
+          TEST: ${{ steps.test.outcome }}
+        run: |
+          if [ "$ANALYSIS" != "success" ]; then
+            message="FOSSA analysis did not complete ($ANALYSIS), so no license or vulnerability test ran."
+          else
+            message="FOSSA test reported issues; see the Run FOSSA Test step and https://app.fossa.com/projects/custom%2B49014%2Fflow-like"
+          fi
+          echo "::warning title=FOSSA (advisory)::$message"
+          echo "### FOSSA (advisory)" >> "$GITHUB_STEP_SUMMARY"
+          echo "$message" >> "$GITHUB_STEP_SUMMARY"

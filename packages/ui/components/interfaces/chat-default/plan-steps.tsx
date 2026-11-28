@@ -55,11 +55,12 @@ function needsUser(step: IPlanStep): boolean {
 }
 
 function StatusIcon({ status }: { status: PlanStepStatus }) {
+	const { t } = useTranslation("chat");
 	const labels: Record<PlanStepStatus, string> = {
-		planned: "Planned",
-		progress: "In progress",
-		done: "Completed",
-		failed: "Not completed",
+		planned: t("toolActivity.status.planned", "Planned"),
+		progress: t("toolActivity.status.progress", "In progress"),
+		done: t("toolActivity.status.done", "Completed"),
+		failed: t("toolActivity.status.failed", "Not completed"),
 	};
 	return (
 		<span role="img" aria-label={labels[status]} title={labels[status]}>
@@ -176,7 +177,9 @@ function ActivitySummaryLabel({
 	if (running) {
 		return (
 			<span className="min-w-0 flex-1 truncate">
-				<span className="text-foreground">{activeTitle ?? "Working…"}</span>
+				<span className="text-foreground">
+					{activeTitle ?? t("toolActivity.workingEllipsis", "Working…")}
+				</span>
 				<span className="text-muted-foreground">
 					{" · "}
 					{`${summary.settledCount}/${summary.total}`}
@@ -186,10 +189,23 @@ function ActivitySummaryLabel({
 	}
 
 	const parts = [t("countSteps", "{{count}} step", { count: summary.total })];
-	if (summary.laneCount > 1) parts.push(`across ${summary.laneCount} lanes`);
+	if (summary.laneCount > 1)
+		parts.push(
+			t("toolActivity.acrossLanes", {
+				count: summary.laneCount,
+				defaultValue_one: "across {{count}} lane",
+				defaultValue_other: "across {{count}} lanes",
+			}),
+		);
 	if (summary.durationLabel) parts.push(summary.durationLabel);
 	if (summary.failedCount > 0) {
-		parts.push(`${summary.failedCount} not completed`);
+		parts.push(
+			t("toolActivity.notCompleted", {
+				count: summary.failedCount,
+				defaultValue_one: "{{count}} not completed",
+				defaultValue_other: "{{count}} not completed",
+			}),
+		);
 	}
 
 	return <span className="min-w-0 flex-1 truncate">{parts.join(" · ")}</span>;
@@ -205,7 +221,8 @@ function SoloSummaryLabel({
 	running: boolean;
 	durationLabel: string | null;
 }) {
-	const title = stepActivityTitle(step);
+	const { t } = useTranslation("chat");
+	const title = stepActivityTitle(step, t);
 	if (running) {
 		return (
 			<span className="min-w-0 flex-1 truncate text-foreground">{title}</span>
@@ -227,6 +244,7 @@ function GroupSummaryLabel({
 	running: boolean;
 	activeStep?: IPlanStep;
 }) {
+	const { t } = useTranslation("chat");
 	const summary = summariseSteps(steps);
 	if (steps.length === 1) {
 		return (
@@ -241,7 +259,7 @@ function GroupSummaryLabel({
 		<ActivitySummaryLabel
 			summary={summary}
 			running={running}
-			activeTitle={activeStep && stepActivityTitle(activeStep)}
+			activeTitle={activeStep && stepActivityTitle(activeStep, t)}
 		/>
 	);
 }
@@ -362,7 +380,7 @@ function BuildLaneRow({
 							: "text-foreground/90",
 					)}
 				>
-					{label}
+					{t(`toolActivity.lane.${detail.lane}`, { defaultValue: label })}
 				</span>
 				{detail.target && (
 					<span className="text-xs text-muted-foreground truncate min-w-0 flex-1">
@@ -480,6 +498,7 @@ function StepRow({
 	isExpanded: boolean;
 	onToggle: (stepId: string) => void;
 }) {
+	const { t } = useTranslation("chat");
 	if (step.detail?.kind === "build_lane") {
 		return (
 			<BuildLaneRow step={step} detail={step.detail} isActive={isActive} />
@@ -532,7 +551,7 @@ function StepRow({
 							: "text-foreground/90",
 					)}
 				>
-					{stepActivityTitle(step)}
+					{stepActivityTitle(step, t)}
 				</span>
 				{step.description && (
 					<span className="text-xs text-muted-foreground truncate min-w-0 flex-1">
@@ -794,12 +813,17 @@ export function PlanSteps({
 							>
 								<History className="size-3.5 shrink-0" />
 								<span className="flex-1">
-									{showOlderSteps ? t("hide", "Hide") : t("show", "Show")}{" "}
-									{t("countEarlierSteps", {
-										defaultValue_one: "{{count}} earlier step",
-										defaultValue_other: "{{count}} earlier steps",
-										count: olderSteps.length,
-									})}
+									{showOlderSteps
+										? t("toolActivity.hideEarlier", {
+												defaultValue_one: "Hide {{count}} earlier step",
+												defaultValue_other: "Hide {{count}} earlier steps",
+												count: olderSteps.length,
+											})
+										: t("toolActivity.showEarlier", {
+												defaultValue_one: "Show {{count}} earlier step",
+												defaultValue_other: "Show {{count}} earlier steps",
+												count: olderSteps.length,
+											})}
 								</span>
 								<ChevronDown
 									className={cn(

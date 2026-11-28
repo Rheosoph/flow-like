@@ -1,3 +1,5 @@
+#![cfg(feature = "execution")]
+
 //! Integration tests for the new context functions:
 //!   - Schema (get_type_schema, list_types)
 //!   - Image  (from_bytes, to_bytes)

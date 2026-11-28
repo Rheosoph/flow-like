@@ -558,6 +558,46 @@ export function resolveStaticValue(
 	return value;
 }
 
+const STATIC_EDITOR_CAPACITY = 24;
+const staticEditors = new Map<string, ReturnType<typeof createSlateEditor>>();
+
+/**
+ * A read-only editor for one parsed document, reused while the same content mounts again: going
+ * back to a chat list and reopening a conversation, or a transcript row revealed again. Building
+ * one resolves the whole plugin kit, which costs more per message than the parse. Two mounts may
+ * share an editor because static rendering never writes to it (see `resolveStaticValue`).
+ */
+function staticEditorFor(
+	plugins: StaticKit,
+	isMarkdown: boolean,
+	content: string,
+	value: Value,
+) {
+	const key = staticParseKey(plugins, isMarkdown, content);
+	const cached = staticEditors.get(key);
+	if (cached?.children === value) {
+		staticEditors.delete(key);
+		staticEditors.set(key, cached);
+		return cached;
+	}
+	const editor = createSlateEditor({
+		id: "static-rendered-editor",
+		plugins,
+		value,
+		// NodeIdPlugin stamps ids by running a setNodes transform per node,
+		// and each transform re-runs normalization for the surrounding block.
+		// On documents with tables that turns initial normalization quadratic
+		// (240 tables: 14s with ids, 6ms without). Read-only rendering never
+		// reads the ids, so skip the pass entirely.
+		nodeId: false,
+	});
+	indexEditorPaths(editor);
+	staticEditors.delete(key);
+	staticEditors.set(key, editor);
+	evictOldest(staticEditors, STATIC_EDITOR_CAPACITY);
+	return editor;
+}
+
 function TextEditorStatic({
 	initialContent,
 	isMarkdown,
@@ -587,21 +627,10 @@ function TextEditorStatic({
 		[initialContent, isMarkdown, remarkPlugins, plugins],
 	);
 
-	const editor = useMemo(() => {
-		const staticEditor = createSlateEditor({
-			id: "static-rendered-editor",
-			plugins,
-			value,
-			// NodeIdPlugin stamps ids by running a setNodes transform per node,
-			// and each transform re-runs normalization for the surrounding block.
-			// On documents with tables that turns initial normalization quadratic
-			// (240 tables: 14s with ids, 6ms without). Read-only rendering never
-			// reads the ids, so skip the pass entirely.
-			nodeId: false,
-		});
-		indexEditorPaths(staticEditor);
-		return staticEditor;
-	}, [plugins, value]);
+	const editor = useMemo(
+		() => staticEditorFor(plugins, isMarkdown ?? false, initialContent, value),
+		[plugins, isMarkdown, initialContent, value],
+	);
 
 	const isLongDocument = value.length > WINDOWING_BLOCK_THRESHOLD;
 

@@ -1,4 +1,5 @@
 use super::*;
+use flow_like::models::generation::generate_guarded;
 use flow_like_model_provider::stablediffusion::{
     GenerationMode, GenerationRequest, StableDiffusionConfig,
 };
@@ -248,6 +249,7 @@ fn generation_request(req: &VideoGenerationRequest) -> flow_like_types::Result<G
 }
 
 pub(super) async fn generate_video(
+    environment: ExecutionEnvironment,
     provider: &ModelProvider,
     req: &VideoGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedVideo>> {
@@ -258,7 +260,7 @@ pub(super) async fn generate_video(
         .and_then(|params| params.get("stablediffusion"))
         .ok_or_else(|| anyhow!("Missing stable-diffusion.cpp configuration. Connect a stable-diffusion.cpp Video Model provider."))?;
     let config: StableDiffusionConfig = from_value(config.clone())?;
-    let assets = flow_like_model_provider::stablediffusion::generate(&config, &request).await?;
+    let assets = generate_guarded(environment, &config, &request).await?;
     Ok(assets
         .into_iter()
         .map(|asset| GeneratedVideo {

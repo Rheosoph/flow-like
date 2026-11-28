@@ -526,6 +526,7 @@ function EmptyFlows({
 				</p>
 			</div>
 			<Button
+				data-guide="flows-create"
 				onClick={() => setBoardCreation({ ...boardCreation, open: true })}
 			>
 				{t("createYourFirstFlow", "Create your first flow")}

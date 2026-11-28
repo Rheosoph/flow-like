@@ -9,13 +9,17 @@ use crate::{
     bots::{bot_exists, bot_not_found},
     error::{Error, Result},
     inbox::{existing_direct, in_group, message_with_changes, write_group_trigger, write_trigger},
-    store::{now_micros, timestamp},
+    store::{Json, STEP_MICROS, now_micros, timestamp},
 };
 use chrono::{DateTime, TimeZone, Utc};
 use flow_like_types::{
+    bot_calendar::{
+        CalendarWake, EventSchedule, ExternalEventRef, MAX_EVENTS_PER_BOT, TaskEvent,
+        UpdateCalendarWake, wake_text,
+    },
     bot_task::{
-        self as contract, BotTask, CreateBotTask, MAX_TASKS_PER_BOT, TaskConversation,
-        TaskCreator, TaskKind, TaskSchedule, UpdateBotTask, fire_message_id,
+        self as contract, BotTask, CreateBotTask, MAX_TASKS_PER_BOT, TaskConversation, TaskCreator,
+        TaskKind, TaskSchedule, UpdateBotTask, fire_message_id,
     },
     bot_turn::turn_id,
     create_id,
@@ -27,9 +31,15 @@ use flow_like_types::{
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 const SCHEDULING_CAPABILITY: &str = "scheduling";
+const CALENDAR_CAPABILITY: &str = "calendar";
+const LOCATION_CAPABILITY: &str = "location";
+const EVENT_KIND: &str = "EVENT";
+pub const CALENDAR_OWNER_CHAT_ONLY: &str =
+    "Calendar events can only be created from your own chat with the bot, not from a group.";
+pub const NO_LOCAL_PLACE_TASKS: &str = "Location triggers need a bot on your account; your phone can't watch a bot that only lives on this computer.";
 const COLUMNS: &str = "t.id, t.bot_id, t.kind, t.run_at, t.cron, t.timezone, t.instruction,
     t.title, t.next_run_at, t.last_run_at, t.enabled, t.created_by, t.created_at, t.monitoring,
-    t.conversation_id, c.kind, c.title";
+    t.conversation_id, c.kind, c.title, t.event";
 const TASKS: &str = "tasks t LEFT JOIN conversations c ON c.id = t.conversation_id";
 
 struct Stored {
@@ -80,6 +90,10 @@ fn read_task(row: &Row<'_>) -> rusqlite::Result<Stored> {
             monitoring: row.get::<_, i64>(13)? != 0,
             created_by: TaskCreator::parse(&created_by).unwrap_or(TaskCreator::Owner),
             created_at: timestamp(row.get(12)?).to_rfc3339(),
+            place: None,
+            event: row
+                .get::<_, Option<Json<TaskEvent>>>(17)?
+                .map(|event| event.0),
         },
     })
 }
@@ -95,6 +109,22 @@ fn schedule_of(task: &BotTask) -> Option<TaskSchedule> {
             expr: task.cron.clone()?,
             tz: task.tz.clone()?,
         }),
+        TaskKind::Place => None,
+        TaskKind::Event => EventSchedule::of(
+            task.event.as_ref()?,
+            task.cron.as_deref(),
+            task.tz.as_deref(),
+        )
+        .ok()
+        .map(TaskSchedule::Event),
+    }
+}
+
+fn capability_of(kind: TaskKind) -> &'static str {
+    match kind {
+        TaskKind::Once | TaskKind::Cron => SCHEDULING_CAPABILITY,
+        TaskKind::Event => CALENDAR_CAPABILITY,
+        TaskKind::Place => LOCATION_CAPABILITY,
     }
 }
 
@@ -102,7 +132,7 @@ fn task_not_found(task_id: &str) -> Error {
     Error::not_found(format!("Task '{task_id}' not found"))
 }
 
-fn holds_capability(db: &Connection, bot_id: &str) -> Result<bool> {
+fn holds_capability(db: &Connection, bot_id: &str, capability: &str) -> Result<bool> {
     let stored: Option<String> = db
         .prepare_cached("SELECT capabilities FROM bots WHERE id = ?1")?
         .query_row([bot_id], |row| row.get(0))
@@ -110,19 +140,31 @@ fn holds_capability(db: &Connection, bot_id: &str) -> Result<bool> {
     let ids: Vec<String> = stored
         .and_then(|stored| serde_json::from_str(&stored).ok())
         .unwrap_or_default();
-    Ok(ids.iter().any(|id| id == SCHEDULING_CAPABILITY))
+    Ok(ids.iter().any(|id| id == capability))
 }
 
-fn require_scheduling(db: &Connection, bot_id: &str) -> Result<()> {
+fn require_capability(db: &Connection, bot_id: &str, capability: &str) -> Result<()> {
     if !bot_exists(db, bot_id)? {
         return Err(bot_not_found(bot_id));
     }
-    if holds_capability(db, bot_id)? {
+    if holds_capability(db, bot_id, capability)? {
         return Ok(());
     }
     Err(Error::invalid(format!(
-        "Bot '{bot_id}' doesn't have the scheduling capability switched on"
+        "Bot '{bot_id}' doesn't have the {capability} capability switched on"
     )))
+}
+
+fn stored_wake(db: &Connection, bot_id: &str) -> Result<CalendarWake> {
+    let stored: Option<Option<String>> = db
+        .prepare_cached("SELECT calendar_wake FROM bots WHERE id = ?1")?
+        .query_row([bot_id], |row| row.get(0))
+        .optional()?;
+    match stored {
+        None => Err(bot_not_found(bot_id)),
+        Some(None) => Ok(CalendarWake::default()),
+        Some(Some(text)) => Ok(serde_json::from_str(&text)?),
+    }
 }
 
 fn lookup(db: &Connection, bot_id: &str, task_id: &str) -> Result<Option<BotTask>> {
@@ -149,7 +191,8 @@ fn scope_group(db: &Connection, conversation_id: Option<&str>) -> Result<Option<
         .prepare_cached("SELECT kind FROM conversations WHERE id = ?1")?
         .query_row([id], |row| row.get(0))
         .optional()?;
-    let is_group = kind.as_deref().and_then(ConversationKind::parse) == Some(ConversationKind::Group);
+    let is_group =
+        kind.as_deref().and_then(ConversationKind::parse) == Some(ConversationKind::Group);
     Ok(is_group.then(|| id.to_string()))
 }
 
@@ -175,14 +218,38 @@ fn micros_of(text: &str) -> Option<i64> {
         .map(|at| at.timestamp_micros())
 }
 
-fn trigger_for(task: &BotTask) -> TriggerBody {
+fn trigger_text(task: &BotTask, due: i64, now: i64) -> String {
+    let Some(event) = task.event.as_ref().filter(|_| task.kind == TaskKind::Event) else {
+        return task.instruction.clone();
+    };
+    let occurrence = schedule_of(task)
+        .and_then(|schedule| match schedule {
+            TaskSchedule::Event(event) => event.occurrence_for(instant(due)),
+            _ => None,
+        })
+        .unwrap_or_else(|| instant(due));
+    let entry_id = event
+        .external
+        .as_ref()
+        .map_or_else(|| task.id.clone(), |external| external.encode());
+    wake_text(
+        &entry_id,
+        &task.title,
+        &task.instruction,
+        event,
+        occurrence,
+        instant(now),
+        task.tz.as_deref(),
+    )
+}
+
+fn trigger_for(task: &BotTask, due: i64, now: i64) -> TriggerBody {
     TriggerBody {
         source: TriggerSource::Schedule,
         monitoring: task.monitoring,
         ref_id: task.id.clone(),
         title: task.title.chars().take(TRIGGER_TITLE_MAX_CHARS).collect(),
-        text: task
-            .instruction
+        text: trigger_text(task, due, now)
             .chars()
             .take(TRIGGER_TEXT_MAX_CHARS)
             .collect(),
@@ -196,6 +263,10 @@ fn parts_of(schedule: &TaskSchedule) -> (Option<i64>, Option<String>, Option<Str
     match schedule {
         TaskSchedule::Once { at } => (Some(at.timestamp_micros()), None, None),
         TaskSchedule::Cron { expr, tz } => (None, Some(expr.clone()), Some(tz.clone())),
+        TaskSchedule::Event(event) => match &event.recurrence {
+            Some((expr, tz)) => (None, Some(expr.clone()), Some(tz.clone())),
+            None => (None, None, None),
+        },
     }
 }
 
@@ -340,7 +411,379 @@ fn owner_request(
     Ok(None)
 }
 
+/// An event as the bot's wake-up settings leave it: its offsets, whether its wake-ups are
+/// monitored, and the micros of its next wake-up.
+struct Resolved {
+    event: TaskEvent,
+    monitoring: bool,
+    next: Option<i64>,
+}
+
+fn resolve_event(
+    wake: &CalendarWake,
+    title: &str,
+    mut event: TaskEvent,
+    cron: Option<&str>,
+    tz: Option<&str>,
+    last_run_at: Option<i64>,
+    now: i64,
+) -> Result<(Resolved, EventSchedule)> {
+    event.wake_offsets = wake.resolve(title, &event);
+    let schedule = EventSchedule::of(&event, cron, tz).map_err(Error::invalid)?;
+    let next = schedule
+        .next_wake(instant(now), last_run_at.map(instant))
+        .map(|at| at.timestamp_micros());
+    let resolved = Resolved {
+        event,
+        monitoring: wake.quiet,
+        next,
+    };
+    Ok((resolved, schedule))
+}
+
+fn store_resolution(db: &Connection, task_id: &str, resolved: &Resolved, now: i64) -> Result<()> {
+    db.execute(
+        "UPDATE tasks SET event = ?1, monitoring = ?2, next_run_at = ?3, enabled = ?4,
+             updated_at = ?5 WHERE id = ?6",
+        params![
+            serde_json::to_string(&resolved.event)?,
+            i64::from(resolved.monitoring),
+            resolved.next,
+            i64::from(resolved.next.is_some()),
+            now,
+            task_id
+        ],
+    )?;
+    Ok(())
+}
+
+fn recurrence_of(cron: Option<&str>, tz: Option<&str>, now: i64) -> Result<Option<String>> {
+    match cron.map(str::trim).filter(|cron| !cron.is_empty()) {
+        Some(cron) => {
+            EventSchedule::check_recurrence(cron, tz, instant(now)).map_err(Error::invalid)?;
+            Ok(Some(cron.to_string()))
+        }
+        None => Ok(None),
+    }
+}
+
+fn event_of_ref(
+    db: &Connection,
+    bot_id: &str,
+    external: &ExternalEventRef,
+) -> Result<Option<BotTask>> {
+    let mut statement = db.prepare_cached(&format!(
+        "SELECT {COLUMNS} FROM {TASKS} WHERE t.bot_id = ?1 AND t.kind = ?2
+         AND t.event IS NOT NULL AND instr(t.event, '\"external\"') > 0"
+    ))?;
+    let rows = statement
+        .query_map(params![bot_id, EVENT_KIND], read_task)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows.into_iter().map(|stored| stored.task).find(|task| {
+        task.event
+            .as_ref()
+            .and_then(|event| event.external.as_ref())
+            == Some(external)
+    }))
+}
+
+/// Re-resolves every event of the bot against `wake`, in the caller's transaction.
+pub(crate) fn resolve_events(
+    db: &Connection,
+    bot_id: &str,
+    wake: &CalendarWake,
+    now: i64,
+) -> Result<()> {
+    let events = {
+        let mut statement = db.prepare_cached(&format!(
+            "SELECT {COLUMNS} FROM {TASKS} WHERE t.bot_id = ?1 AND t.kind = ?2"
+        ))?;
+        statement
+            .query_map(params![bot_id, EVENT_KIND], read_task)?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for stored in events {
+        let task = stored.task;
+        let Some(event) = task.event.clone() else {
+            continue;
+        };
+        let (resolved, _) = resolve_event(
+            wake,
+            &task.title,
+            event,
+            task.cron.as_deref(),
+            task.tz.as_deref(),
+            task.last_run_at.as_deref().and_then(micros_of),
+            now,
+        )?;
+        store_resolution(db, &task.id, &resolved, now)?;
+    }
+    Ok(())
+}
+
+struct EventEdit {
+    event: TaskEvent,
+    title: String,
+    instruction: String,
+    cron: Option<String>,
+    tz: Option<String>,
+}
+
+fn timezone_of(schedule: &EventSchedule, tz: Option<&str>) -> Option<String> {
+    match &schedule.recurrence {
+        Some((_, zone)) => Some(zone.clone()),
+        None => tz
+            .map(str::trim)
+            .filter(|tz| !tz.is_empty())
+            .map(str::to_string),
+    }
+}
+
+fn rewrite_event(
+    db: &Connection,
+    bot_id: &str,
+    task: &BotTask,
+    edit: EventEdit,
+    rearm: bool,
+    now: i64,
+) -> Result<()> {
+    let last_run_at = if rearm {
+        None
+    } else {
+        task.last_run_at.as_deref().and_then(micros_of)
+    };
+    let wake = stored_wake(db, bot_id)?;
+    let (resolved, schedule) = resolve_event(
+        &wake,
+        &edit.title,
+        edit.event,
+        edit.cron.as_deref(),
+        edit.tz.as_deref(),
+        last_run_at,
+        now,
+    )?;
+    let cron = schedule.recurrence.as_ref().map(|(cron, _)| cron.clone());
+    db.execute(
+        "UPDATE tasks SET title = ?1, instruction = ?2, cron = ?3, timezone = ?4,
+             last_run_at = ?5 WHERE id = ?6",
+        params![
+            edit.title,
+            edit.instruction,
+            cron,
+            timezone_of(&schedule, edit.tz.as_deref()),
+            last_run_at,
+            task.id
+        ],
+    )?;
+    store_resolution(db, &task.id, &resolved, now)
+}
+
+fn event_moves(task: &BotTask, event: &TaskEvent, cron: Option<&str>, tz: Option<&str>) -> bool {
+    task.event.as_ref().map(|before| before.starts_at.as_str()) != Some(event.starts_at.as_str())
+        || task.cron.as_deref() != cron
+        || task.tz.as_deref() != tz
+}
+
+fn create_event(
+    tx: &Connection,
+    bot_id: &str,
+    request: CreateBotTask,
+    writer: Writer,
+    created_by: TaskCreator,
+    group: Option<&str>,
+    now: i64,
+) -> Result<BotTask> {
+    if group.is_some() {
+        return Err(Error::invalid(CALENDAR_OWNER_CHAT_ONLY));
+    }
+    if request.at.is_some() || request.place.is_some() {
+        return Err(Error::invalid(
+            "An event task takes 'event', and 'cron' with 'tz' to repeat; 'at' and 'place' belong to other task kinds",
+        ));
+    }
+    let event = request
+        .event
+        .ok_or_else(|| Error::invalid("An event task needs 'event' with a starts_at time"))?
+        .check()
+        .map_err(Error::invalid)?;
+    let cron = recurrence_of(request.cron.as_deref(), request.tz.as_deref(), now)?;
+    let (title, instruction) =
+        contract::check_event_text(request.title.as_deref(), &request.instruction)
+            .map_err(Error::invalid)?;
+    let author = if event.external.is_some() {
+        Author::Bot(None)
+    } else {
+        writer.author(tx, bot_id)?
+    };
+    let tz = request.tz;
+    if let Some(external) = &event.external
+        && let Some(existing) = event_of_ref(tx, bot_id, external)?
+    {
+        let rearm = event_moves(&existing, &event, cron.as_deref(), tz.as_deref());
+        let edit = EventEdit {
+            event,
+            title,
+            instruction,
+            cron,
+            tz,
+        };
+        rewrite_event(tx, bot_id, &existing, edit, rearm, now)?;
+        author.mark(tx, &existing.id)?;
+        return find(tx, bot_id, &existing.id);
+    }
+    let events: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE bot_id = ?1 AND kind = ?2",
+        params![bot_id, EVENT_KIND],
+        |row| row.get(0),
+    )?;
+    if events >= MAX_EVENTS_PER_BOT as i64 {
+        return Err(Error::invalid(format!(
+            "Bot '{bot_id}' already has {MAX_EVENTS_PER_BOT} calendar events; delete one first"
+        )));
+    }
+    let wake = stored_wake(tx, bot_id)?;
+    let (resolved, schedule) = resolve_event(
+        &wake,
+        &title,
+        event,
+        cron.as_deref(),
+        tz.as_deref(),
+        None,
+        now,
+    )?;
+    let id = format!("task_{}", create_id());
+    tx.execute(
+        "INSERT INTO tasks (id, bot_id, kind, run_at, cron, timezone, instruction, title,
+             next_run_at, last_run_at, enabled, created_by, created_at, updated_at, monitoring,
+             conversation_id, event)
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?11, ?12, NULL, ?13)",
+        params![
+            id,
+            bot_id,
+            EVENT_KIND,
+            schedule.recurrence.as_ref().map(|(cron, _)| cron.clone()),
+            timezone_of(&schedule, tz.as_deref()),
+            instruction,
+            title,
+            resolved.next,
+            i64::from(resolved.next.is_some()),
+            created_by.stored(),
+            now,
+            i64::from(resolved.monitoring),
+            serde_json::to_string(&resolved.event)?,
+        ],
+    )?;
+    author.mark(tx, &id)?;
+    find(tx, bot_id, &id)
+}
+
+fn update_event(
+    tx: &Connection,
+    bot_id: &str,
+    task: &BotTask,
+    request: UpdateBotTask,
+    writer: Writer,
+    now: i64,
+) -> Result<()> {
+    if request.at.is_some() {
+        return Err(Error::invalid(format!(
+            "Task '{}' is an event; move it with 'event', not 'at'",
+            task.id
+        )));
+    }
+    let before = task
+        .event
+        .clone()
+        .ok_or_else(|| Error::storage(format!("Event task '{}' has no stored event", task.id)))?;
+    let sent_event = request.event.is_some();
+    let event = match request.event {
+        Some(event) => event.check().map_err(Error::invalid)?,
+        None => before.clone(),
+    };
+    let (cron, tz) = match (request.cron.as_deref(), request.tz.as_deref()) {
+        (None, None) => (task.cron.clone(), task.tz.clone()),
+        (cron, tz) => (
+            recurrence_of(
+                cron.or(task.cron.as_deref()),
+                tz.or(task.tz.as_deref()),
+                now,
+            )?,
+            tz.or(task.tz.as_deref()).map(str::to_string),
+        ),
+    };
+    let (title, instruction) = contract::check_event_text(
+        request.title.as_deref().or(Some(task.title.as_str())),
+        request.instruction.as_deref().unwrap_or(&task.instruction),
+    )
+    .map_err(Error::invalid)?;
+    let rearm = event_moves(task, &event, cron.as_deref(), tz.as_deref())
+        && (sent_event || request.cron.is_some() || request.tz.is_some());
+    let author = if event.external.is_some() {
+        Author::Bot(None)
+    } else {
+        writer.author(tx, bot_id)?
+    };
+    if author.rewrites(
+        request.instruction.as_deref(),
+        &task.instruction,
+        &instruction,
+    ) {
+        author.mark(tx, &task.id)?;
+    }
+    let edit = EventEdit {
+        event,
+        title,
+        instruction,
+        cron,
+        tz,
+    };
+    rewrite_event(tx, bot_id, task, edit, rearm, now)
+}
+
 impl LocalBotStore {
+    /// Whether a turn in `conversation_id` runs in the person's own chat with the bot; a turn
+    /// without a conversation is the person's own too.
+    pub fn in_owner_chat(&self, bot_id: &str, conversation_id: Option<&str>) -> Result<bool> {
+        let Some(conversation_id) = conversation_id else {
+            return Ok(true);
+        };
+        self.read(|db| Ok(existing_direct(db, bot_id)?.as_deref() == Some(conversation_id)))
+    }
+
+    /// The bot's calendar wake-up settings; the defaults while it never changed them.
+    pub fn calendar_wake(&self, bot_id: &str) -> Result<CalendarWake> {
+        self.read(|db| stored_wake(db, bot_id))
+    }
+
+    /// Changes the bot's calendar wake-up settings and re-resolves every event of its calendar.
+    pub fn set_calendar_wake(
+        &self,
+        bot_id: &str,
+        update: UpdateCalendarWake,
+    ) -> Result<CalendarWake> {
+        self.write(|tx, changes| {
+            let next = update
+                .apply(stored_wake(tx, bot_id)?)
+                .map_err(Error::invalid)?;
+            let now = now_micros();
+            tx.execute(
+                "UPDATE bots SET calendar_wake = ?1, updated_at = MAX(?2, updated_at + ?3)
+                 WHERE id = ?4",
+                params![
+                    (next != CalendarWake::default())
+                        .then(|| serde_json::to_string(&next))
+                        .transpose()?,
+                    now,
+                    STEP_MICROS,
+                    bot_id
+                ],
+            )?;
+            resolve_events(tx, bot_id, &next, now)?;
+            changes.bot(bot_id);
+            Ok(next)
+        })
+    }
+
     /// The bot's tasks, soonest first.
     pub fn tasks(&self, bot_id: &str) -> Result<Vec<BotTask>> {
         self.tasks_in_turn(bot_id, None)
@@ -424,15 +867,35 @@ impl LocalBotStore {
             Writer::Bot(_) => TaskCreator::Bot,
         };
         self.write(|tx, _changes| {
-            require_scheduling(tx, bot_id)?;
+            if !bot_exists(tx, bot_id)? {
+                return Err(bot_not_found(bot_id));
+            }
+            let kind = request
+                .kind
+                .ok_or_else(|| Error::invalid("A task needs a kind, once, cron or event"))?;
+            require_capability(
+                tx,
+                bot_id,
+                if kind == TaskKind::Place {
+                    SCHEDULING_CAPABILITY
+                } else {
+                    capability_of(kind)
+                },
+            )?;
             let group = match conversation_id {
                 Some(id) if in_group(tx, id, bot_id)? => Some(id),
                 _ => None,
             };
             let now = now_micros();
-            let kind = request
-                .kind
-                .ok_or_else(|| Error::invalid("A task needs a kind, once or cron"))?;
+            if kind == TaskKind::Event {
+                return create_event(tx, bot_id, request, writer, created_by, group, now);
+            }
+            if kind == TaskKind::Place || request.place.is_some() {
+                return Err(Error::invalid(NO_LOCAL_PLACE_TASKS));
+            }
+            if request.event.is_some() {
+                return Err(Error::invalid("Only an event task takes 'event'"));
+            }
             let schedule = TaskSchedule::parse(
                 kind,
                 request.at.as_deref(),
@@ -445,8 +908,8 @@ impl LocalBotStore {
                 contract::check_text(request.title.as_deref(), &request.instruction)
                     .map_err(Error::invalid)?;
             let count: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM tasks WHERE bot_id = ?1",
-                [bot_id],
+                "SELECT COUNT(*) FROM tasks WHERE bot_id = ?1 AND kind != ?2",
+                params![bot_id, EVENT_KIND],
                 |row| row.get(0),
             )?;
             if count >= MAX_TASKS_PER_BOT as i64 {
@@ -541,7 +1004,20 @@ impl LocalBotStore {
         self.write(|tx, _changes| {
             let group = scope_group(tx, conversation_id)?;
             let task = find_in_scope(tx, bot_id, task_id, group.as_deref())?;
+            if request.place.is_some() {
+                return Err(Error::invalid(NO_LOCAL_PLACE_TASKS));
+            }
             let now = now_micros();
+            if task.kind == TaskKind::Event {
+                update_event(tx, bot_id, &task, request, writer, now)?;
+                return find(tx, bot_id, task_id);
+            }
+            if request.event.is_some() {
+                return Err(Error::invalid(format!(
+                    "Task '{task_id}' is a {} task and takes no 'event'",
+                    task.kind.as_str()
+                )));
+            }
             let moves = request.at.is_some() || request.cron.is_some() || request.tz.is_some();
             let resumes = request.enabled == Some(true) && !task.enabled;
             if moves || resumes {
@@ -609,13 +1085,16 @@ impl LocalBotStore {
             let Some(task) = lookup(db, bot_id, task_id)? else {
                 return Ok(None);
             };
-            let (owner_written, conversation_id, message_id): (i64, Option<String>, Option<String>) =
-                db.query_row(
-                    "SELECT owner_written, request_conversation_id, request_message_id
+            let (owner_written, conversation_id, message_id): (
+                i64,
+                Option<String>,
+                Option<String>,
+            ) = db.query_row(
+                "SELECT owner_written, request_conversation_id, request_message_id
                      FROM tasks WHERE id = ?1",
-                    [task_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )?;
+                [task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
             let request = match (conversation_id, message_id) {
                 (Some(conversation_id), Some(message_id)) => Some(TaskRequest {
                     entries: message_with_changes(db, &conversation_id, &message_id)?,
@@ -674,7 +1153,7 @@ impl LocalBotStore {
             };
             let mut fired = Vec::new();
             for (task, due) in due {
-                if !holds_capability(tx, &task.bot_id)? {
+                if !holds_capability(tx, &task.bot_id, capability_of(task.kind))? {
                     continue;
                 }
                 if let Some(group) = &task.conversation
@@ -687,7 +1166,7 @@ impl LocalBotStore {
                     continue;
                 }
                 let message_id = fire_message_id(&task.id, instant(due));
-                let body = trigger_for(&task);
+                let body = trigger_for(&task, due, now);
                 match &task.conversation {
                     Some(group) => {
                         write_group_trigger(

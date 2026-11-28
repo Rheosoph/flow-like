@@ -1,5 +1,8 @@
 use crate::{
-    functions::TauriFunctionError,
+    functions::{
+        TauriFunctionError,
+        flow::run::{PageBaseline, resolve_page_baseline},
+    },
     state::{TauriFlowLikeState, TauriSettingsState},
 };
 use flow_like::{
@@ -149,6 +152,85 @@ async fn load_local_runtime_events(app: &App) -> Vec<Event> {
     events
 }
 
+/// The board a local Page contract is read from.
+enum PageContractBoard {
+    /// The compiled baseline the Page's runs start from, so the contract shown is the one
+    /// `execute_event` resolves and opening a Page never re-derives the source board.
+    Baseline(PageBaseline),
+    /// The source board, when no baseline can be built. A board that places a node type whose
+    /// package is not loaded yet still has to show its Page: the run that follows is what
+    /// asks for the package.
+    Source(Arc<Board>),
+}
+
+impl PageContractBoard {
+    async fn open(app: &App, event: &Event) -> flow_like_types::Result<Self> {
+        let state = app
+            .app_state
+            .as_ref()
+            .ok_or_else(|| flow_like_types::anyhow!("App state not found"))?;
+        match resolve_page_baseline(state, &app.id, &event.board_id, event.board_version).await {
+            Ok(baseline) => Ok(Self::Baseline(baseline)),
+            Err(error) => {
+                tracing::debug!(
+                    board_id = %event.board_id,
+                    %error,
+                    "No compiled baseline for the Page board; reading its source"
+                );
+                let board = app
+                    .open_board(event.board_id.clone(), None, event.board_version)
+                    .await?
+                    .snapshot();
+                Ok(Self::Source(board))
+            }
+        }
+    }
+
+    fn board(&self) -> &Board {
+        match self {
+            Self::Baseline(baseline) => baseline.board(),
+            Self::Source(board) => board,
+        }
+    }
+
+    async fn load_page(
+        &self,
+        page_id: &str,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<Page> {
+        match (self, version) {
+            (Self::Baseline(baseline), _) => baseline.load_page(page_id, version).await,
+            (Self::Source(board), Some(version)) => {
+                board.load_versioned_page(page_id, version, None).await
+            }
+            (Self::Source(board), None) => board.load_page(page_id, None).await,
+        }
+    }
+
+    fn page_execution_revision(
+        &self,
+        execution: &PrerunPageExecution,
+    ) -> flow_like_types::Result<String> {
+        match self {
+            Self::Baseline(baseline) => baseline.page_execution_revision(execution),
+            Self::Source(board) => page_execution_revision(board, execution),
+        }
+    }
+
+    fn element_demand(&self) -> ElementDemand {
+        match self {
+            Self::Baseline(baseline) => {
+                let prerun = &baseline.facts().prerun;
+                ElementDemand {
+                    selectors: prerun.element_selectors.clone(),
+                    dynamic: prerun.element_reads_dynamic,
+                }
+            }
+            Self::Source(board) => element_demand(board),
+        }
+    }
+}
+
 /// Project an Event-bound Page from the exact board snapshot available on
 /// this device. The returned action ids come from the same compiler used by
 /// native execution; raw workflow targets remain only for legacy editors.
@@ -206,16 +288,15 @@ pub async fn get_local_page_bootstrap(
         });
     };
 
-    let board = app
-        .open_board(event.board_id.clone(), None, event.board_version)
+    let contract = PageContractBoard::open(&app, &event)
         .await
         .map_err(|error| {
             TauriFunctionError::new(&format!(
                 "Failed to open Event board '{}' locally: {}",
                 event.board_id, error
             ))
-        })?
-        .snapshot();
+        })?;
+    let board = contract.board();
     if board.id != event.board_id
         || event
             .board_version
@@ -227,16 +308,15 @@ pub async fn get_local_page_bootstrap(
             "The local Page Event configuration is invalid",
         ));
     }
-    let page = match event.board_version {
-        Some(version) => board.load_versioned_page(page_id, version, None).await,
-        None => board.load_page(page_id, None).await,
-    }
-    .map_err(|error| {
-        TauriFunctionError::new(&format!(
-            "Failed to load Event Page '{}' locally: {}",
-            page_id, error
-        ))
-    })?;
+    let page = contract
+        .load_page(page_id, event.board_version)
+        .await
+        .map_err(|error| {
+            TauriFunctionError::new(&format!(
+                "Failed to load Event Page '{}' locally: {}",
+                page_id, error
+            ))
+        })?;
     if page.id != page_id
         || page
             .board_id
@@ -248,8 +328,8 @@ pub async fn get_local_page_bootstrap(
         ));
     }
 
-    let execution = PrerunPageExecution::from_page(&board, &page)?;
-    let execution_revision = page_execution_revision(&board, &execution)?;
+    let execution = PrerunPageExecution::from_page(board, &page)?;
+    let execution_revision = contract.page_execution_revision(&execution)?;
     let page = decorate_page_actions(&page, &execution, &execution_revision)?;
     let projected = flow_like_types::json::to_vec(&page)?;
     let revision = blake3::hash(&projected).to_hex().to_string();
@@ -260,7 +340,7 @@ pub async fn get_local_page_bootstrap(
         revision: Some(revision),
         app_custom_css,
         execution_revision: Some(execution_revision),
-        element_demand: Some(element_demand(&board)),
+        element_demand: Some(contract.element_demand()),
         canonical_route,
         route_miss,
     })

@@ -349,13 +349,15 @@ describe("A one-time schedule on the Events list", () => {
 			givenBack,
 		});
 		expect(cell.querySelector("[data-runs-on-next]")?.textContent).toMatch(
-			/^Runs once Oct 15 at 09:00 GMT\+2 · in 2 wk\./,
+			/^Runs once Oct 15(?: at |, )09:00 GMT\+2 · in 2 wk\./,
 		);
 		expect(where()?.getAttribute("data-where-kind")).toBe("once");
 		expect(where()?.textContent).toContain(
 			"Runs on edge-berlin-01, not on the hub.",
 		);
-		expect(runLines(served())[0]).toMatch(/^Runs once Oct 15 at 09:00 GMT\+2/);
+		expect(runLines(served())[0]).toMatch(
+			/^Runs once Oct 15(?: at |, )09:00 GMT\+2/,
+		);
 		await click(byRole("button", "Run it on the hub again", dialog));
 		const confirm = byRole("region", "Run it on the hub again", dialog);
 		// The service runs: the hub waits for its lease, about 65 minutes.

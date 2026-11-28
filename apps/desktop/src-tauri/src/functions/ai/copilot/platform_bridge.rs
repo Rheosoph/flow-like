@@ -284,6 +284,10 @@ mod configuration_tests {
             room: None,
             addressed: true,
             reactions: Vec::new(),
+            talking_with: None,
+            discussion_hops: None,
+            discussion_limit: flow_like_types::bot_turn::MAX_DISCUSSION_HOPS,
+            room_bots: Vec::new(),
         });
         for name in [BOT_CONFIGURATION, BOT_MODELS, BOT_UPDATE_CONFIGURATION] {
             assert!(

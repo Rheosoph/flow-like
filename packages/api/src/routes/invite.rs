@@ -19,13 +19,16 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 use crate::{
-    entity::{app, invite_link, membership, meta, sea_orm_active_enums::Visibility, user},
+    entity::{app, bot, invite_link, membership, meta, sea_orm_active_enums::Visibility, user},
     error::ApiError,
     routes::{app::meta::MetaMode, inbox::links},
     state::AppState,
 };
 
 mod page;
+
+/// Room for a bot's reason of up to 500 characters beside who invited and the member count.
+const ROOM_DESCRIPTION_MAX_CHARS: usize = 720;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -221,7 +224,11 @@ fn safe_image(value: Option<String>) -> Option<String> {
     .then(|| url.to_string())
 }
 
-fn api_url(public_api: Option<&str>, domain: &str, secure: bool) -> Result<Url, ApiError> {
+pub(crate) fn api_url(
+    public_api: Option<&str>,
+    domain: &str,
+    secure: bool,
+) -> Result<Url, ApiError> {
     let configured = match public_api {
         Some(value) => value.to_owned(),
         None => {
@@ -266,6 +273,20 @@ fn destination_urls(
     let mut desktop = Url::parse("flow-like://join").expect("static desktop URL");
     desktop.query_pairs_mut().extend_pairs(pairs);
     (api.to_string(), web.to_string(), desktop.to_string())
+}
+
+/// The public page of a group chat's invite link, for an email invitation.
+pub(crate) fn room_link_url(state: &AppState, token: &str) -> Result<String, ApiError> {
+    let (api, web) = public_origins(state)?;
+    Ok(destination_urls(api, web, &[("room", token)]).0)
+}
+
+/// The web app's list of the reader's pending invitations, for an email invitation.
+pub(crate) fn web_invitations_url(state: &AppState) -> Result<String, ApiError> {
+    let (_, mut web) = public_origins(state)?;
+    web.set_path(&format!("{}/chat", web.path().trim_end_matches('/')));
+    web.query_pairs_mut().append_pair("invitations", "1");
+    Ok(web.to_string())
 }
 
 /// The web app and the public API origins invitation pages link to.
@@ -342,7 +363,23 @@ struct Inviter {
     avatar: Option<String>,
 }
 
-async fn inviter(state: &AppState, user_id: &str) -> Result<Inviter, ApiError> {
+/// A link's creator: a person, or the bot that sent an email invitation, named with its owner.
+async fn inviter(state: &AppState, principal_id: &str) -> Result<Inviter, ApiError> {
+    let Some(row) = bot::Entity::find_by_id(principal_id).one(&state.db).await? else {
+        return person_inviter(state, principal_id).await;
+    };
+    let name = crate::bot_notify::display_name(&row);
+    let name = match person_inviter(state, &row.owner_id).await?.name {
+        Some(owner) => format!("{name} ({owner}’s bot)"),
+        None => name,
+    };
+    Ok(Inviter {
+        name: Some(bounded_text(&name, 120)),
+        avatar: None,
+    })
+}
+
+async fn person_inviter(state: &AppState, user_id: &str) -> Result<Inviter, ApiError> {
     let lookup = &state.platform_config.lookup;
     let Some(row) = user::Entity::find_by_id(user_id).one(&state.db).await? else {
         return Ok(Inviter {
@@ -369,15 +406,19 @@ async fn inviter(state: &AppState, user_id: &str) -> Result<Inviter, ApiError> {
     Ok(Inviter { name, avatar })
 }
 
-fn room_description(inviter: Option<&str>, members: usize) -> String {
+fn room_description(inviter: Option<&str>, reason: Option<&str>, members: usize) -> String {
     let people = if members == 1 {
         "1 member".to_string()
     } else {
         format!("{members} members")
     };
-    match inviter {
-        Some(name) => format!("{name} invited you to this group chat. {people}."),
-        None => format!("You’re invited to this group chat. {people}."),
+    let invited = match inviter {
+        Some(name) => format!("{name} invited you to this group chat"),
+        None => "You’re invited to this group chat".to_string(),
+    };
+    match reason {
+        Some(reason) => format!("{invited}: “{reason}” {people}."),
+        None => format!("{invited}. {people}."),
     }
 }
 
@@ -409,8 +450,12 @@ async fn load_room_page(state: &AppState, query: &RoomQuery) -> Result<Option<St
         kind: page::InvitationKind::Room,
         name,
         description: bounded_text(
-            &room_description(inviter.name.as_deref(), live.members),
-            280,
+            &room_description(
+                inviter.name.as_deref(),
+                live.link.reason.as_deref(),
+                live.members,
+            ),
+            ROOM_DESCRIPTION_MAX_CHARS,
         ),
         image: None,
         icon: picture.or(inviter.avatar),

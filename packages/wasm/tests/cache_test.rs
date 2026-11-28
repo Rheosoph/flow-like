@@ -1,3 +1,5 @@
+#![cfg(feature = "execution")]
+
 //! Tests for wasmtime cranelift compilation caching.
 //!
 //! Verifies that compiled WASM modules produce cache artifacts on disk

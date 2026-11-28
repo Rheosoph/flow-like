@@ -227,7 +227,7 @@ pub(super) fn ensure_room(
 }
 
 /// Inserts the new members; someone who left before gets their row back, keeping the read
-/// marker.
+/// marker and recounting their unread messages live until the next write summarizes them.
 pub(super) async fn upsert_members<C: ConnectionTrait>(
     txn: &C,
     conversation_id: &str,
@@ -253,6 +253,8 @@ pub(super) async fn upsert_members<C: ConnectionTrait>(
             conversation_member::Column::HiddenAt,
             conversation_member::Column::Status,
             conversation_member::Column::Limits,
+            conversation_member::Column::UnreadCount,
+            conversation_member::Column::LastEntryId,
         ])
         .to_owned(),
     )

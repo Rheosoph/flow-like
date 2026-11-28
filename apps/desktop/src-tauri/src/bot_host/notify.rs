@@ -122,6 +122,7 @@ pub(super) fn test_bot(appearance: Value) -> Bot {
         subtask_model: None,
         classification: Default::default(),
         capabilities: Vec::new(),
+        calendar_wake: Default::default(),
         profile_id: None,
         location: Default::default(),
         device_id: None,

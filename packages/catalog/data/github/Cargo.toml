@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = []
-execute = ["flow-like-catalog-core/execute"]
+execute = ["flow-like-catalog-core/execute", "dep:jsonwebtoken", "dep:git2"]
 local-ml = ["flow-like-catalog-core/local-ml"]
 
 [dependencies]
@@ -19,9 +19,14 @@ flow-like-storage.workspace = true
 uuid.workspace = true
 base64.workspace = true
 urlencoding.workspace = true
+git2 = { workspace = true, optional = true }
+jsonwebtoken = { workspace = true, optional = true }
 
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true
 
 [dev-dependencies]
+git2.workspace = true
 futures.workspace = true
+rsa = "0.9"
+rand = "0.8"

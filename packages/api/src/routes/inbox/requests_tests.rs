@@ -1,10 +1,11 @@
 use super::{
-    INBOX_ENCRYPTION_MISMATCH, INBOX_REQUEST_LIMIT, MEMBER_ACTIVE, MEMBER_BLOCKED, MEMBER_DECLINED,
-    MEMBER_PENDING, Reader,
+    INBOX_ENCRYPTION_MISMATCH, INBOX_MEMBER_NOT_ALLOWED, INBOX_REQUEST_LIMIT, MEMBER_ACTIVE,
+    MEMBER_BLOCKED, MEMBER_DECLINED, MEMBER_PENDING, Reader,
     conversations::{NewConversation, start_direct_as, start_group},
     entries::{Outgoing, send_in, validate_send},
     fixture::{
-        assert_code, at, bot_principal, copies, database, insert_bot, outgoing, says, text, user,
+        assert_code, at, bot_principal, copies, database, insert_bot, let_others_invite, outgoing,
+        says, text, user,
     },
     invitations::{accept_in, classify, decline_in, invitations_for, invite_in, set_limits_in},
     model::{InboxEntry, SendEntryRequest},
@@ -46,11 +47,13 @@ async fn share_app(db: &DatabaseConnection, user_id: &str, app_id: &str) {
     .unwrap();
 }
 
-/// user-a and user-b share an app; user-c has no account yet. bot_a is user-a's, bot_b user-b's.
+/// user-a and user-b share an app; user-c has no account yet. bot_a is user-a's, bot_b user-b's,
+/// and user-b lets others invite it.
 async fn world() -> DatabaseConnection {
     let db = database().await;
     insert_bot(&db, "bot_a", "user-a", "SERVER").await;
     insert_bot(&db, "bot_b", "user-b", "SERVER").await;
+    let_others_invite(&db, "bot_b").await;
     share_app(&db, "user-a", "app-1").await;
     share_app(&db, "user-b", "app-1").await;
     db.execute_unprepared(
@@ -263,6 +266,12 @@ async fn only_a_request_can_be_blocked_and_only_by_its_recipient() {
 #[tokio::test]
 async fn a_request_to_someone_elses_bot_reaches_its_owner() {
     let db = world().await;
+    insert_bot(&db, "bot_hidden", "user-b", "SERVER").await;
+    let hidden = plan_direct(&db, "user-a", "bot_hidden", ConversationEncryption::Plain)
+        .await
+        .unwrap_err();
+    assert_code(&hidden, StatusCode::FORBIDDEN, INBOX_MEMBER_NOT_ALLOWED);
+
     request_to(&db, "bot_b").await;
     let sent = send_in(&db, "dm", "user-a", &text("hi_bot"), at(2))
         .await

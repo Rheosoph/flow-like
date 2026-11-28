@@ -1,15 +1,18 @@
 use super::{
+    calendar_tasks,
     fixture::{assert_code, at, database as inbox_database, insert_bot},
+    place_tasks::{Crossed, Dropped, fire_crossing_locked_in, place_task_of, watched_list_in},
     tasks::{Fired, due_in, fire_locked_in, schedule_of},
 };
 use crate::{
     entity::{bot, bot_task, bot_turn, conversation_member, inbox_entry},
     routes::{
         bots::tasks::{
-            BotTaskConversation, BotTaskInfo, CreateBotTaskRequest, TASK_CONVERSATION_ENCRYPTED,
-            TaskOrigin, TaskScope, UpdateBotTaskRequest, create_in, delete_in, delete_scoped_in,
-            infos_of, list_in, list_scoped_in, origin_of_turn, scope_of_turn, update_in,
-            update_scoped_in,
+            BotTaskConversation, BotTaskInfo, CALENDAR_OWNER_CHAT_ONLY, CreateBotTaskRequest,
+            EVENT_LIMIT_REACHED, PLACE_LIMIT_REACHED, PLACE_OWNER_CHAT_ONLY, TASK_CAPABILITY_OFF,
+            TASK_CONVERSATION_ENCRYPTED, TaskOrigin, TaskScope, UpdateBotTaskRequest, create_in,
+            delete_in, delete_scoped_in, infos_of, list_in, list_scoped_in, origin_of_turn,
+            scope_of_turn, update_in, update_scoped_in,
         },
         inbox::{
             fixture::{bot_principal, group, running_turn, user},
@@ -19,8 +22,13 @@ use crate::{
 };
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use flow_like_types::{
+    bot_calendar::{
+        CalendarWake, EventWake, ExternalEventRef, MAX_EVENTS_PER_BOT, TaskEvent,
+        UpdateCalendarWake, WAKE_NOTE_PREFIX,
+    },
     bot_task::{
-        CreateBotTask, MAX_TASKS_PER_BOT, TaskCreator, TaskKind, UpdateBotTask, fire_message_id,
+        CreateBotTask, MAX_TASKS_PER_BOT, MAX_WATCHED_PLACES, PlaceCrossing, TaskCreator, TaskKind,
+        TaskPlace, UpdateBotTask, fire_message_id,
     },
     bot_turn::{STORED_QUEUED, turn_id},
     inbox::{ConversationEncryption, InboxEntryKind, TriggerBody, TriggerSource},
@@ -73,6 +81,8 @@ fn request(kind: TaskKind) -> CreateBotTask {
         title: Some("Report".into()),
         enabled: None,
         monitoring: false,
+        place: None,
+        event: None,
     }
 }
 
@@ -972,4 +982,921 @@ async fn the_owners_direct_chat_and_encrypted_rooms_are_scoped_correctly() {
             .unwrap()
             .is_empty()
     );
+}
+
+fn place(on: PlaceCrossing, repeat: bool) -> TaskPlace {
+    TaskPlace {
+        latitude: 52.52,
+        longitude: 13.405,
+        radius_m: 150.0,
+        on,
+        label: "Home".into(),
+        repeat,
+        until: None,
+    }
+}
+
+fn place_request(on: PlaceCrossing, repeat: bool) -> CreateBotTask {
+    CreateBotTask {
+        kind: Some(TaskKind::Place),
+        instruction: "Remind me to water the plants".into(),
+        title: Some("Plants".into()),
+        place: Some(place(on, repeat)),
+        ..Default::default()
+    }
+}
+
+async fn allow_location(db: &DatabaseConnection, bot_id: &str) {
+    bot::ActiveModel {
+        id: Set(bot_id.into()),
+        capabilities: Set(vec!["scheduling".to_string(), "location".to_string()].into()),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+    .unwrap();
+}
+
+async fn make_place(db: &DatabaseConnection, on: PlaceCrossing, repeat: bool) -> bot_task::Model {
+    create_in(
+        db,
+        OWNER,
+        BOT,
+        place_request(on, repeat),
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap()
+}
+
+async fn cross(
+    db: &DatabaseConnection,
+    task_id: &str,
+    crossing: PlaceCrossing,
+    occurred_at: DateTime<FixedOffset>,
+) -> Crossed {
+    let (bot, task) = place_task_of(db, OWNER, BOT, task_id).await.unwrap();
+    let conversation = trigger_conversation(db, OWNER, BOT, occurred_at)
+        .await
+        .unwrap()
+        .expect("plain conversation");
+    fire_crossing_locked_in(
+        db,
+        &conversation,
+        &task,
+        &bot,
+        crossing,
+        occurred_at.to_utc(),
+        occurred_at,
+    )
+    .await
+    .unwrap()
+}
+
+fn dropped(crossed: Crossed) -> Dropped {
+    match crossed {
+        Crossed::Dropped(dropped) => dropped,
+        Crossed::Sent(..) => panic!("the crossing fired"),
+    }
+}
+
+#[tokio::test]
+async fn a_place_task_needs_the_location_capability_and_the_owners_own_chat() {
+    let db = database().await;
+    let error = create_in(
+        &db,
+        OWNER,
+        BOT,
+        place_request(PlaceCrossing::Enter, false),
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(
+        &error,
+        axum::http::StatusCode::FORBIDDEN,
+        TASK_CAPABILITY_OFF,
+    );
+
+    allow_location(&db, BOT).await;
+    let task = make_place(&db, PlaceCrossing::Enter, false).await;
+    assert_eq!(task.kind, "PLACE");
+    assert_eq!(task.next_run_at, None);
+    assert_eq!(task.place_on.as_deref(), Some("ENTER"));
+
+    team(&db, ConversationEncryption::Plain).await;
+    asked_in(&db, "turn-team", "team", MEMBER).await;
+    let origin = origin_of_turn(&db, OWNER, BOT, "turn-team")
+        .await
+        .unwrap()
+        .unwrap();
+    let error = create_in(
+        &db,
+        OWNER,
+        BOT,
+        place_request(PlaceCrossing::Enter, false),
+        TaskCreator::Bot,
+        Some(&origin),
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(
+        &error,
+        axum::http::StatusCode::CONFLICT,
+        PLACE_OWNER_CHAT_ONLY,
+    );
+}
+
+#[tokio::test]
+async fn an_owner_watches_at_most_twenty_places_across_bots() {
+    let db = database().await;
+    allow_location(&db, BOT).await;
+    insert_bot(&db, "bot_c", OWNER, "SERVER").await;
+    allow_location(&db, "bot_c").await;
+    for _ in 0..MAX_WATCHED_PLACES - 1 {
+        make_place(&db, PlaceCrossing::Enter, false).await;
+    }
+    create_in(
+        &db,
+        OWNER,
+        "bot_c",
+        place_request(PlaceCrossing::Exit, true),
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap();
+    let error = create_in(
+        &db,
+        OWNER,
+        BOT,
+        place_request(PlaceCrossing::Enter, false),
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(
+        &error,
+        axum::http::StatusCode::CONFLICT,
+        PLACE_LIMIT_REACHED,
+    );
+}
+
+#[tokio::test]
+async fn the_place_list_holds_only_what_phones_should_watch() {
+    let db = database().await;
+    allow_location(&db, BOT).await;
+    let live = make_place(&db, PlaceCrossing::Both, true).await;
+    let done = make_place(&db, PlaceCrossing::Enter, false).await;
+    let expired = make_place(&db, PlaceCrossing::Enter, false).await;
+    let paused = make_place(&db, PlaceCrossing::Enter, false).await;
+    bot_task::ActiveModel {
+        id: Set(done.id.clone()),
+        last_run_at: Set(Some(now())),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    bot_task::ActiveModel {
+        id: Set(expired.id.clone()),
+        place_until: Set(Some(at(-60))),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    bot_task::ActiveModel {
+        id: Set(paused.id.clone()),
+        enabled: Set(false),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    make(&db, TaskKind::Cron).await;
+
+    insert_bot(&db, "bot_c", OWNER, "SERVER").await;
+    create_in(
+        &db,
+        OWNER,
+        "bot_c",
+        place_request(PlaceCrossing::Enter, false),
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap_err();
+
+    insert_bot(&db, MEMBER_BOT, MEMBER, "SERVER").await;
+    allow_location(&db, MEMBER_BOT).await;
+    create_in(
+        &db,
+        MEMBER,
+        MEMBER_BOT,
+        place_request(PlaceCrossing::Enter, false),
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap();
+
+    let listed = watched_list_in(&db, OWNER, Utc::now()).await.unwrap();
+    assert_eq!(listed.places.len(), 1);
+    assert_eq!(listed.places[0].task_id, live.id);
+    assert_eq!(listed.places[0].bot_id, BOT);
+
+    bot::ActiveModel {
+        id: Set(BOT.into()),
+        capabilities: Set(vec!["scheduling".to_string()].into()),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    assert!(
+        watched_list_in(&db, OWNER, Utc::now())
+            .await
+            .unwrap()
+            .places
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_crossing_fires_the_task_into_the_owners_chat_once() {
+    let db = database().await;
+    allow_location(&db, BOT).await;
+    let task = make_place(&db, PlaceCrossing::Enter, false).await;
+    let when = now();
+
+    let Crossed::Sent(_, bots) = cross(&db, &task.id, PlaceCrossing::Enter, when).await else {
+        panic!("the arrival fires the task");
+    };
+    assert_eq!(bots.len(), 1);
+    let entries = triggers(&db).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].sender_id, OWNER);
+    assert_eq!(
+        entries[0].message_id,
+        fire_message_id(&task.id, when.to_utc())
+    );
+    let body = TriggerBody::parse(&entries[0].envelope["body"]).unwrap();
+    assert_eq!(body.source, TriggerSource::Schedule);
+    assert_eq!(body.ref_id, task.id);
+    assert_eq!(
+        body.text,
+        "Location trigger: your owner arrived at Home.\n\nRemind me to water the plants"
+    );
+    assert_eq!(reload(&db, &task.id).await.last_run_at, Some(when));
+
+    let again = cross(
+        &db,
+        &task.id,
+        PlaceCrossing::Enter,
+        when + Duration::minutes(30),
+    )
+    .await;
+    assert_eq!(dropped(again), Dropped::NotWatched);
+    assert_eq!(triggers(&db).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_second_phone_within_ten_minutes_does_not_fire_a_repeating_place_again() {
+    let db = database().await;
+    allow_location(&db, BOT).await;
+    let task = make_place(&db, PlaceCrossing::Both, true).await;
+    let first = now();
+
+    assert!(matches!(
+        cross(&db, &task.id, PlaceCrossing::Enter, first).await,
+        Crossed::Sent(..)
+    ));
+    let duplicate = cross(
+        &db,
+        &task.id,
+        PlaceCrossing::Enter,
+        first + Duration::minutes(2),
+    )
+    .await;
+    assert_eq!(dropped(duplicate), Dropped::Duplicate);
+    assert_eq!(triggers(&db).await.len(), 1);
+
+    let later = first + Duration::minutes(11);
+    assert!(matches!(
+        cross(&db, &task.id, PlaceCrossing::Exit, later).await,
+        Crossed::Sent(..)
+    ));
+    let entries = triggers(&db).await;
+    assert_eq!(entries.len(), 2);
+    let texts: Vec<String> = entries
+        .iter()
+        .map(|entry| TriggerBody::parse(&entry.envelope["body"]).unwrap().text)
+        .collect();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with("Location trigger: your owner left Home."))
+    );
+}
+
+#[tokio::test]
+async fn a_crossing_in_the_wrong_direction_or_for_a_stopped_place_does_not_fire() {
+    let db = database().await;
+    allow_location(&db, BOT).await;
+    let task = make_place(&db, PlaceCrossing::Enter, false).await;
+    assert_eq!(
+        dropped(cross(&db, &task.id, PlaceCrossing::Exit, now()).await),
+        Dropped::Direction
+    );
+    assert_eq!(reload(&db, &task.id).await.last_run_at, None);
+
+    bot_task::ActiveModel {
+        id: Set(task.id.clone()),
+        place_until: Set(Some(at(-60))),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        dropped(cross(&db, &task.id, PlaceCrossing::Enter, now()).await),
+        Dropped::NotWatched
+    );
+    assert!(triggers(&db).await.is_empty());
+}
+
+#[tokio::test]
+async fn another_owners_place_task_reads_as_missing() {
+    let db = database().await;
+    allow_location(&db, BOT).await;
+    let task = make_place(&db, PlaceCrossing::Enter, false).await;
+    let time_task = make(&db, TaskKind::Cron).await;
+    assert!(place_task_of(&db, OWNER, BOT, &task.id).await.is_ok());
+    assert!(place_task_of(&db, MEMBER, BOT, &task.id).await.is_err());
+    assert!(
+        place_task_of(&db, OWNER, "bot_zzz", &task.id)
+            .await
+            .is_err()
+    );
+    assert!(place_task_of(&db, OWNER, BOT, &time_task.id).await.is_err());
+}
+
+#[tokio::test]
+async fn the_time_sweep_never_fires_a_place_task() {
+    let db = database().await;
+    allow_location(&db, BOT).await;
+    let task = make_place(&db, PlaceCrossing::Both, true).await;
+    assert!(schedule_of(&task).is_none());
+    assert!(
+        due_in(&db, now() + Duration::days(30))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_task_keeps_its_kind_and_a_new_place_arms_it_again() {
+    let db = database().await;
+    allow_location(&db, BOT).await;
+    let task = make_place(&db, PlaceCrossing::Enter, false).await;
+    cross(&db, &task.id, PlaceCrossing::Enter, now()).await;
+    assert!(reload(&db, &task.id).await.last_run_at.is_some());
+
+    let error = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            at: Some((Utc::now() + Duration::hours(1)).to_rfc3339()),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(&error, axum::http::StatusCode::BAD_REQUEST, "BAD_REQUEST");
+
+    let rearmed = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            place: Some(TaskPlace {
+                label: "Office".into(),
+                ..place(PlaceCrossing::Exit, true)
+            }),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rearmed.last_run_at, None);
+    assert_eq!(rearmed.place_label.as_deref(), Some("Office"));
+    assert_eq!(rearmed.place_on.as_deref(), Some("EXIT"));
+
+    let time_task = make(&db, TaskKind::Cron).await;
+    let error = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &time_task.id,
+        UpdateBotTask {
+            place: Some(place(PlaceCrossing::Enter, false)),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(&error, axum::http::StatusCode::BAD_REQUEST, "BAD_REQUEST");
+}
+
+fn event_at(starts: DateTime<Utc>) -> TaskEvent {
+    TaskEvent {
+        starts_at: starts.to_rfc3339(),
+        ends_at: None,
+        all_day: false,
+        location: Some("Room 4".into()),
+        wake: None,
+        wake_offsets: Vec::new(),
+        external: None,
+        link: None,
+    }
+}
+
+fn event_request(event: TaskEvent) -> CreateBotTask {
+    CreateBotTask {
+        kind: Some(TaskKind::Event),
+        instruction: String::new(),
+        title: Some("Dentist".into()),
+        event: Some(event),
+        ..Default::default()
+    }
+}
+
+fn external(event_id: &str) -> ExternalEventRef {
+    ExternalEventRef {
+        connector_id: "conn".into(),
+        provider: "google".into(),
+        calendar_id: "primary".into(),
+        event_id: event_id.into(),
+    }
+}
+
+async fn allow_calendar(db: &DatabaseConnection, bot_id: &str, scheduling: bool) {
+    let mut capabilities = vec!["calendar".to_string()];
+    if scheduling {
+        capabilities.push("scheduling".to_string());
+    }
+    bot::ActiveModel {
+        id: Set(bot_id.into()),
+        capabilities: Set(capabilities.into()),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+    .unwrap();
+}
+
+async fn wake_on(db: &DatabaseConnection, offsets: Vec<u32>) {
+    let bot = bot::Entity::find_by_id(BOT).one(db).await.unwrap().unwrap();
+    calendar_tasks::apply_in(
+        db,
+        &bot,
+        UpdateCalendarWake {
+            enabled: Some(true),
+            offsets_minutes: Some(offsets),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+}
+
+async fn make_event(
+    db: &DatabaseConnection,
+    event: TaskEvent,
+    author: TaskCreator,
+) -> bot_task::Model {
+    create_in(db, OWNER, BOT, event_request(event), author, None, now())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_event_task_needs_the_calendar_capability_and_the_owners_own_chat() {
+    let db = database().await;
+    let event = event_at(Utc::now() + Duration::hours(5));
+    let error = create_in(
+        &db,
+        OWNER,
+        BOT,
+        event_request(event.clone()),
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(
+        &error,
+        axum::http::StatusCode::FORBIDDEN,
+        TASK_CAPABILITY_OFF,
+    );
+
+    allow_calendar(&db, BOT, true).await;
+    team(&db, ConversationEncryption::Plain).await;
+    asked_in(&db, "turn-team", "team", MEMBER).await;
+    let origin = origin_of_turn(&db, OWNER, BOT, "turn-team")
+        .await
+        .unwrap()
+        .unwrap();
+    let error = create_in(
+        &db,
+        OWNER,
+        BOT,
+        event_request(event.clone()),
+        TaskCreator::Bot,
+        Some(&origin),
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(
+        &error,
+        axum::http::StatusCode::CONFLICT,
+        CALENDAR_OWNER_CHAT_ONLY,
+    );
+
+    let task = make_event(&db, event, TaskCreator::Owner).await;
+    assert_eq!(task.kind, "EVENT");
+    assert!(task.conversation_id.is_none());
+}
+
+#[tokio::test]
+async fn an_event_task_refuses_at_place_and_a_missing_event() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    let event = event_at(Utc::now() + Duration::hours(5));
+    let mut with_at = event_request(event.clone());
+    with_at.at = Some((Utc::now() + Duration::hours(1)).to_rfc3339());
+    let mut without_event = event_request(event);
+    without_event.event = None;
+    let mut untitled = without_event.clone();
+    untitled.event = Some(event_at(Utc::now() + Duration::hours(5)));
+    untitled.title = None;
+    for request in [with_at, without_event, untitled] {
+        let error = create_in(&db, OWNER, BOT, request, TaskCreator::Owner, None, now())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.status(),
+            axum::http::StatusCode::BAD_REQUEST,
+            "{error:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_events_wake_ups_come_from_the_bots_settings_and_its_own_override() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    let start = Utc::now() + Duration::hours(5);
+    let quiet = make_event(&db, event_at(start), TaskCreator::Owner).await;
+    assert_eq!(quiet.next_run_at, None);
+    assert!(!quiet.enabled);
+
+    let mut own = event_at(start);
+    own.wake = Some(EventWake {
+        enabled: true,
+        offsets_minutes: vec![60],
+    });
+    let own = make_event(&db, own, TaskCreator::Owner).await;
+    let stored = calendar_tasks::event_of(&own).unwrap();
+    assert_eq!(stored.wake_offsets, vec![60]);
+    assert_eq!(
+        own.next_run_at.unwrap().timestamp(),
+        (start - Duration::minutes(60)).timestamp()
+    );
+    assert!(own.enabled);
+
+    wake_on(&db, vec![30]).await;
+    let quiet = reload(&db, &quiet.id).await;
+    assert_eq!(
+        quiet.next_run_at.unwrap().timestamp(),
+        (start - Duration::minutes(30)).timestamp()
+    );
+    assert!(quiet.enabled);
+    assert_eq!(quiet.monitoring, Some(true));
+    let own = reload(&db, &own.id).await;
+    assert_eq!(
+        own.next_run_at.unwrap().timestamp(),
+        (start - Duration::minutes(60)).timestamp()
+    );
+}
+
+#[tokio::test]
+async fn an_event_of_a_connected_calendar_is_one_bot_written_row() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    wake_on(&db, vec![15]).await;
+    let start = Utc::now() + Duration::hours(5);
+    let mut event = event_at(start);
+    event.external = Some(external("evt-1"));
+    let first = make_event(&db, event.clone(), TaskCreator::Owner).await;
+    assert_eq!(first.created_by, "BOT");
+    assert_eq!(first.owner_written, Some(false));
+    assert!(first.request_message_id.is_none());
+
+    let mut moved = event_at(start + Duration::hours(1));
+    moved.external = Some(external("evt-1"));
+    let second = make_event(&db, moved, TaskCreator::Owner).await;
+    assert_eq!(second.id, first.id);
+    assert_eq!(
+        second.next_run_at.unwrap().timestamp(),
+        (start + Duration::hours(1) - Duration::minutes(15)).timestamp()
+    );
+    let rows = calendar_tasks::rows_of(&db, BOT).await.unwrap();
+    assert_eq!(rows.len(), 1);
+
+    let mut other = event_at(start);
+    other.external = Some(external("evt-2"));
+    make_event(&db, other, TaskCreator::Bot).await;
+    assert_eq!(calendar_tasks::rows_of(&db, BOT).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn events_have_their_own_cap_and_do_not_use_up_the_task_cap() {
+    let db = database().await;
+    allow_calendar(&db, BOT, true).await;
+    let start = Utc::now() + Duration::hours(5);
+    let rows = (0..MAX_EVENTS_PER_BOT).map(|index| bot_task::ActiveModel {
+        id: Set(format!("event-{index}")),
+        bot_id: Set(BOT.into()),
+        owner_id: Set(OWNER.into()),
+        kind: Set("EVENT".into()),
+        instruction: Set(String::new()),
+        title: Set(format!("Event {index}")),
+        enabled: Set(false),
+        created_by: Set("OWNER".into()),
+        created_at: Set(now()),
+        updated_at: Set(now()),
+        event: Set(Some(serde_json::to_value(event_at(start)).unwrap())),
+        ..Default::default()
+    });
+    bot_task::Entity::insert_many(rows).exec(&db).await.unwrap();
+
+    let error = create_in(
+        &db,
+        OWNER,
+        BOT,
+        event_request(event_at(start)),
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(
+        &error,
+        axum::http::StatusCode::CONFLICT,
+        EVENT_LIMIT_REACHED,
+    );
+    for _ in 0..MAX_TASKS_PER_BOT {
+        make(&db, TaskKind::Once).await;
+    }
+}
+
+#[tokio::test]
+async fn moving_an_event_arms_it_again_and_an_unmoved_one_keeps_its_runs() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    wake_on(&db, vec![15]).await;
+    let start = Utc::now() + Duration::hours(5);
+    let task = make_event(&db, event_at(start), TaskCreator::Owner).await;
+    bot_task::ActiveModel {
+        id: Set(task.id.clone()),
+        last_run_at: Set(Some(now())),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+
+    let renamed = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            title: Some("Dentist, 2nd visit".into()),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    assert!(renamed.last_run_at.is_some());
+    assert_eq!(renamed.title, "Dentist, 2nd visit");
+
+    let later = start + Duration::hours(2);
+    let moved = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            event: Some(event_at(later)),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    assert!(moved.last_run_at.is_none());
+    assert_eq!(
+        moved.next_run_at.unwrap().timestamp(),
+        (later - Duration::minutes(15)).timestamp()
+    );
+    assert!(moved.enabled);
+
+    let error = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            at: Some((Utc::now() + Duration::hours(1)).to_rfc3339()),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn an_event_wake_up_writes_the_wake_text_and_moves_to_the_next_wake() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    wake_on(&db, vec![15]).await;
+    let start = Utc::now() + Duration::days(1);
+    let task = create_in(
+        &db,
+        OWNER,
+        BOT,
+        CreateBotTask {
+            cron: Some("0 9 * * *".into()),
+            tz: Some("Europe/Berlin".into()),
+            ..event_request(event_at(start))
+        },
+        TaskCreator::Owner,
+        None,
+        now(),
+    )
+    .await
+    .unwrap();
+    let due = Utc::now() - Duration::minutes(1);
+    let task = bot_task::ActiveModel {
+        id: Set(task.id),
+        next_run_at: Set(Some(due.fixed_offset())),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+
+    let when = now();
+    assert!(matches!(fire(&db, &task, when).await, Fired::Sent(..)));
+    let entries = triggers(&db).await;
+    assert_eq!(entries.len(), 1);
+    let text = entries[0].envelope["body"]["text"].as_str().unwrap();
+    assert!(text.starts_with(WAKE_NOTE_PREFIX), "{text}");
+    assert!(text.contains(&task.id), "{text}");
+    let after = reload(&db, &task.id).await;
+    assert!(after.last_run_at.is_some());
+    assert!(after.next_run_at.is_some_and(|next| next > when));
+    assert!(after.enabled);
+}
+
+#[tokio::test]
+async fn a_one_off_event_is_done_after_its_last_wake_up() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    wake_on(&db, vec![15]).await;
+    let task = make_event(
+        &db,
+        event_at(Utc::now() + Duration::minutes(10)),
+        TaskCreator::Owner,
+    )
+    .await;
+    let task = bot_task::ActiveModel {
+        id: Set(task.id),
+        next_run_at: Set(Some((Utc::now() - Duration::seconds(5)).fixed_offset())),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    assert!(matches!(fire(&db, &task, now()).await, Fired::Sent(..)));
+    let after = reload(&db, &task.id).await;
+    assert_eq!(after.next_run_at, None);
+    assert!(!after.enabled);
+}
+
+#[tokio::test]
+async fn the_sweep_fires_event_tasks_of_bots_that_hold_calendar_only() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    wake_on(&db, vec![15]).await;
+    let task = make_event(
+        &db,
+        event_at(Utc::now() + Duration::hours(3)),
+        TaskCreator::Owner,
+    )
+    .await;
+    bot_task::ActiveModel {
+        id: Set(task.id.clone()),
+        next_run_at: Set(Some(at(0))),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    let due = due_in(&db, now()).await.unwrap();
+    assert_eq!(due.len(), 1);
+    let bot_row = bot::Entity::find_by_id(BOT)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(super::tasks::can_fire(&bot_row, &due[0]));
+
+    allow_scheduling(&db, BOT).await;
+    let bot_row = bot::Entity::find_by_id(BOT)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!super::tasks::can_fire(&bot_row, &due[0]));
+    assert!(super::tasks::can_fire(
+        &bot_row,
+        &make(&db, TaskKind::Once).await
+    ));
+}
+
+#[tokio::test]
+async fn changing_the_calendar_settings_works_every_event_out_again() {
+    let db = database().await;
+    allow_calendar(&db, BOT, false).await;
+    let start = Utc::now() + Duration::hours(5);
+    let mut skipped = event_at(start);
+    skipped.all_day = true;
+    let plain = make_event(&db, event_at(start), TaskCreator::Owner).await;
+    let all_day = make_event(&db, skipped, TaskCreator::Owner).await;
+    assert!(!plain.enabled && !all_day.enabled);
+
+    let bot_row = bot::Entity::find_by_id(BOT)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let (wake, changed) = calendar_tasks::apply_in(
+        &db,
+        &bot_row,
+        UpdateCalendarWake {
+            enabled: Some(true),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        wake,
+        CalendarWake {
+            enabled: true,
+            ..CalendarWake::default()
+        }
+    );
+    assert_eq!(changed.len(), 1);
+    assert!(reload(&db, &plain.id).await.enabled);
+    assert!(!reload(&db, &all_day.id).await.enabled);
 }

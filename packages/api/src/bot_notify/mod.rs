@@ -214,6 +214,16 @@ pub(crate) async fn notify_for_reply<C: ConnectionTrait>(
     if bot.owner_id != turn.owner_id || notifications_muted(&bot.appearance) {
         return Ok(false);
     }
+    if !reply.resumed
+        && crate::routes::inbox::person_push::is_watching_in(
+            db,
+            &turn.conversation_id,
+            &bot.owner_id,
+        )
+        .await?
+    {
+        return Ok(false);
+    }
     let id = stable_id(&bot.id, reply.message_id);
     if notification::Entity::find_by_id(id.as_str())
         .one(db)
@@ -243,6 +253,10 @@ pub(crate) async fn notify_for_reply<C: ConnectionTrait>(
 
 /// The post-commit hook of a committed reply; failures are logged, never raised.
 pub(crate) async fn after_reply(state: &AppState, reply: &Reply<'_>) {
+    crate::routes::inbox::team_request::after_reply(state, reply).await;
+    if crate::bot_channels::after_reply(state, reply).await {
+        return;
+    }
     if let Err(error) = notify_for_reply(&state.db, &StateSink(state), reply).await {
         tracing::warn!(%error, bot_id = reply.bot_id, "Could not notify the owner of a bot's reply");
     }

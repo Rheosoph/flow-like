@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 description = "IAM-only AWS data-plane connectivity shared by the AWS API and workers: Aurora DSQL through short-lived IAM tokens"
 
+[features]
+default = []
+developer-auth = ["aurora-dsql-sqlx-connector/developer-auth", "aws-config/sso", "aws-config/credentials-login", "aws-config/credentials-process"]
+
 [dependencies]
 aurora-dsql-sqlx-connector = { workspace = true }
 aws-config.workspace = true

@@ -9,7 +9,7 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like::flow::{
-    board::{Board, commands::GenericCommand},
+    board::Board,
     copilot::{BoardCommand, FlowIrCommitToken, FlowIrDraftStore, board_fingerprint},
 };
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,10 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::wasm_catalog::{app_wasm_nodes_cached, hydrate_board_wasm_metadata},
+    routes::app::{
+        board::sealed_commands::{CommandSeal, SealedCommand},
+        wasm_catalog::{app_wasm_nodes_cached, hydrate_board_wasm_metadata},
+    },
     state::{AppState, flow_ir_draft_store_key},
 };
 
@@ -63,7 +66,9 @@ pub struct ApplyFlowIrCommitResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     pub message: String,
-    pub commands: Vec<GenericCommand>,
+    /// The executed batch, sealed: it is what the caller records for undo, and it is kept in
+    /// the durable receipt in the same form.
+    pub commands: Vec<SealedCommand>,
     pub board_commands: Vec<BoardCommand>,
     pub diagnostics: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -862,9 +867,11 @@ pub async fn apply_flow_ir_commit(
     // This canonical-board lookup intentionally precedes the process-local draft lookup. A caller
     // that lost the first success response can therefore recover after an API restart or on a
     // different replica without retaining the pre-apply draft in shared memory.
-    if let Some(receipt) =
+    if let Some(mut receipt) =
         replay_applied_receipt_from_board(&board, &scope_key, &params.token, now_ms)
     {
+        receipt.commands =
+            CommandSeal::new(&state, &app_id, &board_id).seal_stored(receipt.commands);
         let obsolete_pending_removed = board.remove_internal_ref(&requested_pending_key).is_some();
         // Bookkeeping-only, but still a full-object PUT of a board loaded before the lease
         // lapsed: skipping it costs one more prune later, writing it would erase another
@@ -1134,7 +1141,7 @@ pub async fn apply_flow_ir_commit(
             "Applied and persisted {} exact compiled workflow command(s).",
             apply_result.commands.len()
         ),
-        commands: apply_result.commands.clone(),
+        commands: CommandSeal::new(&state, &app_id, &board_id).seal(apply_result.commands.clone()),
         board_commands: apply_result.board_commands.clone(),
         diagnostics: apply_result.diagnostics.clone(),
         final_board_node_count: Some(board_total_node_count(&board)),
@@ -1160,9 +1167,9 @@ pub async fn apply_flow_ir_commit(
 
     super::sink_rebind::try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
     mutation_guard.ensure_held()?;
-    let saved = super::scoring::save_board_and_refresh_summary(&state, &app_id, &board).await;
-    let put = match saved {
-        Ok(put) => put,
+    let saved = match super::scoring::save_board_and_refresh_summary(&state, &app_id, &board).await
+    {
+        Ok(saved) => saved,
         Err(error) => {
             if let Some(error) = ApiError::from_board_format_error(&error) {
                 return Err(error);
@@ -1221,7 +1228,7 @@ pub async fn apply_flow_ir_commit(
             "The FlowScript claim acknowledgement raced after its mutation and durable receipt were persisted; keeping the canonical applied board"
         );
     }
-    super::sync_board::seed_board_revision(&state, &app_id, &board_id, board, &put).await;
+    super::sync_board::seed_board_revision(&state, &app_id, &board_id, board, &saved).await;
     Ok(Json(result))
 }
 

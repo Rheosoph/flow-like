@@ -1,3 +1,5 @@
+#![cfg(feature = "execution")]
+
 //! Verifies a package's built artifacts end to end, outside the templates.
 //!
 //! Point it at any package built with `mise run build`:

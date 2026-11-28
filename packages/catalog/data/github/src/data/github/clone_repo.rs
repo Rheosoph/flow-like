@@ -219,33 +219,26 @@ async fn run_git_clone(
     let branch = branch.to_owned();
     flow_like_types::tokio::task::spawn_blocking(move || {
         let result = (|| {
-            let target = workspace.path();
-            let mut parent = target
-                .parent()
-                .ok_or_else(|| flow_like_types::anyhow!("Clone target needs a parent directory"))?;
-            while !parent.exists() {
-                parent = parent.parent().ok_or_else(|| {
-                    flow_like_types::anyhow!("Clone target needs an existing parent")
-                })?;
-            }
-            let depth = depth.to_string();
-            let mut args = vec!["clone"];
-            if !branch.is_empty() {
+            use super::git::Network;
+            let depth = match depth {
+                0 => None,
+                depth => Some(
+                    i32::try_from(depth)
+                        .map_err(|_| flow_like_types::anyhow!("Depth is too large"))?,
+                ),
+            };
+            let branch = if branch.is_empty() {
+                None
+            } else {
                 super::git::validate_ref(&branch)?;
-                args.extend(["--branch", branch.as_str()]);
-            }
-            if depth != "0" {
-                args.extend(["--depth", depth.as_str()]);
-            }
-            args.extend([
-                "--",
-                clone_url.as_str(),
-                target
-                    .to_str()
-                    .ok_or_else(|| flow_like_types::anyhow!("Clone target must be UTF-8"))?,
-            ]);
-            super::git::run_network(parent, &args, &provider)?;
-            Ok(())
+                Some(branch.as_str())
+            };
+            super::git::ProviderNetwork(&provider).clone_repo(
+                &clone_url,
+                workspace.path(),
+                branch,
+                depth,
+            )
         })();
         (workspace, result)
     })

@@ -9,6 +9,7 @@
 mod android_bot_runtime;
 #[cfg(target_os = "android")]
 mod android_mobile;
+mod bot_channels;
 mod bot_host;
 #[cfg(desktop)]
 mod bot_notch;
@@ -37,6 +38,8 @@ mod frontend_assets;
 #[cfg(target_os = "macos")]
 mod fullscreen_hide;
 mod functions;
+#[cfg(not(target_os = "android"))]
+mod keychain_cache;
 mod local_page_actions;
 #[cfg(any(test, not(debug_assertions)))]
 mod logging;
@@ -186,9 +189,42 @@ fn harden_ios_webview_scroll(window: &tauri::WebviewWindow) {
                 let _: () = objc2::msg_send![configuration, setDataDetectorTypes: 0u64];
             }
         }
+        hide_ios_keyboard_accessory();
     }) {
         tracing::warn!("Failed to apply iOS webview scroll hardening: {}", err);
     }
+}
+
+/// Drops the ⌃ ⌄ ✓ form bar WebKit puts above the keyboard, which costs a chat composer ~44 pt and
+/// no native app shows. `WKContentView` gets its own `inputAccessoryView` returning nil; replacing
+/// the inherited `UIResponder` method instead would strip every responder's accessory.
+#[cfg(target_os = "ios")]
+fn hide_ios_keyboard_accessory() {
+    use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
+
+    unsafe extern "C-unwind" fn no_accessory(_this: *mut AnyObject, _cmd: Sel) -> *mut AnyObject {
+        std::ptr::null_mut()
+    }
+
+    static HIDDEN: std::sync::Once = std::sync::Once::new();
+    HIDDEN.call_once(|| unsafe {
+        let Some(class) = AnyClass::get(c"WKContentView") else {
+            tracing::warn!("WKContentView not found; the keyboard keeps its form bar");
+            return;
+        };
+        let selector = objc2::sel!(inputAccessoryView);
+        let imp = std::mem::transmute::<
+            unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> *mut AnyObject,
+            Imp,
+        >(no_accessory);
+        let class_ptr = (class as *const AnyClass).cast_mut();
+        if !objc2::ffi::class_addMethod(class_ptr, selector, imp, c"@@:".as_ptr()).as_bool() {
+            let own = objc2::ffi::class_getInstanceMethod(class, selector);
+            if !own.is_null() {
+                objc2::ffi::method_setImplementation(own.cast_mut(), imp);
+            }
+        }
+    });
 }
 
 /// Tune the macOS WKWebView for performance.
@@ -818,6 +854,7 @@ pub fn run() {
                 &local_bots_db,
             ));
             bot_host::start(app.app_handle());
+            bot_channels::start(app.app_handle());
 
             // Initialize Event Sink Manager synchronously to ensure it's ready before accepting commands
             let settings_clone = settings_state_for_sink.clone();
@@ -1210,6 +1247,7 @@ pub fn run() {
             functions::native::native_set_background_hosting,
             functions::native::native_open_background_hosting_battery_settings,
             functions::native::native_open_background_hosting_notification_settings,
+            functions::native::native_open_notification_settings,
             functions::native::native_cancel_location,
             functions::native::native_geofence_permission,
             functions::file::get_path_meta,
@@ -1331,8 +1369,10 @@ pub fn run() {
             functions::app::sharing::inspect_app_archive,
             functions::app::sharing::cancel_archive_operation,
             functions::app::fork::apply_fork_bundle,
+            functions::app::fork::download_fork_files,
             functions::app::fork::summarize_local_app_bundle,
-            functions::app::fork::upload_local_app_content_bundle,
+            functions::app::fork::list_local_app_content,
+            functions::app::fork::upload_local_app_files,
             functions::app::duplicate::duplicate_local_app,
             functions::app::tables::db_table_names,
             functions::app::tables::db_table_names_user,
@@ -1387,6 +1427,11 @@ pub fn run() {
             functions::app::saved_queries::query_saved_update,
             functions::app::saved_queries::query_saved_delete,
             functions::app::saved_queries::query_execute_sql,
+            functions::app::saved_queries::query_describe_sql,
+            functions::app::saved_queries::query_sql_parameter_options,
+            functions::app::cross_app_query::query_execute_cross_app,
+            functions::app::cross_app_query::query_describe_cross_app,
+            functions::app::cross_app_query::query_cross_app_parameter_options,
             functions::app::forecasting::query_forecast,
             functions::app::saved_forecasts::studio_forecast_list,
             functions::app::saved_forecasts::studio_forecast_get,
@@ -1516,6 +1561,10 @@ pub fn run() {
             functions::ai::copilot::global_chat_list_memories,
             functions::ai::bot_memory_admin::bot_memory_facts,
             functions::ai::bot_memory_admin::bot_memory_forget,
+            functions::ai::bot_memory_admin::bot_memory_entities,
+            functions::ai::bot_memory_admin::bot_memory_entity_update,
+            functions::ai::bot_memory_admin::bot_memory_entity_merge,
+            functions::ai::bot_memory_admin::bot_memory_entity_forget,
             functions::ai::bot_memory_admin::bot_memory_reset,
             functions::ai::copilot::global_chat_delete_memory,
             functions::ai::copilot::copilot_sdk_start,
@@ -1624,6 +1673,9 @@ pub fn run() {
             functions::local_bots::notes::local_bots_notes_update,
             functions::local_bots::history::local_inbox_import_history,
             functions::local_bots::history::local_inbox_write_segment,
+            bot_channels::bot_discord_get,
+            bot_channels::bot_discord_set,
+            bot_channels::bot_discord_remove,
             bot_host::commands::bot_host_turns,
             bot_host::commands::bot_host_poke,
             bot_host::commands::bot_host_e2e_status,
@@ -1646,6 +1698,9 @@ pub fn run() {
             bot_host::task_commands::local_bot_create_task,
             bot_host::task_commands::local_bot_update_task,
             bot_host::task_commands::local_bot_delete_task,
+            bot_host::calendar::bot_calendar_events,
+            bot_host::calendar::local_bot_calendar_wake,
+            bot_host::calendar::local_bot_set_calendar_wake,
             bot_host::skill_commands::local_bot_skills,
             bot_host::skill_commands::local_bot_create_skill,
             bot_host::skill_commands::local_bot_update_skill,

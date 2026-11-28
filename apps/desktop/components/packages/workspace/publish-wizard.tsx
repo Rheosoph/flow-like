@@ -739,21 +739,21 @@ export function PublishWizard({
 												<Loader2 className="h-4 w-4 animate-spin" />
 											) : idCheckState === "available" ||
 												idCheckState === "owned" ? (
-												<Check className="h-4 w-4 text-green-500" />
+												<Check className="h-4 w-4 text-good" />
 											) : idCheckState === "taken" ? (
 												<AlertTriangle className="h-4 w-4 text-destructive" />
 											) : (
-												"Check"
+												t("publishCheck", "Check")
 											)}
 										</Button>
 									</div>
 									{idCheckState === "available" && (
-										<p className="text-xs text-green-500">
+										<p className="text-xs text-good">
 											{t("idIsAvailable", "ID is available")}
 										</p>
 									)}
 									{idCheckState === "owned" && (
-										<p className="text-xs text-green-500">
+										<p className="text-xs text-good">
 											{t("youOwnThisPackage", "You own this package")}
 										</p>
 									)}
@@ -800,14 +800,14 @@ export function PublishWizard({
 												<Loader2 className="h-4 w-4 animate-spin" />
 											) : versionCheckState === "available" ||
 												versionCheckState === "bumped" ? (
-												<Check className="h-4 w-4 text-green-500" />
+												<Check className="h-4 w-4 text-good" />
 											) : (
-												"Check"
+												t("publishCheck", "Check")
 											)}
 										</Button>
 									</div>
 									{versionCheckState === "available" && (
-										<p className="text-xs text-green-500">
+										<p className="text-xs text-good">
 											{t("versionIsAvailable", "Version is available")}
 										</p>
 									)}

@@ -1142,6 +1142,53 @@ describe("Home FlowPilot tools", () => {
 		]);
 	});
 
+	test("reference validation checks cross-app SQL sources and parameters", async () => {
+		const backend = {
+			eventState: {},
+			dbState: {},
+			graphState: {},
+			queryState: {},
+		} as unknown as Pick<
+			IBackendState,
+			"dbState" | "eventState" | "graphState" | "queryState"
+		>;
+		const sql = (config: Record<string, unknown>) =>
+			validateHomeLayoutReferences(
+				backend,
+				layout([
+					widget("sql", "data", {
+						sourceKind: "sql",
+						sources: [{ alias: "crm", appId: "app", scope: "project" }],
+						sql: "select region, count(*) as n from crm.customers where owner = $owner",
+						queryParams: { owner: "$viewer.id" },
+						groupBy: "region",
+						...config,
+					}),
+				]),
+				{ profileAppIds: new Set(["app"]) },
+			);
+		expect((await sql({})).map((entry) => entry.code)).toEqual([
+			"home_query_result_fields_unverified",
+		]);
+		expect(
+			(
+				await sql({
+					sources: [
+						{ alias: "crm", appId: "app", scope: "project" },
+						{ alias: "crm", appId: "gone", scope: "project" },
+					],
+					queryParams: {},
+				})
+			).map((entry) => entry.code),
+		).toEqual(
+			expect.arrayContaining([
+				"home_app_not_in_profile",
+				"home_sql_config_invalid",
+				"home_query_parameter_missing",
+			]),
+		);
+	});
+
 	test("reference validation checks saved-query parameter types and result-field limits", async () => {
 		const backend = {
 			eventState: {},

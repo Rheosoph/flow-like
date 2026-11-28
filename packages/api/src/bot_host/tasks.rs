@@ -22,7 +22,7 @@ use crate::{
 };
 use chrono::{DateTime, FixedOffset, Utc};
 use flow_like_types::{
-    bot::BotLocation,
+    bot::{BotCapability, BotLocation},
     bot_task::{TaskKind, TaskSchedule, fire_message_id},
     inbox::{
         ConversationEncryption, TRIGGER_TEXT_MAX_CHARS, TRIGGER_TITLE_MAX_CHARS, TriggerBody,
@@ -34,6 +34,7 @@ use sea_orm::{
     QuerySelect, QueryTrait,
     sea_query::{Expr, ExprTrait},
 };
+use std::collections::HashMap;
 
 pub(crate) const SCHEDULING_CAPABILITY: &str = "scheduling";
 const FIRE_BATCH: u64 = 100;
@@ -66,6 +67,8 @@ pub(crate) fn schedule_of(task: &bot_task::Model) -> Option<TaskSchedule> {
             expr: task.cron.clone()?,
             tz: task.timezone.clone()?,
         }),
+        TaskKind::Event => super::calendar_tasks::schedule_of(task).map(TaskSchedule::Event),
+        TaskKind::Place => None,
     }
 }
 
@@ -84,6 +87,20 @@ pub(crate) fn trigger_for(task: &bot_task::Model) -> TriggerBody {
         payload_handle: None,
         bot_id: task.conversation_id.as_ref().map(|_| task.bot_id.clone()),
     }
+}
+
+/// The trigger of the run of `task` that was due at `due`: an event's wake-up note replaces its
+/// instruction.
+pub(crate) fn trigger_at(
+    task: &bot_task::Model,
+    due: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> TriggerBody {
+    let mut body = trigger_for(task);
+    if let Some(text) = super::calendar_tasks::trigger_text(task, due, now) {
+        body.text = text;
+    }
+    body
 }
 
 /// Who a run of `task` is sent as: the person who asked for it in their group or chat, else the
@@ -214,7 +231,7 @@ pub(crate) async fn fire_locked_in<C: ConnectionTrait>(
         conversation_id,
         sender_of(task),
         &message_id,
-        &trigger_for(task),
+        &trigger_at(task, due.with_timezone(&Utc), now.with_timezone(&Utc)),
         now,
     )
     .await?;
@@ -255,10 +272,18 @@ pub(crate) async fn fire(state: &AppState, task: &bot_task::Model) -> Result<boo
             Box::pin(async move { fire_in(txn, &task, now).await })
         })
         .await?;
-    let ends =
-        TaskKind::parse(&task.kind) == Some(TaskKind::Once) || matches!(fired, Fired::Paused);
+    let kind = TaskKind::parse(&task.kind);
+    let ends = kind == Some(TaskKind::Once) || matches!(fired, Fired::Paused);
     if !matches!(fired, Fired::Lost) && ends {
         super::task_schedules::remove(state, &task.id).await;
+    } else if !matches!(fired, Fired::Lost) && kind == Some(TaskKind::Event) {
+        match bot_task::Entity::find_by_id(&task.id).one(&state.db).await {
+            Ok(Some(row)) => super::task_schedules::sync(state, &row).await,
+            Ok(None) => super::task_schedules::remove(state, &task.id).await,
+            Err(error) => {
+                tracing::warn!(%error, task_id = %task.id, "Event schedule not re-planned; the sweep fires it")
+            }
+        }
     }
     match fired {
         Fired::Lost => Ok(false),
@@ -285,9 +310,17 @@ fn firing_bots() -> sea_orm::sea_query::SelectStatement {
         .filter(bot::Column::DeletedAt.is_null())
         .filter(bot::Column::Location.ne(BotLocation::Desktop.as_str().to_ascii_uppercase()))
         .filter(
-            Expr::col(bot::Column::Capabilities)
-                .cast_as("text")
-                .like(format!("%\"{SCHEDULING_CAPABILITY}\"%")),
+            Condition::any()
+                .add(
+                    Expr::col(bot::Column::Capabilities)
+                        .cast_as("text")
+                        .like(format!("%\"{SCHEDULING_CAPABILITY}\"%")),
+                )
+                .add(
+                    Expr::col(bot::Column::Capabilities)
+                        .cast_as("text")
+                        .like(format!("%\"{}\"%", BotCapability::Calendar.as_str())),
+                ),
         )
         .into_query()
 }
@@ -316,6 +349,16 @@ pub(crate) fn holds_capability(bot: &bot::Model) -> bool {
         .any(|id| id == SCHEDULING_CAPABILITY)
 }
 
+/// Whether `bot` holds the capability `task`'s kind needs to fire: scheduling for once and cron
+/// tasks, calendar for events; place tasks never fire from a sweep.
+pub(crate) fn can_fire(bot: &bot::Model, task: &bot_task::Model) -> bool {
+    match TaskKind::parse(&task.kind) {
+        Some(TaskKind::Once | TaskKind::Cron) => holds_capability(bot),
+        Some(TaskKind::Event) => super::calendar_tasks::holds_calendar(bot),
+        Some(TaskKind::Place) | None => false,
+    }
+}
+
 /// Fires every due task of the server's bots; returns how many this pass fired. A task that
 /// fails to fire stays due and is tried again by the next pass.
 pub async fn fire_due(state: &AppState) -> Result<u64, ApiError> {
@@ -324,16 +367,18 @@ pub async fn fire_due(state: &AppState) -> Result<u64, ApiError> {
         return Ok(0);
     }
     let ids: Vec<&str> = due.iter().map(|task| task.bot_id.as_str()).collect();
-    let capable: std::collections::HashSet<String> = bot::Entity::find()
+    let bots: HashMap<String, bot::Model> = bot::Entity::find()
         .filter(bot::Column::Id.is_in(ids))
         .all(&state.db)
         .await?
         .into_iter()
-        .filter(holds_capability)
-        .map(|bot| bot.id)
+        .map(|bot| (bot.id.clone(), bot))
         .collect();
     let mut fired = 0;
-    for task in due.iter().filter(|task| capable.contains(&task.bot_id)) {
+    for task in due.iter().filter(|task| {
+        bots.get(&task.bot_id)
+            .is_some_and(|bot| can_fire(bot, task))
+    }) {
         match fire(state, task).await {
             Ok(true) => fired += 1,
             Ok(false) => {}

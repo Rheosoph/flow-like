@@ -32,7 +32,8 @@ const browser =
 		? await webkit.launch({ headless: !options.headed })
 		: await chromium.launch({
 				headless: !options.headed,
-				executablePath: process.env.CHROME_PATH ?? puppeteer.executablePath(),
+				executablePath:
+					process.env.CHROME_PATH ?? (await puppeteer.executablePath()),
 				args: ["--enable-webgl", "--enable-unsafe-swiftshader"],
 			});
 const page = await browser.newPage({

@@ -7,6 +7,7 @@ import type {
 	IBotConnector,
 	IBotMailAddress,
 	IBotMailAvailability,
+	IBotMailDomain,
 	IBotMailThread,
 	IBotMailThreadView,
 	IBotNote,
@@ -22,6 +23,9 @@ import type {
 	IBotToolGrant,
 	IBotWebhook,
 	IBotWorkspace,
+	ICalendarFeed,
+	ICalendarRange,
+	ICalendarWake,
 	IConnectedAccount,
 	ICreateBotConnectorRequest,
 	ICreateBotRequest,
@@ -32,12 +36,27 @@ import type {
 	IUpdateBotRequest,
 	IUpdateBotSkillRequest,
 	IUpdateBotTaskRequest,
+	IUpdateCalendarFeed,
+	IUpdateCalendarWake,
 	IUpsertBotSecretRequest,
 } from "@flow-like/flow-like-ui";
+import {
+	expectCalendarFeed,
+	expectCalendarRange,
+	expectCalendarWake,
+	isNoCalendarFeed,
+} from "@flow-like/flow-like-ui/lib/bot-calendar-shape";
 import { RemoteBotComputerHost } from "@flow-like/flow-like-ui/lib/bot-screens/remote-computer-host";
 import { createScreenSealing } from "@flow-like/flow-like-ui/lib/bot-screens/screen-sealing";
 import { browserInboxCrypto } from "@flow-like/flow-like-ui/lib/inbox-e2e-browser";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
+import type {
+	TeamsBotAccess,
+	TeamsBotConnection,
+	TeamsBotPackage,
+	TeamsBotSetup,
+} from "@flow-like/flow-like-ui/lib/teams-bot";
+import type { IBotChannelLink } from "@flow-like/flow-like-ui/state/backend-state/bot-channels-state";
 import {
 	type IBotApprovalItemDecision,
 	type IBotScreenAccess,
@@ -348,6 +367,17 @@ export class WebBotState implements IBotState {
 		await apiDelete(`${botPath(botId)}/email-address`, this.backend.auth);
 	}
 
+	async getNewBotMailDomain(): Promise<IBotMailDomain> {
+		return apiGet<IBotMailDomain>("bots/email-domain", this.backend.auth);
+	}
+
+	async checkNewBotMailAddress(alias: string): Promise<IBotMailAvailability> {
+		return apiGet<IBotMailAvailability>(
+			`bots/email-address/check/${encodeURIComponent(alias)}`,
+			this.backend.auth,
+		);
+	}
+
 	async listMailThreads(botId: string): Promise<IBotMailThread[]> {
 		const response = await apiGet<{ threads?: IBotMailThread[] }>(
 			`${botPath(botId)}/mail/threads`,
@@ -362,6 +392,68 @@ export class WebBotState implements IBotState {
 	): Promise<IBotMailThreadView> {
 		return apiGet<IBotMailThreadView>(
 			`${botPath(botId)}/mail/threads/${encodeURIComponent(threadId)}`,
+			this.backend.auth,
+		);
+	}
+
+	async getTeams(botId: string): Promise<TeamsBotConnection> {
+		return apiGet<TeamsBotConnection>(
+			`${botPath(botId)}/teams`,
+			this.backend.auth,
+		);
+	}
+
+	async setupTeams(
+		botId: string,
+		input: TeamsBotSetup,
+	): Promise<TeamsBotConnection> {
+		return apiPut<TeamsBotConnection>(
+			`${botPath(botId)}/teams`,
+			input,
+			this.backend.auth,
+		);
+	}
+
+	async getTeamsPackage(botId: string): Promise<TeamsBotPackage> {
+		return apiGet<TeamsBotPackage>(
+			`${botPath(botId)}/teams/package`,
+			this.backend.auth,
+		);
+	}
+
+	async rotateTeamsSecret(botId: string): Promise<TeamsBotConnection> {
+		return apiPost<TeamsBotConnection>(
+			`${botPath(botId)}/teams/rotate`,
+			{},
+			this.backend.auth,
+		);
+	}
+
+	async disconnectTeams(botId: string): Promise<TeamsBotConnection> {
+		return apiDelete<TeamsBotConnection>(
+			`${botPath(botId)}/teams`,
+			this.backend.auth,
+		);
+	}
+
+	async getTeamsAccess(botId: string): Promise<TeamsBotAccess> {
+		return apiGet<TeamsBotAccess>(
+			`${botPath(botId)}/teams/access`,
+			this.backend.auth,
+		);
+	}
+
+	async listChannelLinks(botId: string): Promise<IBotChannelLink[]> {
+		const response = await apiGet<{ links?: IBotChannelLink[] }>(
+			`${botPath(botId)}/channels`,
+			this.backend.auth,
+		);
+		return asArray(response?.links);
+	}
+
+	async deleteChannelLink(botId: string, linkId: string): Promise<void> {
+		await apiDelete(
+			`${botPath(botId)}/channels/${encodeURIComponent(linkId)}`,
 			this.backend.auth,
 		);
 	}
@@ -450,6 +542,85 @@ export class WebBotState implements IBotState {
 		await apiDelete(
 			`${botPath(botId)}/tasks/${encodeURIComponent(taskId)}`,
 			this.backend.auth,
+		);
+	}
+
+	async getCalendarFeed(botId: string): Promise<ICalendarFeed | null> {
+		try {
+			return expectCalendarFeed(
+				await apiGet<unknown>(
+					`${botPath(botId)}/calendar/feed`,
+					this.backend.auth,
+				),
+				`read the calendar link of bot ${botId}`,
+			);
+		} catch (error) {
+			if (isNoCalendarFeed(error)) return null;
+			throw error;
+		}
+	}
+
+	async updateCalendarFeed(
+		botId: string,
+		update: IUpdateCalendarFeed,
+	): Promise<ICalendarFeed> {
+		return expectCalendarFeed(
+			await apiPut<unknown>(
+				`${botPath(botId)}/calendar/feed`,
+				update,
+				this.backend.auth,
+			),
+			`change the calendar link of bot ${botId}`,
+		);
+	}
+
+	async rotateCalendarFeed(botId: string): Promise<ICalendarFeed> {
+		return expectCalendarFeed(
+			await apiPost<unknown>(
+				`${botPath(botId)}/calendar/feed/rotate`,
+				undefined,
+				this.backend.auth,
+			),
+			`replace the calendar link of bot ${botId}`,
+		);
+	}
+
+	async deleteCalendarFeed(botId: string): Promise<void> {
+		await apiDelete(`${botPath(botId)}/calendar/feed`, this.backend.auth);
+	}
+
+	async getCalendarWake(botId: string): Promise<ICalendarWake> {
+		return expectCalendarWake(
+			await apiGet<unknown>(`${botPath(botId)}/calendar`, this.backend.auth),
+			`read the calendar wake-ups of bot ${botId}`,
+		);
+	}
+
+	async setCalendarWake(
+		botId: string,
+		update: IUpdateCalendarWake,
+	): Promise<ICalendarWake> {
+		return expectCalendarWake(
+			await apiPut<unknown>(
+				`${botPath(botId)}/calendar`,
+				update,
+				this.backend.auth,
+			),
+			`change the calendar wake-ups of bot ${botId}`,
+		);
+	}
+
+	async listCalendar(
+		botId: string,
+		from: string,
+		to: string,
+	): Promise<ICalendarRange> {
+		return expectCalendarRange(
+			await apiGet<unknown>(
+				`${botPath(botId)}/calendar/events?${new URLSearchParams({ from, to })}`,
+				this.backend.auth,
+			),
+			`list the calendar of bot ${botId}`,
 		);
 	}
 

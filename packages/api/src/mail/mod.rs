@@ -5,6 +5,7 @@ use flow_like_types::Result;
 
 #[cfg(feature = "acs-email")]
 mod azure_communication_services;
+pub(crate) mod layout;
 #[cfg(feature = "sendgrid")]
 mod sendgrid;
 #[cfg(feature = "ses")]

@@ -64,11 +64,13 @@ const TOOL_TIMEOUT_SECS: u64 = 1860;
 const DESCRIPTION: &str = r#"Run 1 to 6 independent parts of a big job in parallel and get one result per part. Each worker is a copy of you that sees only its `instruction` (complete and self-contained), the `files` you name and the capabilities in `tools` (a subset of yours; omit it to give all it may have). Workers can't ask questions, remember, message people, send email, schedule, start sub-tasks or do anything that needs your owner's approval; do those yourself from their results. Browser and computer workers share your interactive surfaces and run one at a time. Narrow `tools` for research workers so they can run alongside them. Workers can plan and carry out dependent steps within their own part. Set `output_schema` (a JSON Schema) when you need structured output; the result is then validated and `output` is the JSON value. `max_parallel` is 1 to 4 (default 3). Each result has `status` (done, failed, timeout, budget or blocked), `output`, `saved` handles and `usage`. A worker's output is unverified until you've read it."#;
 
 /// Capabilities a sub-task never gets: they act beyond the job, keep state, or need the owner.
-const CHILD_EXCLUDED_CAPABILITIES: [BotCapability; 8] = [
+const CHILD_EXCLUDED_CAPABILITIES: [BotCapability; 10] = [
     BotCapability::UserContext,
     BotCapability::Memory,
     BotCapability::Delegation,
     BotCapability::Scheduling,
+    BotCapability::Calendar,
+    BotCapability::Location,
     BotCapability::Email,
     BotCapability::Channels,
     BotCapability::PushNotifications,
@@ -77,7 +79,7 @@ const CHILD_EXCLUDED_CAPABILITIES: [BotCapability; 8] = [
 
 /// Tools a sub-task is refused by name, whatever its capabilities: they ask a person, park the
 /// turn, reach other bots, people or channels, or delegate again.
-const CHILD_REFUSED_TOOLS: [&str; 19] = [
+const CHILD_REFUSED_TOOLS: [&str; 29] = [
     "user_context_available",
     "user_context_request",
     "user_context_set_status",
@@ -94,6 +96,16 @@ const CHILD_REFUSED_TOOLS: [&str; 19] = [
     "list_tasks",
     "cancel_task",
     "update_task",
+    "find_place",
+    "watch_place",
+    "list_places",
+    "cancel_place",
+    "calendar_list",
+    "calendar_create",
+    "calendar_update",
+    "calendar_delete",
+    "calendar_free_slots",
+    "calendar_wake_settings",
     "email_send",
     "email_reply",
     "navigate_view",

@@ -10,7 +10,7 @@ use crate::{
 use chrono::{DateTime, Duration, FixedOffset};
 use flow_like_types::{
     bot_message::MessageBody,
-    bot_turn::{ERROR_SILENT, MAX_HOPS, STORED_DONE, STORED_QUEUED},
+    bot_turn::{ERROR_SILENT, STORED_DONE, STORED_QUEUED},
     inbox::{ConversationKind, InboxEntryKind, TranscriptBody, is_tombstone},
 };
 use sea_orm::{
@@ -243,7 +243,7 @@ pub(crate) async fn routing<C: ConnectionTrait>(
             result.insert(wait.bot_id, false);
             continue;
         }
-        if recipient.hops > MAX_HOPS {
+        if recipient.hops > delivery.hop_limit(recipient) {
             result.insert(wait.bot_id, false);
             continue;
         }
@@ -483,7 +483,7 @@ mod tests {
     };
     use flow_like_types::{
         bot::BotLocation,
-        bot_turn::{TurnHostKind, turn_id},
+        bot_turn::{MAX_DISCUSSION_HOPS, MAX_HOPS, TurnHostKind, turn_id},
     };
     use sea_orm::{DatabaseConnection, TransactionTrait};
     use serde_json::json;
@@ -947,6 +947,24 @@ mod tests {
         reply.recipients[0].hops = MAX_HOPS + 1;
         assert_eq!(incoming(&db, &reply, at(4)).await.unwrap(), 0);
         assert!(stored(&db).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_target_handing_over_the_word_clears_the_wait_within_the_discussion_budget() {
+        let (db, turn) = setup().await;
+        assert_eq!(park(&db, &turn, "bot_2").await, ParkOutcome::Parked);
+        let mut past = event("bot_2", 2, InboxEntryKind::Message);
+        past.hands_over = true;
+        past.recipients[0].mentioned = true;
+        past.recipients[0].hops = MAX_DISCUSSION_HOPS + 1;
+        assert_eq!(incoming(&db, &past, at(4)).await.unwrap(), 0);
+        assert!(stored(&db).await.is_some());
+        let mut within = event("bot_2", 3, InboxEntryKind::Message);
+        within.hands_over = true;
+        within.recipients[0].mentioned = true;
+        within.recipients[0].hops = MAX_HOPS + 1;
+        assert_eq!(incoming(&db, &within, at(5)).await.unwrap(), 1);
+        assert!(stored(&db).await.is_none());
     }
 
     #[tokio::test]

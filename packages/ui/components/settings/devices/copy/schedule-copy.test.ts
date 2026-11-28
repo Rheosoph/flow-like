@@ -13,6 +13,7 @@ import {
 	type ServiceSchedule,
 } from "../../../../lib/device-management/model/types";
 import type { DevicesT } from "../primitives/area-context";
+import { moment } from "../testing/icu";
 import {
 	type WhereNames,
 	canRunOnHubAgain,
@@ -356,15 +357,15 @@ describe("when a schedule runs, in words", () => {
 	test("a time reads in the schedule's zone; the reader's own time only when it differs", () => {
 		const next = NOW0 + 12 * 3600;
 		expect(scheduleTime(t, next, "Europe/Berlin", TIME)).toBe(
-			"Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			moment("Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time"),
 		);
 		// The tests run in UTC: the same clock, so nothing is repeated.
 		expect(scheduleTime(t, next, "UTC", TIME)).toBe(
-			"Oct 1 at 00:00 UTC · in 12 hr.",
+			moment("Oct 1 at 00:00 UTC · in 12 hr."),
 		);
 		// A zone this browser does not know: the reader's own time is all it can say.
 		expect(scheduleTime(t, next, "Mars/Olympus", TIME)).toBe(
-			"Oct 1 at 00:00 your time · in 12 hr.",
+			moment("Oct 1 at 00:00 your time · in 12 hr."),
 		);
 	});
 });
@@ -396,10 +397,14 @@ describe("what a schedule of a service does now", () => {
 	test("armed: next and last run, a run in progress, and a clock that is behind", () => {
 		const at = NOW0 + 12 * 3600;
 		expect(lines(armed({}, { at, computed: false }))).toEqual([
-			"Next run Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			moment(
+				"Next run Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			),
 		]);
 		expect(lines(armed({}, { at, computed: true }))).toEqual([
-			"Next run by its schedule: Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			moment(
+				"Next run by its schedule: Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time",
+			),
 		]);
 		expect(
 			lines(
@@ -436,7 +441,9 @@ describe("what a schedule of a service does now", () => {
 		expect(
 			lines(armed({ clock_behind: true }, { at, computed: false }))[0],
 		).toBe(
-			"Waiting until Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time: edge-berlin-01's clock is behind its last run.",
+			moment(
+				"Waiting until Oct 1 at 02:00 GMT+2 · in 12 hr. · Oct 1 at 00:00 your time: edge-berlin-01's clock is behind its last run.",
+			),
 		);
 	});
 

@@ -14,7 +14,7 @@ SCHEMA_VERSION = 1
 CLOUDS = ("all", "aws", "gcp", "azure", "docker-compose", "kubernetes", "self-hosted")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SELF_HOSTED_CLOUDS = ("docker-compose", "kubernetes")
-KUBERNETES_SHARED_WORKLOADS = {"runtime", "compiler", "signaling", "object-store-init", "audit-worker"}
+KUBERNETES_SHARED_WORKLOADS = {"runtime", "compiler", "query", "signaling", "object-store-init", "audit-worker"}
 API_WORKLOADS = {"api", "api-ecs"}
 HELPER_WORKLOADS = {"signaling", "migration", "otel-collector", "db-init", "object-store-init"}
 CHANNEL_BRANCHES = ("dev", "main", "alpha")
@@ -62,8 +62,8 @@ def target(cloud, workload, platform="linux/amd64", recipe=None, context=".", ar
         "context": context,
         "platform": platform,
         "runner": "ubuntu-24.04-arm" if platform == "linux/arm64" else "ubuntu-24.04",
-        # These AWS workloads compile the full API with the Lambda/server profile.
-        "cargo_build_jobs": 1 if cloud == "aws" and workload in {"api", "api-ecs", "audit-worker"} else 2,
+        # API consumers need serial compilation and the workflow's added swap.
+        "cargo_build_jobs": 1 if workload in API_WORKLOADS | {"audit-worker", "runtime"} else 2,
         "image_suffix": image_suffix or f"flow-like-{cloud}-{workload}",
         "audit_features": audit_features or "",
         "layer_cache": layer_cache_enabled(dockerfile),
@@ -80,6 +80,7 @@ TARGETS = tuple(sorted([
     target("aws", "executor-async", recipe="apps/backend/aws/executor-ecs/Dockerfile"),
     target("aws", "executor-lambda-async", "linux/arm64", recipe="apps/backend/aws/executor-async/Dockerfile"),
     target("aws", "compiler", "linux/arm64", recipe="apps/backend/aws/compiler-ecs/Dockerfile"),
+    target("aws", "query", "linux/arm64"),
     target("aws", "file-tracker", "linux/arm64"),
     target("aws", "media-transformer", "linux/arm64"),
     target("aws", "event-bridge", "linux/arm64"),
@@ -100,9 +101,11 @@ TARGETS = tuple(sorted([
         "api", "queue-worker", "executor", "maintenance", "scheduler", "migration", "signaling",
     )],
     target("azure", "otel-collector"),
+    *[target(cloud, "query", recipe="apps/backend/query-service/Dockerfile") for cloud in ("azure", "gcp")],
     *[target("docker-compose", workload, f"linux/{architecture}", architecture_id=True,
-             recipe="apps/backend/docker-compose/object-store/Dockerfile" if workload == "object-store-init" else None)
-      for workload in ("api", "runtime", "compiler", "execution-manager", "sink-services", "signaling", "db-init", "object-store-init", "web")
+             recipe={"object-store-init": "apps/backend/docker-compose/object-store/Dockerfile",
+                     "query": "apps/backend/query-service/Dockerfile"}.get(workload))
+      for workload in ("api", "runtime", "compiler", "query", "execution-manager", "sink-services", "signaling", "db-init", "object-store-init", "web")
       for architecture in ("amd64", "arm64")],
     *[target("kubernetes", workload, f"linux/{architecture}", architecture_id=True)
       for workload in ("api", "executor", "execution-manager", "sink-trigger", "migration", "web")

@@ -28,6 +28,10 @@ import {
 	MAX_PINNED_MESSAGES,
 } from "../../state/backend-state/inbox-state";
 import { IdentityAvatar } from "../identity/identity-avatar";
+import {
+	TouchMenuRow,
+	useMessageMenuSurface,
+} from "../interfaces/chat-default/message-touch-menu";
 import { Button } from "../ui/button";
 import {
 	Dialog,
@@ -111,6 +115,41 @@ export function MessageMenu({
 }>) {
 	const { t } = useTranslation("bots");
 	const label = t("crew.messages.more", "More actions");
+	const surface = useMessageMenuSurface();
+	if (surface) {
+		return (
+			<>
+				<TouchMenuRow
+					icon={
+						starred ? <StarOffIcon aria-hidden /> : <StarIcon aria-hidden />
+					}
+					label={
+						starred
+							? t("crew.marks.unstar", "Remove star")
+							: t("crew.marks.star", "Star message")
+					}
+					onSelect={onStar}
+				/>
+				<TouchMenuRow
+					icon={pinned ? <PinOffIcon aria-hidden /> : <PinIcon aria-hidden />}
+					label={
+						pinned
+							? t("crew.marks.unpinMessage", "Unpin for everyone")
+							: t("crew.marks.pinMessage", "Pin for everyone")
+					}
+					onSelect={onPin}
+				/>
+				{onDelete && (
+					<TouchMenuRow
+						destructive
+						icon={<Trash2Icon aria-hidden />}
+						label={t("crew.messages.delete", "Delete")}
+						onSelect={onDelete}
+					/>
+				)}
+			</>
+		);
+	}
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>

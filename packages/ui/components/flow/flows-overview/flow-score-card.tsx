@@ -540,6 +540,7 @@ export function FlowScoreCard({
 						<button
 							type="button"
 							data-slot="flow-card-open"
+							data-guide="flows-open-board"
 							className="block w-full cursor-pointer truncate rounded-sm text-left text-sm font-semibold leading-tight underline-offset-4 after:absolute after:inset-0 after:z-10 after:content-[''] hover:underline focus-visible:outline-none"
 							aria-label={openEditorLabel}
 							title={openEditorLabel}

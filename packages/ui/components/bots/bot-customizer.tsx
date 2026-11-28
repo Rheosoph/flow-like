@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
+import type { TFunction } from "i18next";
 import { Dices, Lock, LockOpen } from "lucide-react";
 import {
 	type ReactNode,
@@ -70,103 +72,140 @@ export interface BotCustomizerProps {
 	onRequestColorPack?: (pack: BotColorPackDefinition) => void;
 }
 
-const SECTIONS = [
-	{ id: "crew", label: "Crew", hint: "Find your character" },
-	{ id: "outfit", label: "Outfit", hint: "Give them a style" },
-	{ id: "colors", label: "Colors", hint: "Make the palette yours" },
-	{ id: "finish", label: "Finish", hint: "Add a little personality" },
-	{ id: "skills", label: "Skills", hint: "Show what they do" },
-] as const;
-type Section = (typeof SECTIONS)[number]["id"];
+function getSections(t: TFunction<"bots">) {
+	return [
+		{
+			id: "crew",
+			label: t("appearance.crew"),
+			hint: t("appearance.findYourCharacter"),
+		},
+		{
+			id: "outfit",
+			label: t("appearance.outfit"),
+			hint: t("appearance.giveThemAStyle"),
+		},
+		{
+			id: "colors",
+			label: t("appearance.colors"),
+			hint: t("appearance.makeThePaletteYours"),
+		},
+		{
+			id: "finish",
+			label: t("appearance.finish"),
+			hint: t("appearance.addALittlePersonality"),
+		},
+		{
+			id: "skills",
+			label: t("appearance.skills"),
+			hint: t("appearance.showWhatTheyDo"),
+		},
+	] as const;
+}
+
+type Section = ReturnType<typeof getSections>[number]["id"];
 type SeriesFilter =
 	| { kind: "all" }
 	| { kind: "other" }
 	| { kind: "pack"; id: string }
 	| { kind: "series"; id: string };
-const SLOT_LABELS: Record<BotEquipmentSlot, string> = {
-	neck: "Clothing",
-	eyes: "Eyewear",
-	hand: "Hand accessory",
-	head: "Headwear",
-};
-const FINISH_GROUPS = [
-	{
-		id: "backdrop",
-		label: "Pattern",
-		options: [
-			["none", "None"],
-			["gradient", "Gradient"],
-			["dots", "Dots"],
-			["stripes", "Stripes"],
-			["waves", "Waves"],
-			["rays", "Rays"],
-			["stars", "Stars"],
-			["confetti", "Confetti"],
-		],
-	},
-	{
-		id: "halo",
-		label: "Ring",
-		options: [
-			["none", "None"],
-			["flow", "Flow"],
-			["gold", "Gold"],
-			["aurora", "Aurora"],
-			["pulse", "Pulse"],
-			["orbit", "Orbit"],
-		],
-	},
-	{
-		id: "effect",
-		label: "Effect",
-		options: BOT_EFFECTS.map((effect) => [effect.id, effect.label] as const),
-	},
-	{
-		id: "frame",
-		label: "Frame",
-		options: [
-			["circle", "Circle"],
-			["squircle", "Squircle"],
-			["square", "Square"],
-		],
-	},
-	{
-		id: "emote",
-		label: "Emote",
-		options: [
-			["none", "None"],
-			["heart", "Heart"],
-			["note", "Music note"],
-			["spark", "Spark"],
-			["alert", "Exclamation"],
-			["question", "Question"],
-			["drop", "Drop"],
-			["zzz", "Sleep"],
-			["rain", "Rain"],
-			["anger", "Anger"],
-			["loading", "Working"],
-			["idea", "Idea"],
-			["check", "Done"],
-			["error", "Error"],
-		],
-	},
-] as const;
-type Finish = (typeof FINISH_GROUPS)[number]["id"];
+function getSlotLabels(t: TFunction<"bots">) {
+	return {
+		neck: t("appearance.clothing"),
+		eyes: t("appearance.eyewear"),
+		hand: t("appearance.handAccessory"),
+		head: t("appearance.headwear"),
+	};
+}
+
+function getFinishGroups(t: TFunction<"bots">) {
+	return [
+		{
+			id: "backdrop",
+			label: t("appearance.pattern"),
+			options: [
+				["none", t("appearance.none")],
+				["gradient", t("appearance.gradient")],
+				["dots", t("appearance.dots")],
+				["stripes", t("appearance.stripes")],
+				["waves", t("appearance.waves")],
+				["rays", t("appearance.rays")],
+				["stars", t("appearance.stars")],
+				["confetti", t("appearance.confetti")],
+			],
+		},
+		{
+			id: "halo",
+			label: t("appearance.ring"),
+			options: [
+				["none", t("appearance.none")],
+				["flow", t("appearance.flow")],
+				["gold", t("appearance.gold")],
+				["aurora", t("appearance.aurora")],
+				["pulse", t("appearance.pulse")],
+				["orbit", t("appearance.orbit")],
+			],
+		},
+		{
+			id: "effect",
+			label: t("appearance.effect"),
+			options: BOT_EFFECTS.map(
+				(effect) =>
+					[effect.id, t(`appearance.effects.${effect.id}.label`)] as const,
+			),
+		},
+		{
+			id: "frame",
+			label: t("appearance.frame"),
+			options: [
+				["circle", t("appearance.circle")],
+				["squircle", t("appearance.squircle")],
+				["square", t("appearance.square")],
+			],
+		},
+		{
+			id: "emote",
+			label: t("appearance.emote"),
+			options: [
+				["none", t("appearance.none")],
+				["heart", t("appearance.heart")],
+				["note", t("appearance.musicNote")],
+				["spark", t("appearance.spark")],
+				["alert", t("appearance.exclamation")],
+				["question", t("appearance.question")],
+				["drop", t("appearance.drop")],
+				["zzz", t("appearance.sleep")],
+				["rain", t("appearance.rain")],
+				["anger", t("appearance.anger")],
+				["loading", t("appearance.working")],
+				["idea", t("appearance.idea")],
+				["check", t("appearance.done")],
+				["error", t("appearance.error")],
+			],
+		},
+	] as const;
+}
+
+type Finish = ReturnType<typeof getFinishGroups>[number]["id"];
 type PreviewState =
 	| "custom"
 	| `mood:${BotMood}`
 	| `state:${Exclude<BotAgentState, "idle">}`;
-const PREVIEW_POSES: readonly (readonly [BotPose, string])[] = [
-	["idle", "Idle"],
-	["sleep", "Sleep"],
-	["track", "Follow cursor"],
-];
-const PART_LABELS: Record<BotLookPart, string> = {
-	crew: "Character",
-	outfit: "Outfit",
-	colors: "Colors",
-	finish: "Finish",
-};
+function getPreviewPoses(t: TFunction<"bots">) {
+	return [
+		["idle", t("appearance.idle")],
+		["sleep", t("appearance.sleep")],
+		["track", t("appearance.followCursor")],
+	] as const;
+}
+
+function getPartLabels(t: TFunction<"bots">) {
+	return {
+		crew: t("appearance.character"),
+		outfit: t("appearance.outfit"),
+		colors: t("appearance.colors"),
+		finish: t("appearance.finish"),
+	};
+}
 
 function isLookPart(section: Section): section is BotLookPart {
 	return (BOT_LOOK_PARTS as readonly string[]).includes(section);
@@ -214,11 +253,12 @@ function Tile({
 	showDescription?: boolean;
 	locked?: boolean;
 }) {
+	const { t } = useTranslation("bots");
 	return (
 		<button
 			type="button"
 			className="fl-bot-studio-tile"
-			aria-label={`Choose ${label}`}
+			aria-label={t("appearance.chooseItem", { label })}
 			aria-pressed={selected}
 			data-locked={locked || undefined}
 			onClick={onClick}
@@ -231,7 +271,11 @@ function Tile({
 			{showDescription && description && (
 				<span className="fl-bot-studio-tile-description">{description}</span>
 			)}
-			{locked && <span className="fl-bot-studio-tile-locked">Preview</span>}
+			{locked && (
+				<span className="fl-bot-studio-tile-locked">
+					{t("appearance.preview")}
+				</span>
+			)}
 			{selected && (
 				<span className="fl-bot-studio-tile-check" aria-hidden="true">
 					✓
@@ -252,24 +296,31 @@ function ShuffleButton({
 	filtered: boolean;
 	onShuffle: () => void;
 }>) {
-	const label = PART_LABELS[part].toLowerCase();
+	const { t } = useTranslation("bots");
+
 	return (
 		<button
 			type="button"
 			className="fl-bot-studio-shuffle"
-			aria-label={`Shuffle ${label}`}
+			aria-label={t(`appearance.shufflePart.${part}`)}
 			disabled={locked}
 			title={
 				locked
-					? `Unlock ${label} to shuffle it`
+					? t(`appearance.unlockPart.${part}`)
 					: filtered
-						? `Picks from the ${part === "crew" ? "characters" : "collection"} shown`
+						? part === "crew"
+							? t("appearance.shuffleShownCharacters")
+							: t("appearance.shuffleShownCollection")
 						: undefined
 			}
 			onClick={onShuffle}
 		>
 			{locked ? <Lock aria-hidden="true" /> : <Dices aria-hidden="true" />}
-			{locked ? "Locked" : filtered ? "Shuffle shown" : "Shuffle"}
+			{locked
+				? t("appearance.locked")
+				: filtered
+					? t("appearance.shuffleShown")
+					: t("appearance.shuffle")}
 		</button>
 	);
 }
@@ -286,6 +337,12 @@ export function BotCustomizer({
 	onRequestPack,
 	onRequestColorPack,
 }: BotCustomizerProps) {
+	const { t } = useTranslation("bots");
+	const SECTIONS = getSections(t);
+	const SLOT_LABELS = getSlotLabels(t);
+	const FINISH_GROUPS = getFinishGroups(t);
+	const PREVIEW_POSES = getPreviewPoses(t);
+	const PART_LABELS = getPartLabels(t);
 	const [section, setSection] = useState<Section>("crew");
 	const [requestedSeries, setSeries] = useState<SeriesFilter>({ kind: "all" });
 	const [search, setSearch] = useState("");
@@ -428,7 +485,7 @@ export function BotCustomizer({
 	const outfitGroups = [
 		{
 			key: "essentials",
-			label: "Essentials",
+			label: t("appearance.essentials"),
 			pack: undefined,
 			equipment: visibleEquipment.filter(
 				(item) => !groupedEquipment.has(item.id),
@@ -454,11 +511,11 @@ export function BotCustomizer({
 		SECTIONS.find((entry) => entry.id === section) ?? SECTIONS[0];
 	const colorEffect =
 		appearance.effect === "lcd"
-			? "LCD"
+			? t("appearance.lcd")
 			: appearance.effect === "blueprint"
-				? "Blueprint"
+				? t("appearance.blueprint")
 				: appearance.effect === "thermal"
-					? "Thermal"
+					? t("appearance.thermal")
 					: undefined;
 
 	function update(patch: Partial<BotAppearance>) {
@@ -705,7 +762,7 @@ export function BotCustomizer({
 				key={pack.id}
 				className="fl-bot-studio-pack"
 				data-pack-id={pack.id}
-				aria-label={`${pack.label} pack`}
+				aria-label={t("appearance.namedPack", { label: pack.label })}
 			>
 				<header className="fl-bot-studio-pack-heading">
 					<div className="fl-bot-studio-pack-cover" aria-hidden="true">
@@ -721,27 +778,34 @@ export function BotCustomizer({
 							<h4>{pack.label}</h4>
 							{ownedPackIds && (
 								<span className="fl-bot-studio-pack-status" data-owned={owned}>
-									{owned ? "Owned" : "Preview"}
+									{owned ? t("appearance.owned") : t("appearance.preview")}
 								</span>
 							)}
 						</div>
 						<p>{pack.description}</p>
 						<span>
-							{contents.shapes.length}{" "}
-							{contents.shapes.length === 1 ? "character" : "characters"}
 							{contents.equipment.length
-								? ` · ${contents.equipment.length} outfit ${contents.equipment.length === 1 ? "item" : "items"}`
-								: ""}
+								? t("appearance.packContents", {
+										characters: t("appearance.characterCount", {
+											count: contents.shapes.length,
+										}),
+										outfits: t("appearance.outfitItemCount", {
+											count: contents.equipment.length,
+										}),
+									})
+								: t("appearance.characterCount", {
+										count: contents.shapes.length,
+									})}
 						</span>
 					</div>
 					{onRequestPack && (
 						<button
 							type="button"
 							className="fl-bot-studio-pack-link"
-							aria-label={`View ${pack.label} pack`}
+							aria-label={t("appearance.viewNamedPack", { label: pack.label })}
 							onClick={() => onRequestPack(pack)}
 						>
-							View pack <span aria-hidden="true">↗</span>
+							{t("appearance.viewPack")} <span aria-hidden="true">↗</span>
 						</button>
 					)}
 				</header>
@@ -754,11 +818,16 @@ export function BotCustomizer({
 
 	return (
 		<div className={["fl-bot-customizer", className].filter(Boolean).join(" ")}>
-			<aside className="fl-bot-studio-preview" aria-label="Your bot preview">
+			<aside
+				className="fl-bot-studio-preview"
+				aria-label={t("appearance.yourBotPreview")}
+			>
 				<div className="fl-bot-studio-preview-heading">
-					<span className="fl-bot-studio-eyebrow">YOUR BOT</span>
+					<span className="fl-bot-studio-eyebrow">
+						{t("appearance.yourBOT")}
+					</span>
 					<span className="fl-bot-studio-series-tag">
-						{shapeSeries?.label ?? "Custom"}
+						{shapeSeries?.label ?? t("appearance.custom")}
 					</span>
 				</div>
 				<div className="fl-bot-studio-stage">
@@ -771,40 +840,46 @@ export function BotCustomizer({
 						animated={playing}
 						mood={previewMood}
 						agentState={previewAgentState}
-						label={`${shape.label} preview`}
+						label={t("appearance.characterPreview", { label: shape.label })}
 					/>
 				</div>
 				<div className="fl-bot-studio-character">
 					<h3>{shape.label}</h3>
-					<p>{shape.description ?? "Make this character your own."}</p>
+					<p>{shape.description ?? t("appearance.makeThisCharacterYourOwn")}</p>
 				</div>
 				<div className="fl-bot-studio-actions">
-					<button type="button" aria-label="Reset bot" onClick={reset}>
-						Reset
+					<button
+						type="button"
+						aria-label={t("appearance.resetBot")}
+						onClick={reset}
+					>
+						{t("appearance.reset")}
 					</button>
 					<button
 						type="button"
-						aria-label="Randomize bot"
+						aria-label={t("appearance.randomizeBot")}
 						className="fl-bot-studio-randomize"
 						disabled={locked.length === BOT_LOOK_PARTS.length}
 						onClick={randomize}
 					>
 						<Dices aria-hidden="true" />
-						{locked.length ? "Randomize rest" : "Randomize"}
+						{locked.length
+							? t("appearance.randomizeRest")
+							: t("appearance.randomize")}
 					</button>
 				</div>
 				<fieldset
 					className="fl-bot-studio-locks"
-					aria-label="Keep when randomizing"
+					aria-label={t("appearance.keepWhenRandomizing")}
 				>
-					<legend>Keep when randomizing</legend>
+					<legend>{t("appearance.keepWhenRandomizing")}</legend>
 					{BOT_LOOK_PARTS.map((part) => {
 						const isLocked = locked.includes(part);
 						return (
 							<button
 								key={part}
 								type="button"
-								aria-label={`Lock ${PART_LABELS[part].toLowerCase()}`}
+								aria-label={t(`appearance.lockPart.${part}`)}
 								aria-pressed={isLocked}
 								onClick={() => toggleLock(part)}
 							>
@@ -823,15 +898,20 @@ export function BotCustomizer({
 						type="button"
 						className="fl-bot-studio-play"
 						aria-label={
-							playing ? "Pause preview animation" : "Play preview animation"
+							playing
+								? t("appearance.pausePreviewAnimation")
+								: t("appearance.playPreviewAnimation")
 						}
 						aria-pressed={playing}
 						onClick={() => setPlaying(!playing)}
 					>
 						<span aria-hidden="true">{playing ? "Ⅱ" : "▷"}</span>
-						{playing ? "Pause" : "Play"}
+						{playing ? t("appearance.pause") : t("appearance.play")}
 					</button>
-					<fieldset className="fl-bot-studio-poses" aria-label="Preview pose">
+					<fieldset
+						className="fl-bot-studio-poses"
+						aria-label={t("appearance.previewPose")}
+					>
 						{PREVIEW_POSES.map(([key, label]) => (
 							<button
 								key={key}
@@ -848,9 +928,9 @@ export function BotCustomizer({
 					</fieldset>
 					<fieldset
 						className="fl-bot-studio-poses fl-bot-studio-expressions"
-						aria-label="Preview expression"
+						aria-label={t("appearance.previewExpression")}
 					>
-						<legend>Expression</legend>
+						<legend>{t("appearance.expression")}</legend>
 						{BOT_EXPRESSIONS.map((key) => (
 							<button
 								key={key}
@@ -861,35 +941,36 @@ export function BotCustomizer({
 									setExpression(key);
 								}}
 							>
-								{key.charAt(0).toUpperCase() + key.slice(1)}
+								{t(`appearance.expressions.${key}`)}
 							</button>
 						))}
 					</fieldset>
 					<label className="fl-bot-studio-state-picker">
 						<span>
-							Mood or status <small>Preview only</small>
+							{t("appearance.moodOrStatus")}{" "}
+							<small>{t("appearance.previewOnly")}</small>
 						</span>
 						<select
-							aria-label="Preview mood or status"
+							aria-label={t("appearance.previewMoodOrStatus")}
 							value={previewState}
 							onChange={(event) =>
 								setPreviewState(event.target.value as PreviewState)
 							}
 						>
-							<option value="custom">Custom expression</option>
-							<optgroup label="Moods">
-								{Object.entries(BOT_MOODS).map(([key, preset]) => (
+							<option value="custom">{t("appearance.customExpression")}</option>
+							<optgroup label={t("appearance.moodsLabel")}>
+								{(Object.keys(BOT_MOODS) as BotMood[]).map((key) => (
 									<option key={key} value={`mood:${key}`}>
-										{preset.label}
+										{t(`appearance.moods.${key}`)}
 									</option>
 								))}
 							</optgroup>
-							<optgroup label="Agent status">
-								{Object.entries(BOT_AGENT_STATES)
-									.filter(([key]) => key !== "idle")
-									.map(([key, preset]) => (
+							<optgroup label={t("appearance.agentStatus")}>
+								{(Object.keys(BOT_AGENT_STATES) as BotAgentState[])
+									.filter((key) => key !== "idle")
+									.map((key) => (
 										<option key={key} value={`state:${key}`}>
-											{preset.label}
+											{t(`appearance.agentStates.${key}`)}
 										</option>
 									))}
 							</optgroup>
@@ -908,11 +989,13 @@ export function BotCustomizer({
 									setSlot(key);
 									setSection("outfit");
 								}}
-								aria-label={`Edit ${SLOT_LABELS[key].toLowerCase()}: ${item?.label ?? "None"}`}
+								aria-label={t(`appearance.editEquipment.${key}`, {
+									item: item?.label ?? t("appearance.none"),
+								})}
 							>
 								<span>{SLOT_LABELS[key]}</span>
 								<strong>
-									{item?.label ?? "Add"}
+									{item?.label ?? t("appearance.add")}
 									<span aria-hidden="true">{item ? "›" : "+"}</span>
 								</strong>
 							</button>
@@ -924,20 +1007,22 @@ export function BotCustomizer({
 						{!saveEligibility.canSave && (
 							<>
 								<div className="fl-bot-studio-save-heading" aria-live="polite">
-									<strong>Preview only</strong>
+									<strong>{t("appearance.previewOnly")}</strong>
 									<p>
 										{hasUnavailableItems
 											? saveEligibility.requirements.some(
 													(item) => item.packIds.length > 0,
 												)
-												? "Remove unavailable items and unlock required packs to save this bot."
-												: "Remove unavailable items to save this bot."
-											: "Unlock required packs to save this bot."}
+												? t(
+														"appearance.removeUnavailableItemsAndUnlockRequiredPacksToSaveThisBot",
+													)
+												: t("appearance.removeUnavailableItemsToSaveThisBot")
+											: t("appearance.unlockRequiredPacksToSaveThisBot")}
 									</p>
 								</div>
 								<ul
 									className="fl-bot-studio-save-requirements"
-									aria-label="Save requirements"
+									aria-label={t("appearance.saveRequirements")}
 								>
 									{saveEligibility.requirements.map((item, index) => (
 										<li
@@ -947,13 +1032,9 @@ export function BotCustomizer({
 												{item.label}
 												{item.kind === "color" && item.slot && (
 													<small>
-														{item.slot === "ink"
-															? "Face details"
-															: item.slot === "sclera"
-																? "Eye whites"
-																: item.slot.charAt(0).toUpperCase() +
-																	item.slot.slice(1)}{" "}
-														color
+														{t("appearance.slotColor", {
+															slot: t(`appearance.colorRoles.${item.slot}`),
+														})}
 													</small>
 												)}
 											</span>
@@ -966,7 +1047,7 @@ export function BotCustomizer({
 																<span key={packId}>
 																	{alternative > 0 && (
 																		<span className="fl-bot-studio-save-or">
-																			or
+																			{t("appearance.or")}
 																		</span>
 																	)}
 																	{pack && onRequestColorPack ? (
@@ -978,7 +1059,8 @@ export function BotCustomizer({
 																		</button>
 																	) : (
 																		<span>
-																			{pack?.label ?? "Unavailable pack"}
+																			{pack?.label ??
+																				t("appearance.unavailablePack")}
 																		</span>
 																	)}
 																</span>
@@ -989,7 +1071,7 @@ export function BotCustomizer({
 															<span key={packId}>
 																{alternative > 0 && (
 																	<span className="fl-bot-studio-save-or">
-																		or
+																		{t("appearance.or")}
 																	</span>
 																)}
 																{pack && onRequestPack ? (
@@ -1001,7 +1083,8 @@ export function BotCustomizer({
 																	</button>
 																) : (
 																	<span>
-																		{pack?.label ?? "Unavailable pack"}
+																		{pack?.label ??
+																			t("appearance.unavailablePack")}
 																	</span>
 																)}
 															</span>
@@ -1010,7 +1093,7 @@ export function BotCustomizer({
 												</span>
 											) : (
 												<small className="fl-bot-studio-save-unavailable">
-													Remove or replace this unavailable item.
+													{t("appearance.removeOrReplaceThisUnavailableItem")}
 												</small>
 											)}
 										</li>
@@ -1022,7 +1105,7 @@ export function BotCustomizer({
 										className="fl-bot-studio-text-button"
 										onClick={removeUnavailable}
 									>
-										Remove unavailable items
+										{t("appearance.removeUnavailableItems")}
 									</button>
 								)}
 							</>
@@ -1031,25 +1114,27 @@ export function BotCustomizer({
 							<button
 								type="button"
 								className="fl-bot-studio-save-button"
-								aria-label="Save bot"
+								aria-label={t("appearance.saveBot")}
 								disabled={saving || !saveEligibility.canSave}
 								onClick={() => {
 									void save();
 								}}
 							>
-								{saving ? "Saving…" : "Save bot"}
+								{saving ? t("appearance.saving") : t("appearance.saveBot")}
 							</button>
 						)}
 						{saving && savingDraft !== draftKey && (
 							<p className="fl-bot-studio-save-message" aria-live="polite">
-								Your latest edits are not part of this save.
+								{t("appearance.yourLatestEditsAreNotPartOfThisSave")}
 							</p>
 						)}
 						{saveError && (
 							<p className="fl-bot-studio-save-message" role="alert">
 								{saveError.draft === draftKey
-									? "Could not save this bot. Try again."
-									: "The previous draft could not be saved. Save your latest changes to try again."}
+									? t("appearance.couldNotSaveThisBotTryAgain")
+									: t(
+											"appearance.thePreviousDraftCouldNotBeSavedSaveYourLatestChangesToTryAgain",
+										)}
 							</p>
 						)}
 					</div>
@@ -1058,7 +1143,7 @@ export function BotCustomizer({
 			<div className="fl-bot-studio-workbench">
 				<fieldset
 					className="fl-bot-studio-sections"
-					aria-label="Customization sections"
+					aria-label={t("appearance.customizationSections")}
 				>
 					{SECTIONS.map((entry, index) => (
 						<button
@@ -1090,15 +1175,24 @@ export function BotCustomizer({
 							<p>
 								{section === "crew"
 									? packs.length
-										? `${packs.length} character packs · ${shapes.length} characters`
-										: `${shapes.length} characters. One that's yours.`
+										? t("appearance.crewContents", {
+												packs: t("appearance.packCount", {
+													count: packs.length,
+												}),
+												characters: t("appearance.characterCount", {
+													count: shapes.length,
+												}),
+											})
+										: t("appearance.chooseCharacterCount", {
+												count: shapes.length,
+											})
 									: section === "outfit"
-										? "Browse by theme, then try something on."
+										? t("appearance.browseByThemeThenTrySomethingOn")
 										: section === "colors"
-											? "Mix colors, gradients, and patterns for each part."
+											? t("appearance.mixColorsGradientsAndPatternsForEachPart")
 											: section === "finish"
-												? "See each detail before you choose."
-												: "Choose the skills your bot represents."}
+												? t("appearance.seeEachDetailBeforeYouChoose")
+												: t("appearance.chooseTheSkillsYourBotRepresents")}
 							</p>
 						</div>
 						<div className="fl-bot-studio-panel-actions">
@@ -1109,7 +1203,7 @@ export function BotCustomizer({
 									disabled={!Object.keys(appearance.equipment).length}
 									onClick={() => update({ equipment: {} })}
 								>
-									Reset outfit
+									{t("appearance.resetOutfit")}
 								</button>
 							)}
 							{isLookPart(section) && (
@@ -1144,20 +1238,20 @@ export function BotCustomizer({
 								<input
 									id={`${id}-search`}
 									type="search"
-									aria-label="Search crew"
-									placeholder="Search by name or personality…"
+									aria-label={t("appearance.searchCrew")}
+									placeholder={t("appearance.searchByNameOrPersonality")}
 									value={search}
 									onChange={(event) => setSearch(event.target.value)}
 								/>
 							</label>
 							<details className="fl-bot-studio-filter-drawer">
 								<summary>
-									Filter characters
+									{t("appearance.filterCharacters")}{" "}
 									<span>
 										{series.kind === "all"
-											? "All packs"
+											? t("appearance.allPacks")
 											: series.kind === "other"
-												? "Other characters"
+												? t("appearance.otherCharacters")
 												: series.kind === "pack"
 													? catalog.packs[series.id].label
 													: catalog.series[series.id].label}
@@ -1165,14 +1259,15 @@ export function BotCustomizer({
 								</summary>
 								<fieldset
 									className="fl-bot-studio-filters"
-									aria-label="Character series"
+									aria-label={t("appearance.characterSeries")}
 								>
 									<button
 										type="button"
 										aria-pressed={series.kind === "all"}
 										onClick={() => setSeries({ kind: "all" })}
 									>
-										All<span>{shapes.length}</span>
+										{t("appearance.all")}
+										<span>{shapes.length}</span>
 									</button>
 									{seriesOptions.map((entry) => (
 										<button
@@ -1200,14 +1295,14 @@ export function BotCustomizer({
 											aria-pressed={series.kind === "other"}
 											onClick={() => setSeries({ kind: "other" })}
 										>
-											Other
+											{t("appearance.other")}
 										</button>
 									)}
 								</fieldset>
 								{packs.length > 0 && (
 									<fieldset
 										className="fl-bot-studio-filters"
-										aria-label="Character packs"
+										aria-label={t("appearance.characterPacks")}
 									>
 										{packs.map((pack) => (
 											<button
@@ -1229,22 +1324,25 @@ export function BotCustomizer({
 								<span>
 									{series.kind === "all"
 										? groupedCrew
-											? "CHARACTER PACKS"
-											: "THE WHOLE CREW"
+											? t("appearance.characterPacksHeading")
+											: t("appearance.theWHOLECREW")
 										: series.kind === "other"
-											? "OTHER CHARACTERS"
+											? t("appearance.otherCharactersHeading")
 											: series.kind === "pack"
 												? catalog.packs[series.id].label.toUpperCase()
 												: catalog.series[series.id]?.label.toUpperCase()}
 								</span>
 								<span aria-live="polite">
-									{visibleShapes.length}{" "}
-									{visibleShapes.length === 1 ? "character" : "characters"}
+									{t("appearance.characterCount", {
+										count: visibleShapes.length,
+									})}
 								</span>
 							</div>
 							{selectionOutsideFilters && (
 								<div className="fl-bot-studio-current-selection">
-									<span>Your bot is still {shape.label}.</span>
+									<span>
+										{t("appearance.selectedCharacter", { label: shape.label })}
+									</span>
 									<button
 										type="button"
 										className="fl-bot-studio-text-button"
@@ -1253,7 +1351,7 @@ export function BotCustomizer({
 											setSeries({ kind: "all" });
 										}}
 									>
-										Show selected
+										{t("appearance.showSelected")}
 									</button>
 								</div>
 							)}
@@ -1263,13 +1361,15 @@ export function BotCustomizer({
 									{unbundledShapes.length > 0 && (
 										<section
 											className="fl-bot-studio-pack"
-											aria-label="Other characters"
+											aria-label={t("appearance.otherCharacters")}
 										>
 											<header className="fl-bot-studio-pack-heading">
 												<div className="fl-bot-studio-pack-title">
-													<h4>Other characters</h4>
+													<h4>{t("appearance.otherCharacters")}</h4>
 													<p>
-														Available individually, outside a character pack.
+														{t(
+															"appearance.availableIndividuallyOutsideACharacterPack",
+														)}
 													</p>
 												</div>
 											</header>
@@ -1285,7 +1385,7 @@ export function BotCustomizer({
 								</div>
 							) : (
 								<div className="fl-bot-studio-empty">
-									<p>No characters match your search.</p>
+									<p>{t("appearance.noCharactersMatchYourSearch")}</p>
 									<button
 										type="button"
 										className="fl-bot-studio-text-button"
@@ -1294,7 +1394,7 @@ export function BotCustomizer({
 											setSeries({ kind: "all" });
 										}}
 									>
-										Clear filters
+										{t("appearance.clearFilters")}
 									</button>
 								</div>
 							)}
@@ -1302,7 +1402,9 @@ export function BotCustomizer({
 								onRequestPack &&
 								lockedVisiblePacks.length > 0 && (
 									<div className="fl-bot-studio-pack-links">
-										<span>Explore the packs for these characters</span>
+										<span>
+											{t("appearance.exploreThePacksForTheseCharacters")}
+										</span>
 										{lockedVisiblePacks.map((pack) => (
 											<button
 												key={pack.id}
@@ -1310,7 +1412,8 @@ export function BotCustomizer({
 												className="fl-bot-studio-pack-link"
 												onClick={() => onRequestPack(pack)}
 											>
-												View {pack.label} pack <span aria-hidden="true">↗</span>
+												{t("appearance.viewNamedPack", { label: pack.label })}{" "}
+												<span aria-hidden="true">↗</span>
 											</button>
 										))}
 									</div>
@@ -1326,15 +1429,17 @@ export function BotCustomizer({
 								<input
 									id={`${id}-outfit-search`}
 									type="search"
-									aria-label="Search outfits"
-									placeholder="Search clothes, accessories, or collections…"
+									aria-label={t("appearance.searchOutfits")}
+									placeholder={t(
+										"appearance.searchClothesAccessoriesOrCollections",
+									)}
 									value={outfitSearch}
 									onChange={(event) => setOutfitSearch(event.target.value)}
 								/>
 							</label>
 							<fieldset
 								className="fl-bot-studio-filters"
-								aria-label="Equipment slots"
+								aria-label={t("appearance.equipmentSlots")}
 							>
 								{BOT_EQUIPMENT_SLOTS.map((key) => (
 									<button
@@ -1347,7 +1452,7 @@ export function BotCustomizer({
 										{appearance.equipment[key] && (
 											<span
 												className="fl-bot-studio-dot"
-												aria-label="Equipped"
+												aria-label={t("appearance.equipped")}
 											/>
 										)}
 									</button>
@@ -1356,32 +1461,32 @@ export function BotCustomizer({
 							{outfitPacks.length > 0 && (
 								<details className="fl-bot-studio-filter-drawer">
 									<summary>
-										Filter outfits
+										{t("appearance.filterOutfits")}{" "}
 										<span>
 											{outfitCollection.kind === "all"
-												? "All collections"
+												? t("appearance.allCollections")
 												: outfitCollection.kind === "other"
-													? "Essentials"
+													? t("appearance.essentials")
 													: catalog.packs[outfitCollection.id].label}
 										</span>
 									</summary>
 									<fieldset
 										className="fl-bot-studio-filters"
-										aria-label="Outfit collections"
+										aria-label={t("appearance.outfitCollections")}
 									>
 										<button
 											type="button"
 											aria-pressed={outfitCollection.kind === "all"}
 											onClick={() => setOutfitCollection({ kind: "all" })}
 										>
-											All collections
+											{t("appearance.allCollections")}
 										</button>
 										<button
 											type="button"
 											aria-pressed={outfitCollection.kind === "other"}
 											onClick={() => setOutfitCollection({ kind: "other" })}
 										>
-											Essentials
+											{t("appearance.essentials")}
 										</button>
 										{outfitPacks.map((pack) => (
 											<button
@@ -1411,23 +1516,33 @@ export function BotCustomizer({
 							<div className="fl-bot-studio-result-heading">
 								<span>{SLOT_LABELS[slot]}</span>
 								<span aria-live="polite">
-									{visibleEquipment.length}{" "}
-									{visibleEquipment.length === 1 ? "item" : "items"}
-									{outfitGroups.length > 0 &&
-										` · ${outfitGroups.length} ${outfitGroups.length === 1 ? "theme" : "themes"}`}
+									{outfitGroups.length > 0
+										? t("appearance.outfitContents", {
+												items: t("appearance.itemCount", {
+													count: visibleEquipment.length,
+												}),
+												themes: t("appearance.themeCount", {
+													count: outfitGroups.length,
+												}),
+											})
+										: t("appearance.itemCount", {
+												count: visibleEquipment.length,
+											})}
 								</span>
 							</div>
 							<div className="fl-bot-studio-outfit-actions">
 								<button
 									type="button"
 									className="fl-bot-studio-outfit-none"
-									aria-label="Choose None"
+									aria-label={t("appearance.chooseNone")}
 									aria-pressed={!appearance.equipment[slot]}
 									onClick={() => selectEquipment()}
 								>
-									No {SLOT_LABELS[slot].toLowerCase()}
+									{t(`appearance.noEquipment.${slot}`)}
 								</button>
-								<span>Color ideas appear on hover or keyboard focus.</span>
+								<span>
+									{t("appearance.colorIdeasAppearOnHoverOrKeyboardFocus")}
+								</span>
 							</div>
 							<div className="fl-bot-studio-outfit-groups">
 								{outfitGroups.map(({ key, label, pack, equipment }) => (
@@ -1435,13 +1550,12 @@ export function BotCustomizer({
 										key={key}
 										className="fl-bot-studio-outfit-group"
 										data-outfit-group={pack?.id ?? "essentials"}
-										aria-label={`${label} outfits`}
+										aria-label={t("appearance.namedOutfits", { label })}
 									>
 										<header className="fl-bot-studio-outfit-heading">
 											<h4>{label}</h4>
 											<span>
-												{equipment.length}{" "}
-												{equipment.length === 1 ? "item" : "items"}
+												{t("appearance.itemCount", { count: equipment.length })}
 											</span>
 										</header>
 										<div className="fl-bot-studio-tiles">
@@ -1471,7 +1585,7 @@ export function BotCustomizer({
 													className="fl-bot-studio-pack-link fl-bot-studio-outfit-pack-link"
 													onClick={() => onRequestPack(pack)}
 												>
-													View {pack.label} pack{" "}
+													{t("appearance.viewNamedPack", { label: pack.label })}{" "}
 													<span aria-hidden="true">↗</span>
 												</button>
 											)}
@@ -1482,8 +1596,8 @@ export function BotCustomizer({
 								<div className="fl-bot-studio-empty">
 									<p>
 										{availableEquipment.length
-											? "No items match these filters in this slot."
-											: "No items for this character in this slot yet."}
+											? t("appearance.noItemsMatchTheseFiltersInThisSlot")
+											: t("appearance.noItemsForThisCharacterInThisSlotYet")}
 									</p>
 									{(outfitQuery || outfitCollection.kind !== "all") && (
 										<button
@@ -1494,7 +1608,7 @@ export function BotCustomizer({
 												setOutfitCollection({ kind: "all" });
 											}}
 										>
-											Clear outfit filters
+											{t("appearance.clearOutfitFilters")}
 										</button>
 									)}
 								</div>
@@ -1506,17 +1620,22 @@ export function BotCustomizer({
 							{colorEffect && (
 								<div className="fl-bot-studio-color-notice">
 									<div>
-										<strong>{colorEffect} controls this palette</strong>
+										<strong>
+											{t("appearance.effectControlsPalette", {
+												effect: colorEffect,
+											})}
+										</strong>
 										<p>
-											This effect sets the colors of your bot and outfit. Remove
-											it to use your chosen colors.
+											{t(
+												"appearance.thisEffectSetsTheColorsOfYourBotAndOutfitRemoveItToUseYourChosenColors",
+											)}
 										</p>
 										<button
 											type="button"
 											className="fl-bot-studio-text-button"
 											onClick={() => update({ effect: "none" })}
 										>
-											Remove color effect
+											{t("appearance.removeColorEffect")}
 										</button>
 									</div>
 								</div>
@@ -1524,19 +1643,16 @@ export function BotCustomizer({
 							{appearance.variant !== "original" && (
 								<div className="fl-bot-studio-legacy-color">
 									<p>
-										A saved{" "}
-										{appearance.variant === "holo"
-											? "holographic"
-											: appearance.variant}{" "}
-										finish is active. Choosing a color restores the original
-										finish.
+										{t("appearance.savedFinishActive", {
+											finish: t(`appearance.variants.${appearance.variant}`),
+										})}
 									</p>
 									<button
 										type="button"
 										className="fl-bot-studio-text-button"
 										onClick={() => update({ variant: "original" })}
 									>
-										Reset legacy finish
+										{t("appearance.resetLegacyFinish")}
 									</button>
 								</div>
 							)}
@@ -1559,7 +1675,7 @@ export function BotCustomizer({
 						<>
 							<fieldset
 								className="fl-bot-studio-filters"
-								aria-label="Finish categories"
+								aria-label={t("appearance.finishCategories")}
 							>
 								{FINISH_GROUPS.map((group) => (
 									<button
@@ -1578,18 +1694,26 @@ export function BotCustomizer({
 										<section
 											key={group.id}
 											data-effect-group={group.id}
-											aria-label={`${group.label} effects`}
+											aria-label={t("appearance.namedEffects", {
+												label: t(`appearance.effectGroups.${group.id}.label`),
+											})}
 										>
 											<div className="fl-bot-studio-effect-heading">
-												<h3>{group.label}</h3>
-												<p>{group.description}</p>
+												<h3>
+													{t(`appearance.effectGroups.${group.id}.label`)}
+												</h3>
+												<p>
+													{t(`appearance.effectGroups.${group.id}.description`)}
+												</p>
 											</div>
 											<div className="fl-bot-studio-tiles">
 												{group.effects.map((effect) => (
 													<Tile
 														key={effect.id}
-														label={effect.label}
-														description={effect.description}
+														label={t(`appearance.effects.${effect.id}.label`)}
+														description={t(
+															`appearance.effects.${effect.id}.description`,
+														)}
 														showDescription
 														selected={appearance.effect === effect.id}
 														onClick={() => update({ effect: effect.id })}
@@ -1622,11 +1746,11 @@ export function BotCustomizer({
 							)}
 							<label className="fl-bot-studio-dark">
 								<span>
-									<strong>Dark background</strong>
+									<strong>{t("appearance.darkBackground")}</strong>
 									<small>
 										{colorEffect || appearance.effect === "neon"
-											? "This effect sets its own background."
-											: "A deeper canvas for your bot."}
+											? t("appearance.thisEffectSetsItsOwnBackground")
+											: t("appearance.aDeeperCanvasForYourBot")}
 									</small>
 								</span>
 								<input
@@ -1641,9 +1765,11 @@ export function BotCustomizer({
 					{section === "skills" && (
 						<>
 							<div className="fl-bot-studio-result-heading">
-								<span>SKILL BADGES</span>
+								<span>{t("appearance.skillBADGES")}</span>
 								<span aria-live="polite">
-									{appearance.skills.length} selected
+									{t("appearance.selectedCount", {
+										count: appearance.skills.length,
+									})}
 								</span>
 							</div>
 							<div className="fl-bot-studio-skills">
@@ -1672,8 +1798,9 @@ export function BotCustomizer({
 								))}
 							</div>
 							<p className="fl-bot-studio-hint">
-								Your selected skills appear beside your bot. Extra badges fold
-								into a count at smaller sizes.
+								{t(
+									"appearance.yourSelectedSkillsAppearBesideYourBotExtraBadgesFoldIntoACountAtSmallerSizes",
+								)}
 							</p>
 						</>
 					)}

@@ -48,6 +48,11 @@ vi.mock("next/navigation", () => ({
 vi.mock("./global-chat-body", () => ({
 	GlobalChatBody: () => <div data-testid="chat-body" />,
 }));
+// Both panes reach the rich-text editor, whose KaTeX stylesheet Node can't import.
+vi.mock("../bots-tab/bot-calendar", () => ({ BotCalendarPane: () => null }));
+vi.mock("../bots-tab/bot-computer-pane", () => ({
+	BotComputerPane: () => null,
+}));
 vi.mock("../bots-tab/editor/bot-editor-dialog", () => ({
 	BotEditorDialog: (props: typeof controls.editor) => {
 		controls.editor = props;
@@ -257,6 +262,10 @@ test("the pill opens the bot's panel as a sheet inside the overlay, the window b
 	).not.toBeNull();
 
 	await click(panelButton("Back to the chat"));
+	// The sheet slides out first and closes when the slide ends.
+	await act(async () => {
+		await new Promise((resolve) => setTimeout(resolve, 400));
+	});
 	expect(panel()).toBeNull();
 	expect(pill()?.getAttribute("aria-expanded")).toBe("false");
 });

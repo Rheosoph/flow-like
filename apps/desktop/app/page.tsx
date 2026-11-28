@@ -1,5 +1,5 @@
 "use client";
-import { Skeleton, TutorialDialog, useBackend } from "@flow-like/flow-like-ui";
+import { Skeleton } from "@flow-like/flow-like-ui";
 import { HomePage } from "@flow-like/flow-like-ui/components/home/home-page";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { usePathname, useRouter } from "next/navigation";
@@ -7,7 +7,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTauriInvoke } from "../components/useInvoke";
 
 export default function Home() {
-	const backend = useBackend();
 	const router = useRouter();
 	const pathname = usePathname();
 	const [isCheckingProfiles, setIsCheckingProfiles] = useState(true);
@@ -70,7 +69,6 @@ export default function Home() {
 	if (profiles.isLoading || isCheckingProfiles) {
 		return (
 			<main className="flex flex-col flex-1 w-full min-h-0 overflow-hidden">
-				<TutorialDialog />
 				<div className="flex-1 min-h-0 overflow-auto p-4 grid grid-cols-6 justify-start gap-2">
 					<Skeleton className="col-span-6 h-full min-h-[30dvh]" />
 					<Skeleton className="col-span-3 h-full min-h-[20dvh]" />
@@ -85,7 +83,6 @@ export default function Home() {
 
 	return (
 		<div className="flex flex-col flex-1 w-full min-h-0 overflow-hidden">
-			<TutorialDialog />
 			<HomePage />
 		</div>
 	);

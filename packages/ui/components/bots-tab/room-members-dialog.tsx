@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useOrg } from "../../hooks/use-bot-teams";
 import { useBots } from "../../hooks/use-bots";
 import {
 	useCancelInvitation,
@@ -19,6 +20,7 @@ import {
 	useSetMemberLimits,
 } from "../../hooks/use-inbox";
 import { apiErrorMessage } from "../../lib/api-error";
+import { cn } from "../../lib/utils";
 import type {
 	IBotRoomLimits,
 	IConversation,
@@ -45,6 +47,7 @@ import {
 } from "../ui/dialog";
 import { BotUsageButton } from "./bot-usage";
 import { isSelfPrincipal } from "./crew-model";
+import { silentInConversation } from "./gated-bot-model";
 import { LeaveRoomDialog } from "./leave-room-dialog";
 import { SealingState } from "./new-room-dialog";
 import { sealBlockText, useRoomSealing } from "./new-room-encryption";
@@ -63,26 +66,48 @@ function PersonRow({
 	id,
 	directory,
 	note,
+	onShow,
 	children,
 }: Readonly<{
 	id: string;
 	directory: CrewDirectory;
 	note?: string;
+	/** Opens who they are. */
+	onShow?: (principalId: string) => void;
 	children?: React.ReactNode;
 }>) {
-	return (
-		<li className="flex items-center gap-3 py-1.5">
-			<IdentityHoverCard subject={id} className="shrink-0">
-				<IdentityAvatar subject={id} size={28} />
-			</IdentityHoverCard>
-			<span className="flex min-w-0 flex-1 flex-col">
-				<span className="truncate text-sm font-medium">
-					{directory(id).name}
-				</span>
+	const { t } = useTranslation("bots");
+	const name = directory(id).name;
+	const who = (
+		<>
+			<IdentityAvatar subject={id} size={28} className="shrink-0" />
+			<span className="flex min-w-0 flex-1 flex-col text-left">
+				<span className="truncate text-sm font-medium">{name}</span>
 				{note && (
 					<span className="truncate text-xs text-muted-foreground">{note}</span>
 				)}
 			</span>
+		</>
+	);
+	return (
+		<li className="flex items-center gap-3 py-1.5">
+			{onShow ? (
+				<button
+					type="button"
+					onClick={() => onShow(id)}
+					aria-label={t("crew.memberInfo.label", "About {{name}}", { name })}
+					className="-mx-1.5 flex min-w-0 flex-1 touch-manipulation items-center gap-3 rounded-lg px-1.5 py-1 outline-none transition-[background-color,transform] duration-100 hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] active:bg-muted"
+				>
+					{who}
+				</button>
+			) : (
+				<IdentityHoverCard
+					subject={id}
+					className="flex min-w-0 flex-1 items-center gap-3"
+				>
+					{who}
+				</IdentityHoverCard>
+			)}
 			{children}
 		</li>
 	);
@@ -95,6 +120,7 @@ function MembersList({
 	me,
 	onEditLimits,
 	onRemove,
+	onShowMember,
 }: Readonly<{
 	conversation: IConversation;
 	directory: CrewDirectory;
@@ -102,6 +128,7 @@ function MembersList({
 	me?: string | null;
 	onEditLimits: (member: IConversationMember) => void;
 	onRemove: (member: IConversationMember) => void;
+	onShowMember?: (principalId: string) => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const isMember = conversation.members.some(
@@ -109,6 +136,13 @@ function MembersList({
 			member.kind === "user" && isSelfPrincipal(member.principal_id, me),
 	);
 	const creator = isMember && isSelfPrincipal(conversation.created_by, me);
+	const { org } = useOrg();
+	const memberNote = (member: IConversationMember) => {
+		if (member.kind !== "bot") return undefined;
+		return silentInConversation(org, conversation.id, member.principal_id, me)
+			? t("teams.chats.botSilent", "Bot · Doesn't answer here")
+			: t("roomMembers.bot", "Bot");
+	};
 	return (
 		<ul
 			aria-label={t("roomMembers.members", "Members")}
@@ -119,7 +153,12 @@ function MembersList({
 					key={member.principal_id}
 					id={member.principal_id}
 					directory={directory}
-					note={member.kind === "bot" ? t("roomMembers.bot", "Bot") : undefined}
+					note={memberNote(member)}
+					onShow={
+						onShowMember && !isSelfPrincipal(member.principal_id, me)
+							? onShowMember
+							: undefined
+					}
 				>
 					{member.kind === "bot" &&
 						conversation.kind === "group" &&
@@ -356,7 +395,12 @@ function PendingList({
 function InviteSection({
 	conversation,
 	source,
-}: Readonly<{ conversation: IConversation; source: PickerSource }>) {
+	className,
+}: Readonly<{
+	conversation: IConversation;
+	source: PickerSource;
+	className?: string;
+}>) {
 	const { t } = useTranslation("bots");
 	const invite = useInviteToConversation();
 	const [picked, setPicked] = useState<PickedPrincipal[]>([]);
@@ -418,8 +462,8 @@ function InviteSection({
 				),
 			);
 	return (
-		<section className="flex flex-col gap-3">
-			<h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+		<section className={cn("flex min-h-0 flex-col gap-3", className)}>
+			<h3 className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 				{t("roomMembers.invite", "Bring someone in")}
 			</h3>
 			{encrypted && (
@@ -432,16 +476,20 @@ function InviteSection({
 				</p>
 			)}
 			{settingUp ? (
-				<RoomBotSetup
-					bots={ownBots}
-					limits={botLimits}
-					disabled={invite.isPending}
-					onChange={(id, limits) =>
-						setBotLimits((current) => ({ ...current, [id]: limits }))
-					}
-				/>
+				<div className="min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
+					<RoomBotSetup
+						bots={ownBots}
+						limits={botLimits}
+						disabled={invite.isPending}
+						onChange={(id, limits) =>
+							setBotLimits((current) => ({ ...current, [id]: limits }))
+						}
+					/>
+				</div>
 			) : (
 				<PrincipalPicker
+					className="lg:flex-1"
+					listClassName="max-h-[min(28rem,55dvh)] lg:max-h-none lg:flex-1"
 					source={source}
 					selected={selected}
 					multiple
@@ -467,7 +515,7 @@ function InviteSection({
 					urgent
 				/>
 			)}
-			<div className="flex flex-wrap justify-end gap-2">
+			<div className="flex shrink-0 flex-wrap justify-end gap-2">
 				{settingUp && (
 					<Button
 						type="button"
@@ -505,6 +553,7 @@ export function RoomMembersDialog({
 	source,
 	me,
 	onLeave,
+	onShowMember,
 }: Readonly<{
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -513,6 +562,8 @@ export function RoomMembersDialog({
 	source: PickerSource;
 	me?: string | null;
 	onLeave?: () => void;
+	/** Closes the dialog and opens who the member is. */
+	onShowMember?: (principalId: string) => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const bots = useBots();
@@ -531,7 +582,7 @@ export function RoomMembersDialog({
 	return (
 		<>
 			<Dialog open={open} onOpenChange={onOpenChange}>
-				<DialogContent className="flex max-h-[85dvh] flex-col overflow-hidden sm:max-w-md">
+				<DialogContent className="flex h-[min(90dvh,52rem)] flex-col overflow-hidden sm:max-w-2xl lg:max-w-5xl">
 					<DialogHeader>
 						<DialogTitle className="flex items-center gap-2">
 							<UsersIcon className="size-4" aria-hidden />
@@ -544,25 +595,40 @@ export function RoomMembersDialog({
 							)}
 						</DialogDescription>
 					</DialogHeader>
-					<div className="flex min-h-0 flex-col gap-4 overflow-y-auto pr-1">
-						<MembersList
-							conversation={conversation}
-							directory={directory}
-							ownBotIds={ownBotIds}
-							me={me}
-							onEditLimits={setEditing}
-							onRemove={setRemoving}
-						/>
-						<PendingList
-							conversation={conversation}
-							directory={directory}
-							me={me}
-						/>
+					<div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto pr-1 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden lg:pr-0">
+						<div className="max-lg:contents lg:flex lg:min-h-0 lg:flex-col lg:gap-4 lg:overflow-y-auto lg:pr-2">
+							<MembersList
+								conversation={conversation}
+								directory={directory}
+								ownBotIds={ownBotIds}
+								me={me}
+								onEditLimits={setEditing}
+								onRemove={setRemoving}
+								onShowMember={
+									onShowMember &&
+									((principalId) => {
+										onOpenChange(false);
+										onShowMember(principalId);
+									})
+								}
+							/>
+							<PendingList
+								conversation={conversation}
+								directory={directory}
+								me={me}
+							/>
+							{open && conversation.kind === "group" && (
+								<div className="max-lg:order-last">
+									<RoomInviteLinks conversation={conversation} me={me} />
+								</div>
+							)}
+						</div>
 						{open && (
-							<InviteSection conversation={conversation} source={source} />
-						)}
-						{open && conversation.kind === "group" && (
-							<RoomInviteLinks conversation={conversation} me={me} />
+							<InviteSection
+								conversation={conversation}
+								source={source}
+								className="max-lg:shrink-0 lg:border-l lg:border-border lg:pl-6"
+							/>
 						)}
 					</div>
 					{conversation.kind === "group" && self && (

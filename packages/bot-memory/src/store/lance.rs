@@ -201,7 +201,9 @@ impl Table {
         }
         let store = self.store.read().await;
         let schema = store.schema().await?;
-        Ok(names.iter().all(|name| schema.field_with_name(name).is_ok()))
+        Ok(names
+            .iter()
+            .all(|name| schema.field_with_name(name).is_ok()))
     }
 
     /// Creates the table with its first rows in one commit; another creator winning is fine.

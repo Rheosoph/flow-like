@@ -6,29 +6,49 @@ import {
 	useInvalidateInvoke,
 } from "@flow-like/flow-like-ui";
 import type { IBeginForkResponse } from "@flow-like/flow-like-ui/components/settings/forking/fork-app-dialog";
-import type { IBeginOfflineForkResponse } from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import type {
+	IBeginOfflineForkResponse,
+	IOfflineForkFilesPage,
+} from "@flow-like/flow-like-ui/lib/schema/app/fork";
 import type { IProfileApp } from "@flow-like/flow-like-ui/lib/schema/profile/profile";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback } from "react";
 import { toast } from "sonner";
 import { appsDB } from "./apps-db";
 
+interface FileFailure {
+	kind_and_path: string;
+	reason: string;
+}
+
 interface ApplyForkBundleResponse {
 	app_id: string;
-	meta_blobs_written: number;
-	content_objects_copied: number;
-	content_bytes_copied: number;
-	/** Objects the owner's fork policy excluded from the mirror. */
-	content_objects_skipped: number;
+	meta_files_written: number;
 	/** Tables recreated empty for a schema-only database fork. */
 	db_tables_created: number;
-	failures: { kind_and_path: string; reason: string }[];
+	failures: FileFailure[];
 }
+
+interface ForkFilesResponse {
+	files_copied: number;
+	bytes_copied: number;
+	failures: FileFailure[];
+}
+
+interface ContentTally {
+	files: number;
+	bytes: number;
+	/** Files the owner's fork policy kept out. */
+	skipped: number;
+	failures: FileFailure[];
+}
+
+type BackendState = ReturnType<typeof useBackend>;
 
 function isOfflineForkResponse(
 	res: IBeginForkResponse,
 ): res is IBeginOfflineForkResponse {
-	return "meta_blobs" in res;
+	return "meta_files" in res;
 }
 
 function createProfileApp(appId: string): IProfileApp {
@@ -43,15 +63,12 @@ function createProfileApp(appId: string): IProfileApp {
 
 /** Trailing ", 5 skipped by fork policy, 2 tables created" — empty when
  * the owner's policy excluded nothing. */
-function formatPolicyEffects(result: ApplyForkBundleResponse): string {
+function formatPolicyEffects(skipped: number, tablesCreated: number): string {
 	const parts: string[] = [];
-	if (result.content_objects_skipped > 0)
-		parts.push(`${result.content_objects_skipped} skipped by fork policy`);
-	if (result.db_tables_created > 0)
+	if (skipped > 0) parts.push(`${skipped} skipped by fork policy`);
+	if (tablesCreated > 0)
 		parts.push(
-			`${result.db_tables_created} empty table${
-				result.db_tables_created === 1 ? "" : "s"
-			} created`,
+			`${tablesCreated} empty table${tablesCreated === 1 ? "" : "s"} created`,
 		);
 	return parts.length > 0 ? `, ${parts.join(", ")}` : "";
 }
@@ -68,15 +85,93 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * Desktop fork follow-up. Offline forks apply the signed bundle into
- * the local stores; online forks already exist on the server, but still
+ * Pulls the source's content files page by page. The hub signs one download
+ * per file and has already applied the owner's fork policy and the paths
+ * the files take in the fork; a staged meta artifact wins over a content
+ * file with the same path.
+ */
+async function downloadForkContent(
+	backend: BackendState,
+	response: IBeginOfflineForkResponse,
+): Promise<ContentTally> {
+	const profile = (await backend.userState.getSettingsProfile()).hub_profile;
+	const skipPaths = response.meta_files.map((file) => file.path);
+	const tally: ContentTally = { files: 0, bytes: 0, skipped: 0, failures: [] };
+	let after: string | undefined;
+	do {
+		const query = new URLSearchParams({ seed: response.new_app_id });
+		if (after) query.set("after", after);
+		const page = await backend.apiState.get<IOfflineForkFilesPage>(
+			profile,
+			`apps/${response.source_app_id}/fork/offline/files?${query}`,
+		);
+		tally.skipped += page.skipped;
+		if (page.files.length > 0) {
+			const copied = await invoke<ForkFilesResponse>("download_fork_files", {
+				args: {
+					app_id: response.new_app_id,
+					files: page.files,
+					skip_paths: skipPaths,
+				},
+			});
+			tally.files += copied.files_copied;
+			tally.bytes += copied.bytes_copied;
+			tally.failures.push(...copied.failures);
+		}
+		after = page.next ?? undefined;
+	} while (after);
+	return tally;
+}
+
+async function applyOfflineFork(
+	backend: BackendState,
+	response: IBeginOfflineForkResponse,
+): Promise<void> {
+	const applied = await invoke<ApplyForkBundleResponse>("apply_fork_bundle", {
+		args: {
+			app_id: response.new_app_id,
+			meta_files: response.meta_files,
+			db_table_schemas: response.db_table_schemas ?? [],
+		},
+	});
+	await appsDB.visibility.put({
+		appId: response.new_app_id,
+		visibility: IAppVisibility.Offline,
+	});
+	const content = await downloadForkContent(backend, response);
+
+	const totalCopied = applied.meta_files_written + content.files;
+	const failures = applied.failures.length + content.failures.length;
+	const policyEffects = formatPolicyEffects(
+		content.skipped,
+		applied.db_tables_created,
+	);
+	if (failures === 0) {
+		toast.success(
+			`Applied ${totalCopied} files (${formatBytes(content.bytes)} content)${policyEffects}`,
+		);
+	} else {
+		toast.warning(
+			`Applied ${totalCopied} files${policyEffects}, ${failures} failed — re-open the dialog to retry`,
+		);
+	}
+
+	if (response.content_store_leaks && response.content_store_leaks.length > 0) {
+		toast.warning(
+			`Source app has ${response.content_store_leaks.length} suspicious file(s) in the content store — operator should investigate`,
+		);
+	}
+}
+
+/**
+ * Desktop fork follow-up. Offline forks download the hub's signed files
+ * into the local stores; online forks already exist on the server, but still
  * need a local profile entry so the desktop library reflects the fork
  * immediately. Both paths update local visibility and invalidate the
  * profile/app caches.
  *
- * Failures are surfaced via toast — within the credential's
- * expiration window the user can re-open the dialog to retry the same
- * bundle without paying for a fresh server-side materialization.
+ * Failures are surfaced via toast — while the signed downloads are valid
+ * the user can re-open the dialog to retry.
  */
 export function useApplyForkBundle() {
 	const backend = useBackend();
@@ -86,57 +181,7 @@ export function useApplyForkBundle() {
 		async (response: IBeginForkResponse) => {
 			try {
 				if (isOfflineForkResponse(response)) {
-					const idMap = response.report.id_map as {
-						widgets?: Record<string, string>;
-						templates?: Record<string, string>;
-						pages?: Record<string, string>;
-					};
-					const result = await invoke<ApplyForkBundleResponse>(
-						"apply_fork_bundle",
-						{
-							args: {
-								app_id: response.new_app_id,
-								meta_blobs: response.meta_blobs,
-								source_content_prefix: response.source_content_prefix,
-								credentials: response.shared_credentials,
-								widget_id_map: idMap?.widgets ?? {},
-								template_id_map: idMap?.templates ?? {},
-								page_id_map: idMap?.pages ?? {},
-								content_exclude_prefixes:
-									response.content_exclude_prefixes ?? [],
-								db_table_schemas: response.db_table_schemas ?? [],
-							},
-						},
-					);
-
-					await appsDB.visibility.put({
-						appId: response.new_app_id,
-						visibility: IAppVisibility.Offline,
-					});
-
-					const totalCopied =
-						result.meta_blobs_written + result.content_objects_copied;
-					const policyEffects = formatPolicyEffects(result);
-					if (result.failures.length === 0) {
-						toast.success(
-							`Applied ${totalCopied} files (${formatBytes(
-								result.content_bytes_copied,
-							)} content)${policyEffects}`,
-						);
-					} else {
-						toast.warning(
-							`Applied ${totalCopied} files${policyEffects}, ${result.failures.length} failed — re-open the dialog to retry`,
-						);
-					}
-
-					if (
-						response.content_store_leaks &&
-						response.content_store_leaks.length > 0
-					) {
-						toast.warning(
-							`Source app has ${response.content_store_leaks.length} suspicious file(s) in the content store — operator should investigate`,
-						);
-					}
+					await applyOfflineFork(backend, response);
 				} else {
 					const profile = await backend.userState.getSettingsProfile();
 					await backend.userState.updateProfileApp(

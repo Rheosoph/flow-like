@@ -555,6 +555,7 @@ mod tests {
             notes: None,
             trail: None,
             reply_files: None,
+            discussion: None,
             reply_stream: None,
         };
         RunnerInference::new(
@@ -648,6 +649,7 @@ mod tests {
             notes: None,
             trail: None,
             reply_files: None,
+            discussion: None,
             reply_stream: None,
         };
         let source = Arc::new(CountingAuthority(Default::default()));

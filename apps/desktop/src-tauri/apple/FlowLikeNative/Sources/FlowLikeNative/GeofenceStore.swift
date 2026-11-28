@@ -180,11 +180,9 @@ struct NativeGeofenceStore {
     private func locked<T>(_ body: (URL) throws -> T) throws -> T {
         guard let directory else { throw NativeLocationFailure("unavailable", "Shared location Event storage is unavailable.") }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let file = open(directory.appendingPathComponent("geofences.lock").path, O_CREAT | O_RDWR, 0o600)
-        guard file >= 0 else { throw NativeLocationFailure("unavailable", "Location Event storage is unavailable.") }
-        defer { close(file) }
-        guard flock(file, LOCK_EX) == 0 else { throw NativeLocationFailure("unavailable", "Location Event storage is busy.") }
-        defer { flock(file, LOCK_UN) }
-        return try body(directory)
+        return try NativeFileLock.exclusive(directory.appendingPathComponent("geofences.lock"),
+                                            failure: NativeLocationFailure("unavailable", "Location Event storage is unavailable.")) {
+            try body(directory)
+        }
     }
 }

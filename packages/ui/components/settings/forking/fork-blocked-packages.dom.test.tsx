@@ -1176,6 +1176,30 @@ describe("ForkAppDialog", () => {
 		});
 	}
 
+	test("shows the verdict alone when the hub leaves out what the app holds", async () => {
+		await prepare({});
+		const {
+			fork_policy: _policy,
+			size_breakdown: _sizes,
+			...verdict
+		} = PREVIEW;
+		await showDialog(true, async () => ({
+			...verdict,
+			total_size_bytes: 0,
+			total_object_count: 0,
+			selected_size_bytes: 0,
+			selected_object_count: 0,
+			user_can_fork: false,
+			disallow_reason: "join this app before forking it",
+		}));
+
+		expect(dialogText()).toContain("You can't fork this app");
+		expect(dialogText()).toContain("join this app before forking it");
+		expect(dialogText()).not.toContain(
+			"The app owner decides what a fork includes.",
+		);
+	});
+
 	test("closing the dialog forgets a purchase that was still open", async () => {
 		await prepare({
 			purchasePackage: async (packageId) => ({

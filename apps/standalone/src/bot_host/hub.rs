@@ -162,12 +162,24 @@ struct Shared {
     next_poll_ms: AtomicU64,
     bots: Mutex<Vec<DeviceBotInfo>>,
     bots_changed: Notify,
+    wake: Option<crate::wake::WakeSubscription>,
 }
 
 #[derive(Clone)]
 pub struct DeviceTurnHub {
     shared: Arc<Shared>,
     bearer: Option<Arc<TurnCreds>>,
+}
+
+/// While a push doorbell is live an idle device polls rarely; turns waiting for it always win.
+const PUSH_IDLE_POLL_MS: u64 = 300_000;
+
+fn poll_interval_ms(server_ms: u64, push_live: bool) -> u64 {
+    if push_live && server_ms == flow_like_types::device_bot::IDLE_POLL_MS {
+        PUSH_IDLE_POLL_MS
+    } else {
+        server_ms
+    }
 }
 
 fn unix_now() -> i64 {
@@ -180,6 +192,14 @@ fn unix_now() -> i64 {
 
 impl DeviceTurnHub {
     pub fn new(api: Arc<dyn DeviceApi>, host_id: String) -> Self {
+        Self::woken(api, host_id, None)
+    }
+
+    pub fn woken(
+        api: Arc<dyn DeviceApi>,
+        host_id: String,
+        wake: Option<crate::wake::WakeSubscription>,
+    ) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
@@ -195,6 +215,7 @@ impl DeviceTurnHub {
                 next_poll_ms: AtomicU64::new(flow_like_types::device_bot::IDLE_POLL_MS),
                 bots: Mutex::default(),
                 bots_changed: Notify::new(),
+                wake,
             }),
             bearer: None,
         }
@@ -515,9 +536,11 @@ impl TurnHub for DeviceTurnHub {
     }
 
     fn next_poll(&self) -> Option<Duration> {
-        Some(Duration::from_millis(
+        let live = self.shared.wake.as_ref().is_some_and(|wake| wake.is_live());
+        Some(Duration::from_millis(poll_interval_ms(
             self.shared.next_poll_ms.load(Ordering::Relaxed),
-        ))
+            live,
+        )))
     }
 
     async fn claim(&self, turn_id: &str, host_id: &str) -> Result<BotTurn, HubFailure> {
@@ -904,6 +927,7 @@ mod tests {
             reply_message_id: None,
             error_code: None,
             hops: 0,
+            discussion_hops: None,
             owner_id: "owner".into(),
             requester_id: None,
             requester_name: None,
@@ -972,6 +996,35 @@ mod tests {
             (Method::POST, "/devices/dev1/bots/poll")
         );
         assert_eq!(body, Some(json!({ "host_id": "device:dev1" })));
+    }
+
+    #[test]
+    fn an_idle_poll_stretches_only_while_the_doorbell_is_live() {
+        use flow_like_types::device_bot::{BUSY_POLL_MS, IDLE_POLL_MS};
+        assert_eq!(poll_interval_ms(IDLE_POLL_MS, true), 300_000);
+        assert_eq!(poll_interval_ms(IDLE_POLL_MS, false), IDLE_POLL_MS);
+        assert_eq!(poll_interval_ms(BUSY_POLL_MS, true), BUSY_POLL_MS);
+        assert_eq!(poll_interval_ms(BUSY_POLL_MS, false), BUSY_POLL_MS);
+    }
+
+    #[tokio::test]
+    async fn the_hub_polls_slowly_when_idle_and_the_doorbell_is_live() {
+        let wake = Arc::new(crate::wake::DeviceWake::default());
+        let idle = json!({ "bots": [], "turns": [], "next_poll_ms": flow_like_types::device_bot::IDLE_POLL_MS });
+        let api = FakeApi::answering([(200, idle.clone()), (200, idle)]);
+        let hub = DeviceTurnHub::woken(api, "device:dev1".into(), Some(wake.subscribe()));
+        hub.list().await.unwrap();
+        assert_eq!(
+            hub.next_poll(),
+            Some(Duration::from_millis(
+                flow_like_types::device_bot::IDLE_POLL_MS
+            ))
+        );
+        wake.set_live(true);
+        assert_eq!(
+            hub.next_poll(),
+            Some(Duration::from_millis(PUSH_IDLE_POLL_MS))
+        );
     }
 
     #[tokio::test]

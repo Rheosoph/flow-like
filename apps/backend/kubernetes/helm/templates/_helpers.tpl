@@ -99,6 +99,14 @@ app.kubernetes.io/component: compiler
 {{- end }}
 
 {{/*
+Query service labels
+*/}}
+{{- define "flow-like.query.labels" -}}
+{{ include "flow-like.labels" . }}
+app.kubernetes.io/component: query
+{{- end }}
+
+{{/*
 Signaling labels
 */}}
 {{- define "flow-like.signaling.labels" -}}

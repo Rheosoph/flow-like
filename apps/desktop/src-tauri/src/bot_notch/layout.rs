@@ -37,8 +37,15 @@ pub(crate) struct NotchLayout {
     pub scale: f64,
     pub menu_bar_height: f64,
     pub notch: Option<HardwareNotch>,
+    /// The display shows a fullscreen Space: the den stays out of sight until the cursor reaches
+    /// the top edge.
+    pub fullscreen: bool,
     pub platform: &'static str,
 }
+
+/// Physical rows left free at the bottom. Windows takes a window that covers a whole monitor for
+/// a fullscreen app and stops keeping the taskbar on top.
+const UNCOVERED_ROWS: u32 = if cfg!(windows) { 1 } else { 0 };
 
 pub(crate) const PLATFORM: &str = if cfg!(target_os = "macos") {
     "macos"
@@ -76,7 +83,7 @@ impl Geometry {
             origin_y: f64::from(position.1),
             scale,
             width: f64::from(size.0) / scale,
-            height: f64::from(size.1) / scale,
+            height: f64::from(size.1.saturating_sub(UNCOVERED_ROWS)) / scale,
         }
     }
 
@@ -122,6 +129,7 @@ impl Geometry {
             scale: self.scale,
             menu_bar_height: metrics.menu_bar_height,
             notch: metrics.notch,
+            fullscreen: metrics.fullscreen,
             platform: PLATFORM,
         }
     }
@@ -149,6 +157,7 @@ impl WindowSpace {
 pub(crate) struct PlatformMetrics {
     pub menu_bar_height: f64,
     pub notch: Option<HardwareNotch>,
+    pub fullscreen: bool,
 }
 
 /// Window-local notch from the screen's top safe-area inset and the two menu-bar areas beside it.
@@ -188,6 +197,25 @@ mod tests {
     #[test]
     fn invalid_scale_falls_back_to_one() {
         assert_eq!(Geometry::from_monitor((0, 0), (100, 50), 0.0).width, 100.0);
+    }
+
+    #[test]
+    fn only_windows_leaves_a_row_of_the_monitor_uncovered() {
+        let geometry = Geometry::from_monitor((0, 0), (1920, 1080), 1.0);
+        assert_eq!(geometry.width, 1920.0);
+        assert_eq!(geometry.height, if cfg!(windows) { 1079.0 } else { 1080.0 });
+        assert_eq!(Geometry::from_monitor((0, 0), (10, 0), 1.0).height, 0.0);
+    }
+
+    #[test]
+    fn the_layout_carries_the_fullscreen_space() {
+        let geometry = Geometry::from_monitor((0, 0), (3024, 1964), 2.0);
+        assert!(!geometry.layout(PlatformMetrics::default()).fullscreen);
+        let metrics = PlatformMetrics {
+            fullscreen: true,
+            ..PlatformMetrics::default()
+        };
+        assert!(geometry.layout(metrics).fullscreen);
     }
 
     #[test]

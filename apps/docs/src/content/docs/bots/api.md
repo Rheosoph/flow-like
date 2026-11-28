@@ -47,11 +47,15 @@ Paths are relative to your hub's API, for example `https://api.flow-like.com/api
 | `POST` | `/bots/{id}/tasks/{task_id}/fire` | Run a task now. |
 | `GET`, `POST` | `/bots/{id}/webhooks` | List or create webhooks. |
 | `PATCH`, `DELETE` | `/bots/{id}/webhooks/{hook_id}` | Change or delete a webhook; `POST .../rotate` issues a new secret. |
+| `GET`, `PUT`, `DELETE` | `/bots/{id}/calendar/feed` | Read, create or change, or remove the bot's [calendar subscription link](/bots/capabilities/#show-a-bots-calendar-in-your-calendar-app); `POST .../rotate` issues a new link. Owner only. |
 | `POST` | `/bots/hooks/{hook_id}` | The public webhook URL. |
 | `POST` | `/bots/{id}/turns/{turn_id}/approval` | Answer an approval card. |
 | `GET`, `DELETE` | `/bots/{id}/tool-grants` | List and revoke standing approvals. |
 | `GET` | `/bots/{id}/memory/facts` | What the bot remembers. |
 | `DELETE` | `/bots/{id}/memory/facts/{fact_id}` | Forget one fact. `DELETE /bots/{id}/memory` forgets everything. |
+| `GET` | `/bots/{id}/memory/entities` | The people, places, organizations, projects and things the facts are about, with fact counts. |
+| `PATCH`, `DELETE` | `/bots/{id}/memory/entities/{entity_id}` | Rename an entry or change its kind, or forget it with every fact about it. Pass `?scope=` for an entry from a room. |
+| `POST` | `/bots/{id}/memory/entities/{entity_id}/merge` | Merge an entry into another one (`{"into": "<entity_id>"}`) of the same conversation. |
 | `GET`, `POST` | `/bots/{id}/skills` | List or add skills; approve or disable them under `.../skills/{skill_id}`. |
 | `GET` | `/bots/{id}/usage` | Usage and limits, overall and per room. |
 | `GET` | `/bots/presence` | Which hosts are online. |

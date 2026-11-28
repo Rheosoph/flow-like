@@ -450,6 +450,7 @@ pub(crate) async fn delete_owned(
         })
         .await?;
     inbox::retirement::finish_retirement(state, owner_id, bot_id, first).await;
+    crate::teams::bot::cleanup_bot(state, bot_id).await;
     if let Some(queued) = workspace_deletion {
         workspace::delete_queued(state, &queued).await;
     }

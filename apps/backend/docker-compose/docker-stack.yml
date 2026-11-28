@@ -215,6 +215,7 @@ services:
       EXECUTION_BACKEND: ${EXECUTION_BACKEND:-http}
       ASYNC_EXECUTION_BACKEND: ${ASYNC_EXECUTION_BACKEND:-redis}
       EXECUTOR_URL: http://runtime:9000
+      QUERY_SERVICE_URL: http://query:8090
       REDIS_EXECUTION_QUEUE: ${REDIS_EXECUTION_QUEUE:-exec:jobs:v2}
       EXECUTION_TIMEOUT_SECONDS: ${EXECUTION_TIMEOUT_SECONDS:-3600}
       COMPILATION_BACKEND: ${COMPILATION_BACKEND:-http}
@@ -323,7 +324,7 @@ services:
     networks:
       - flowlike
   api-gateway:
-    image: ${NGINX_IMAGE:-nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c}
+    image: ${NGINX_IMAGE:-nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3}
     configs:
       - source: api_gateway_nginx
         target: /etc/nginx/conf.d/default.conf
@@ -398,6 +399,41 @@ services:
         limits:
           cpus: ${RUNTIME_CPUS:-4}
           memory: ${RUNTIME_MEMORY:-8G}
+      update_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: any
+    networks:
+      - flowlike
+  query:
+    image: ${QUERY_IMAGE:-ghcr.io/rheosoph/flow-like-docker-compose-query:${FLOW_LIKE_IMAGE_TAG:-dev}}
+    environment:
+      PORT: 8090
+      RUST_LOG: ${RUST_LOG:-info}
+      BACKEND_PUB: ${BACKEND_PUB:?Run scripts/setup-env.py and configure .env}
+      QUERY_MAX_ROWS: ${QUERY_MAX_ROWS:-10000}
+      QUERY_MAX_TIMEOUT_MS: ${QUERY_MAX_TIMEOUT_MS:-50000}
+      QUERY_MEMORY_BYTES: ${QUERY_MEMORY_BYTES:-2576980377}
+      QUERY_SPILL_DIR: /var/lib/flow-like/query-spill
+      QUERY_SPILL_MAX_BYTES: ${QUERY_SPILL_MAX_BYTES:-4294967296}
+      # Self-hosted databases usually sit on private networks.
+      QUERY_ALLOW_PRIVATE_NETWORKS: "true"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:8090/health
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      replicas: ${QUERY_REPLICAS:-1}
+      resources:
+        limits:
+          cpus: ${QUERY_CPUS:-2}
+          memory: ${QUERY_MEMORY:-4G}
       update_config:
         parallelism: 1
         order: start-first

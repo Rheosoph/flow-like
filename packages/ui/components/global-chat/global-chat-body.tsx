@@ -21,6 +21,8 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { useOrg } from "../../hooks/use-bot-teams";
+import { useBotLabels } from "../../hooks/use-bots";
 import { inboxKeys } from "../../hooks/use-inbox";
 import {
 	IBitTypes,
@@ -36,9 +38,11 @@ import { Button } from "../../index";
 import { cn } from "../../lib";
 import { getApiOrigin } from "../../lib/api-url";
 import { searchAllBitsOfType } from "../../lib/bit/model-listing";
+import { orgBot } from "../../lib/bot-teams/org-model";
 import { DEFAULT_CHAT_AI_DISCLOSURE } from "../../lib/chat-appearance";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
 import {
 	type NativeActionRequest,
 	assertNativeActionCurrent,
@@ -61,6 +65,7 @@ import {
 	sendInteractiveMessage,
 	webInteractiveBody,
 } from "../../state/global-chat/bot-inbox";
+import { takeCompactionRequest } from "../../state/global-chat/compaction-request";
 import {
 	ASSISTANT_BOT_ID,
 	answersInThisChat,
@@ -129,6 +134,7 @@ import {
 	runVoiceTurn,
 } from "../../state/global-chat/voice-turn";
 import { BotFileAssets } from "../bots-tab/bot-file-assets";
+import { addressesTeam, teamTagOptions } from "../bots-tab/team-tag-model";
 import { FlowScriptWorkspacePanel } from "../flowpilot/flowscript-workspace-panel";
 import {
 	flowPilotModelIdForProvider,
@@ -188,6 +194,7 @@ import {
 } from "./use-global-chat-bot";
 import { useGlobalChatRunWidgetAction } from "./use-global-widget-action";
 import { useHostedBotTurnText } from "./use-hosted-bot-turn";
+import { useHostedReplyDrafts } from "./use-hosted-reply-drafts";
 import { useOpenAppId } from "./use-open-app-id";
 import { usePageSnapshotSource } from "./use-page-snapshot-source";
 
@@ -355,13 +362,26 @@ export function GlobalChatBody({
 }: GlobalChatBodyProps) {
 	const { t, i18n } = useTranslation("chat");
 	const chatRef = useRef<IChatRef | null>(null);
+	const hostedDraftsRef = useRef<readonly IMessage[]>([]);
+	/** The replies this chat streams itself, then the drafts a bot's own host is writing. */
+	const pushLiveMessages = useCallback(
+		(
+			streaming = useGlobalChatStore.getState().streamingMessages,
+			drafts = hostedDraftsRef.current,
+		) =>
+			chatRef.current?.pushCurrentMessageUpdate(
+				drafts.length > 0 ? [...streaming, ...drafts] : streaming,
+			),
+		[],
+	);
 	// The transcript mounts once the welcome gives way, after the replies it must show started.
-	const attachChat = useCallback((chat: IChatRef | null) => {
-		chatRef.current = chat;
-		chat?.pushCurrentMessageUpdate(
-			useGlobalChatStore.getState().streamingMessages,
-		);
-	}, []);
+	const attachChat = useCallback(
+		(chat: IChatRef | null) => {
+			chatRef.current = chat;
+			pushLiveMessages();
+		},
+		[pushLiveMessages],
+	);
 
 	const messages = useGlobalChatStore((s) => s.messages);
 	const activeConversationId = useGlobalChatStore(
@@ -374,14 +394,41 @@ export function GlobalChatBody({
 	const answersHere = answersInThisChat(chatBot.bot, isTauri());
 	const answersHereRef = useRef(answersHere);
 	answersHereRef.current = answersHere;
-	const hostedTurnText = useHostedBotTurnText(
+	const hostedDrafts = useHostedReplyDrafts(
+		activeConversationId,
+		answersHere ? null : (chatBot.bot?.id ?? null),
+	);
+	hostedDraftsRef.current = hostedDrafts;
+	useEffect(() => {
+		pushLiveMessages(undefined, hostedDrafts);
+	}, [hostedDrafts, pushLiveMessages]);
+	const waitingText = useHostedBotTurnText(
 		activeConversationId,
 		chatBot,
 		!answersHere,
 	);
+	// The draft bubble already shows the bot answering.
+	const hostedTurnText = hostedDrafts.length > 0 ? null : waitingText;
 	const queryClient = useQueryClient();
 	const chatConfig = useBotChatConfig(chatBot);
 	const noteBotId = chatBot.bot?.id ?? chatBot.botId;
+	const { org, available: teamsAvailable } = useOrg();
+	const botLabels = useBotLabels();
+	const teamTags = useMemo(
+		() =>
+			noteBotId && teamsAvailable
+				? teamTagOptions(org, (botId) => {
+						const bot = orgBot(org, botId);
+						return (
+							bot &&
+							botLabels({ system: bot.system ?? null, name: bot.name }).name
+						);
+					})
+				: [],
+		[noteBotId, teamsAvailable, org, botLabels],
+	);
+	const teamTagsRef = useRef(teamTags);
+	teamTagsRef.current = teamTags;
 	const botNotes = useMemo<IChatGroup | undefined>(
 		() =>
 			noteBotId
@@ -393,9 +440,10 @@ export function GlobalChatBody({
 								sessionId={activeConversationId}
 							/>
 						),
+						teamTags,
 					}
 				: undefined,
-		[noteBotId, activeConversationId],
+		[noteBotId, activeConversationId, teamTags],
 	);
 	const isStreaming = useGlobalChatStore((s) => s.isStreaming);
 	const conversationLoading = useGlobalChatStore((s) => s.conversationLoading);
@@ -532,10 +580,10 @@ export function GlobalChatBody({
 		() =>
 			useGlobalChatStore.subscribe((state, prev) => {
 				if (state.streamingMessages !== prev.streamingMessages) {
-					chatRef.current?.pushCurrentMessageUpdate(state.streamingMessages);
+					pushLiveMessages(state.streamingMessages);
 				}
 			}),
-		[],
+		[pushLiveMessages],
 	);
 
 	// Restore the last explicit provider/model/effort. The Bots tab is often the first
@@ -906,7 +954,9 @@ export function GlobalChatBody({
 				isAgentBackendProvider(normalizeAIProvider(agentSelection.provider)),
 				agentSelection.reasoningEffort,
 			);
-			if (!answersHere) {
+			// A message to a team goes through the hub, which routes it to the team's lead and wakes
+			// no bot of this chat, so this chat doesn't run a turn of its own for it.
+			if (!answersHere || addressesTeam(trimmed, teamTagsRef.current)) {
 				if (nativeRequest)
 					throw new Error(
 						`${botName} answers on its own computer, not in this chat.`,
@@ -1114,6 +1164,7 @@ export function GlobalChatBody({
 					const turnConversationId =
 						useGlobalChatStore.getState().runs[responseMessage.id]
 							?.conversationId ?? currentConversationId(sessionId);
+					const compactContext = takeCompactionRequest(sessionId) || undefined;
 					return (
 						isTauri()
 							? tauriStart(
@@ -1146,6 +1197,7 @@ export function GlobalChatBody({
 											turnConversationId,
 										),
 										conversationId: turnConversationId,
+										compactContext,
 										...desktopChatBotArgs(turnConversationId),
 										...desktopInteractiveArgs(interactive),
 									},
@@ -1193,6 +1245,7 @@ export function GlobalChatBody({
 											attachmentManifest.length > 0
 												? attachmentManifest
 												: undefined,
+										compact_context: compactContext,
 										...webChatBotBody(turnConversationId),
 										...webInteractiveBody(interactive),
 									},
@@ -1239,6 +1292,7 @@ export function GlobalChatBody({
 			pointedAt?: IAppPointedAt,
 		) => {
 			if (!content.trim() && !files?.length) return;
+			emitGuideEvent("bots:message-sent");
 			const state = useGlobalChatStore.getState();
 			const preparation = isGlobalChatAtRunCapacity(state)
 				? undefined
@@ -1729,9 +1783,10 @@ export function GlobalChatBody({
 				chatBot={chatBot}
 				defaultModelLabel={defaultModelLabel}
 				onOpenSettings={openSettings}
+				canCompact={answersHere}
 			/>
 		),
-		[chatBot, defaultModelLabel, openSettings],
+		[chatBot, defaultModelLabel, openSettings, answersHere],
 	);
 
 	const openAppId = useOpenAppId();

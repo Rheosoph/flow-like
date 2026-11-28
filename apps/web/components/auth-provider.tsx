@@ -17,7 +17,11 @@ import { UserManager, type UserManagerSettings } from "oidc-client-ts";
 import { createContext, useContext, useEffect, useState } from "react";
 import { AuthProvider, useAuth } from "react-oidc-context";
 import { accountQueryDeps } from "../lib/account-query";
-import { loadWebOidcConfiguration } from "../lib/oidc-configuration";
+import {
+	type WebOidcConfiguration,
+	loadWebOidcConfiguration,
+	storedWebOidcConfiguration,
+} from "../lib/oidc-configuration";
 import { getWebOidcSettings } from "../lib/oidc-settings";
 import { getPublicApiUrl, getPublicWebConfig } from "../lib/public-config";
 import { currentRelativeUrl, saveReturnUrl } from "../lib/return-url";
@@ -48,6 +52,32 @@ function defaultProfile(): IProfile {
 		updated: new Date().toISOString(),
 		hub: getPublicApiUrl(),
 	};
+}
+
+const OIDC_RELOAD_KEY = "flow-like:oidc-configuration-reloaded";
+
+/**
+ * A session started from the stored configuration checks it against the live
+ * one. A changed identity provider reloads the page once, so the session is
+ * rebuilt on what `auth/openid` now answers (already stored by the request).
+ */
+function revalidateStoredOidcConfiguration(
+	stored: WebOidcConfiguration,
+	isCancelled: () => boolean,
+): void {
+	loadWebOidcConfiguration()
+		.then((fresh) => {
+			if (isCancelled() || !fresh) return;
+			if (JSON.stringify(fresh) === JSON.stringify(stored)) return;
+			try {
+				if (sessionStorage.getItem(OIDC_RELOAD_KEY)) return;
+				sessionStorage.setItem(OIDC_RELOAD_KEY, "1");
+			} catch {
+				return;
+			}
+			window.location.reload();
+		})
+		.catch(() => {});
 }
 
 export class OIDCTokenProvider implements TokenProvider {
@@ -91,7 +121,9 @@ export function WebAuthProvider({
 				return;
 			}
 			setLoadingProgress(30);
-			const response = await loadWebOidcConfiguration();
+			const stored = storedWebOidcConfiguration();
+			if (stored) revalidateStoredOidcConfiguration(stored, () => cancelled);
+			const response = stored ?? (await loadWebOidcConfiguration());
 			if (cancelled) return;
 			if (response) {
 				setLoadingProgress(60);
@@ -274,6 +306,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	}, [auth, backend]);
 
 	// Ensure user exists in DB, then fetch and push profile
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `account` carries the identity the query scope reads from `auth`; a new `auth` object for the same session must not restart the load.
 	useEffect(() => {
 		if (
 			profileLoaded ||
@@ -312,6 +345,16 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 				});
 			}
 
+			const readProfiles = () =>
+				Promise.all([
+					backend.userState.getSettingsProfile(),
+					backend.userState.getAllSettingsProfiles(),
+				]);
+			// An existing account answers both reads at once. On a first sign-in the
+			// early read may race the account's creation; it is then read again below.
+			const earlyProfiles = readProfiles();
+			earlyProfiles.catch(() => {});
+
 			for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 				if (cancelled) return;
 
@@ -339,10 +382,13 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 			if (cancelled) return;
 
 			try {
-				const [settingsProfile, allProfiles] = await Promise.all([
-					backend.userState.getSettingsProfile(),
-					backend.userState.getAllSettingsProfiles(),
-				]);
+				const [settingsProfile, allProfiles] = await earlyProfiles.catch(
+					(error) => {
+						if (error instanceof ApiResponseError && error.status === 401)
+							throw error;
+						return readProfiles();
+					},
+				);
 				if (cancelled) return;
 				if (settingsProfile && backend instanceof WebBackend) {
 					const profileKey = [backend.userState.getProfile.name || "backendFn"];

@@ -1,8 +1,10 @@
 pub use flow_like_types_contracts::app_chat;
 pub use flow_like_types_contracts::authorization;
 pub use flow_like_types_contracts::bot;
+pub use flow_like_types_contracts::bot_calendar;
 pub use flow_like_types_contracts::bot_connector;
 pub use flow_like_types_contracts::bot_effective;
+pub use flow_like_types_contracts::bot_mentions;
 pub use flow_like_types_contracts::bot_message;
 pub use flow_like_types_contracts::bot_notes;
 pub use flow_like_types_contracts::bot_notify;
@@ -10,6 +12,7 @@ pub use flow_like_types_contracts::bot_reply_files;
 pub use flow_like_types_contracts::bot_restrictions;
 pub use flow_like_types_contracts::bot_skill;
 pub use flow_like_types_contracts::bot_task;
+pub use flow_like_types_contracts::bot_team;
 pub use flow_like_types_contracts::bot_tool_trail;
 pub use flow_like_types_contracts::bot_turn;
 pub use flow_like_types_contracts::bot_user_context;

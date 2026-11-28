@@ -6,8 +6,59 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Bot turns that may lead to one message: a person's message carries 0, a bot's reply the
-/// answered turn's hops + 1, and a message with more than this many queues no turn.
+/// answered turn's hops + 1, and a message with more than this many queues no turn, unless it
+/// hands the word to a bot ([`hop_limit`]).
 pub const MAX_HOPS: u32 = 3;
+/// Rounds two bots may go back and forth in a room for one message from a person; a round is one
+/// message from each.
+pub const MAX_DISCUSSION_ROUNDS: u32 = 5;
+/// Rounds a person may allow for one longer discussion
+/// ([`crate::bot_message::DiscussionGrant`]).
+pub const MAX_LONG_DISCUSSION_ROUNDS: u32 = 20;
+/// Bot turns behind a message that still wake a bot it hands the word to ([`hands_over`]):
+/// [`MAX_DISCUSSION_ROUNDS`] messages from each of two bots.
+pub const MAX_DISCUSSION_HOPS: u32 = discussion_hops(MAX_DISCUSSION_ROUNDS);
+
+/// The bot turns a discussion of `rounds` rounds may reach: one message from each of two bots per
+/// round, the first at 0 hops.
+pub const fn discussion_hops(rounds: u32) -> u32 {
+    rounds.saturating_mul(2).saturating_sub(1)
+}
+
+/// The rounds a discussion that may reach `hops` bot turns has.
+pub const fn discussion_rounds(hops: u32) -> u32 {
+    hops.saturating_add(1) / 2
+}
+
+/// The most bot turns behind a message that still wake a recipient. A message that hands the
+/// recipient the word gets its chain's discussion budget: `discussion`, the hops a person allowed
+/// for it (at most [`MAX_LONG_DISCUSSION_ROUNDS`] rounds), or [`MAX_DISCUSSION_HOPS`]. Anything
+/// else gets [`MAX_HOPS`].
+pub fn hop_limit(handed_over: bool, discussion: Option<u32>) -> u32 {
+    if handed_over {
+        discussion.map_or(MAX_DISCUSSION_HOPS, |hops| {
+            hops.min(discussion_hops(MAX_LONG_DISCUSSION_ROUNDS))
+        })
+    } else {
+        MAX_HOPS
+    }
+}
+
+/// Whether a bot's message hands `bot_id` the word: in a group it @mentions the bot or replies to
+/// a message of it (`replies_to_bot`), so a forgotten mention doesn't end a discussion. An
+/// `ask_bot` question keeps [`MAX_HOPS`], and a message that proposes a longer discussion or ends
+/// it ([`crate::bot_message::MessageBody::rests_discussion`]) hands the word to no one.
+pub fn hands_over(
+    kind: crate::inbox::ConversationKind,
+    body: &crate::bot_message::MessageBody,
+    bot_id: &str,
+    replies_to_bot: bool,
+) -> bool {
+    kind == crate::inbox::ConversationKind::Group
+        && body.ask.is_none()
+        && !body.rests_discussion()
+        && (replies_to_bot || body.mentions.iter().any(|mention| mention == bot_id))
+}
 /// Turns one owner may have running at once.
 pub const MAX_RUNNING_PER_OWNER: usize = 3;
 /// Seconds a claim or heartbeat holds a turn before another host may take it.
@@ -270,6 +321,69 @@ pub fn room_message(name: &str, is_owner: bool, text: &str) -> String {
     }
 }
 
+/// One room message as [`talking_with`] reads it.
+#[derive(Debug, Clone, Copy)]
+pub struct RoomLine<'a> {
+    pub message_id: &'a str,
+    pub sender_id: &'a str,
+    pub mentions: &'a [String],
+    pub reply_to: Option<&'a str>,
+}
+
+/// Whom `line` names: `Some(Some(id))` for one member, by mention or by a reply to their message;
+/// `Some(None)` for several mentioned members; `None` when it names nobody.
+fn named_by<'a>(line: &RoomLine<'a>, lines: &[RoomLine<'a>]) -> Option<Option<&'a str>> {
+    let mut mentioned = line
+        .mentions
+        .iter()
+        .map(String::as_str)
+        .filter(|id| *id != line.sender_id);
+    if let Some(first) = mentioned.next() {
+        return Some(mentioned.all(|id| id == first).then_some(first));
+    }
+    let target = line.reply_to?;
+    let replied = lines
+        .iter()
+        .find(|other| other.message_id == target)?
+        .sender_id;
+    (replied != line.sender_id).then_some(Some(replied))
+}
+
+/// The member the sender of the last of `lines` (oldest first) is talking with. Their latest run
+/// of messages decides when one of them names someone; otherwise the member their message before
+/// that run named, or the one member who alone answered it. `None` when no single partner shows.
+pub fn talking_with<'a>(lines: &[RoomLine<'a>]) -> Option<&'a str> {
+    let speaker = lines.last()?.sender_id;
+    let run = lines
+        .iter()
+        .rposition(|line| line.sender_id != speaker)
+        .map_or(0, |at| at + 1);
+    if let Some(named) = lines[run..]
+        .iter()
+        .rev()
+        .find_map(|line| named_by(line, lines))
+    {
+        return named;
+    }
+    let previous = lines[..run]
+        .iter()
+        .rposition(|line| line.sender_id == speaker)?;
+    let mut answered: Vec<&'a str> = Vec::new();
+    for line in &lines[previous + 1..run] {
+        if !answered.contains(&line.sender_id) {
+            answered.push(line.sender_id);
+        }
+    }
+    match named_by(&lines[previous], lines) {
+        Some(Some(named)) => (answered.is_empty() || answered.contains(&named)).then_some(named),
+        Some(None) => None,
+        None => match answered.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        },
+    }
+}
+
 /// The start of a message a cut always keeps, so the speaker line survives notes that fill the
 /// whole budget.
 const MIN_CLIPPED_HEAD_CHARS: usize = 200;
@@ -314,6 +428,10 @@ pub struct BotTurn {
     pub error_code: Option<String>,
     /// Bot turns that led to the trigger message.
     pub hops: u32,
+    /// The bot turns a person allowed the turn's discussion to reach ([`hop_limit`]); `None`: the
+    /// default [`MAX_DISCUSSION_HOPS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion_hops: Option<u32>,
     #[serde(default)]
     pub owner_id: String,
     /// The person or bot whose message woke the turn; `None` on turns queued before it was recorded.
@@ -378,6 +496,122 @@ pub fn rate_limit_message_id(bot_id: &str, trigger_message_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hand_over_in_a_room_gets_the_discussion_budget() {
+        use crate::{
+            bot_message::{BotAsk, MessageBody},
+            inbox::ConversationKind,
+        };
+        assert_eq!(MAX_DISCUSSION_HOPS + 1, 2 * MAX_DISCUSSION_ROUNDS);
+        assert_eq!(
+            discussion_rounds(MAX_DISCUSSION_HOPS),
+            MAX_DISCUSSION_ROUNDS
+        );
+        assert_eq!(hop_limit(true, None), MAX_DISCUSSION_HOPS);
+        assert_eq!(hop_limit(false, None), MAX_HOPS);
+        assert_eq!(hop_limit(true, Some(discussion_hops(12))), 23);
+        assert_eq!(hop_limit(false, Some(discussion_hops(12))), MAX_HOPS);
+        assert_eq!(
+            hop_limit(true, Some(u32::MAX)),
+            discussion_hops(MAX_LONG_DISCUSSION_ROUNDS),
+            "a declared budget never passes what a person may allow"
+        );
+        use crate::bot_message::DiscussionGrant;
+        assert_eq!(DiscussionGrant { rounds: 12 }.hops(), Some(23));
+        assert_eq!(DiscussionGrant { rounds: 1 }.hops(), Some(1));
+        assert_eq!(DiscussionGrant { rounds: 0 }.hops(), None);
+        assert_eq!(
+            DiscussionGrant {
+                rounds: MAX_LONG_DISCUSSION_ROUNDS + 1
+            }
+            .hops(),
+            None
+        );
+        let naming = MessageBody {
+            text: "@Story what do you think?".into(),
+            mentions: vec!["bot_story".into()],
+            ..MessageBody::default()
+        };
+        assert!(hands_over(
+            ConversationKind::Group,
+            &naming,
+            "bot_story",
+            false
+        ));
+        assert!(!hands_over(
+            ConversationKind::Group,
+            &naming,
+            "bot_tiro",
+            false
+        ));
+        assert!(!hands_over(
+            ConversationKind::Direct,
+            &naming,
+            "bot_story",
+            false
+        ));
+        let untagged = MessageBody {
+            text: "I'd keep the second supplier.".into(),
+            reply_to: Some("m_story".into()),
+            ..MessageBody::default()
+        };
+        assert!(
+            hands_over(ConversationKind::Group, &untagged, "bot_story", true),
+            "a reply to the partner hands the word back without a mention"
+        );
+        assert!(!hands_over(
+            ConversationKind::Group,
+            &untagged,
+            "bot_story",
+            false
+        ));
+        use crate::bot_message::{DiscussionOutcome, DiscussionProposal};
+        let ended = MessageBody {
+            discussion_outcome: Some(DiscussionOutcome {
+                agreed: true,
+                summary: "Supplier B, from March.".into(),
+            }),
+            ..untagged.clone()
+        };
+        assert!(!hands_over(
+            ConversationKind::Group,
+            &ended,
+            "bot_story",
+            true
+        ));
+        let proposing = MessageBody {
+            discussion_proposal: Some(DiscussionProposal {
+                rounds: 10,
+                reason: "Three suppliers to compare".into(),
+            }),
+            ..naming.clone()
+        };
+        assert!(!hands_over(
+            ConversationKind::Group,
+            &proposing,
+            "bot_story",
+            true
+        ));
+        let question = MessageBody {
+            ask: Some(BotAsk {
+                id: "ask_1".into(),
+                origin_conversation: "c_origin".into(),
+                hops: 1,
+                reply_by: "2026-11-30T00:00:00Z".into(),
+                chain: vec!["bot_tiro".into()],
+                wait_secs: 0,
+                round: 1,
+            }),
+            ..naming
+        };
+        assert!(!hands_over(
+            ConversationKind::Group,
+            &question,
+            "bot_story",
+            true
+        ));
+    }
 
     #[test]
     fn a_cut_message_keeps_its_notes_whole() {
@@ -527,6 +761,120 @@ mod tests {
         );
     }
 
+    struct Said {
+        id: &'static str,
+        by: &'static str,
+        mentions: Vec<String>,
+        reply_to: Option<&'static str>,
+    }
+
+    fn said(id: &'static str, by: &'static str) -> Said {
+        Said {
+            id,
+            by,
+            mentions: Vec::new(),
+            reply_to: None,
+        }
+    }
+
+    fn mentioning(mut line: Said, ids: &[&str]) -> Said {
+        line.mentions = ids.iter().map(|id| id.to_string()).collect();
+        line
+    }
+
+    fn replying(mut line: Said, to: &'static str) -> Said {
+        line.reply_to = Some(to);
+        line
+    }
+
+    fn partner(said: &[Said]) -> Option<String> {
+        let lines: Vec<RoomLine<'_>> = said
+            .iter()
+            .map(|line| RoomLine {
+                message_id: line.id,
+                sender_id: line.by,
+                mentions: &line.mentions,
+                reply_to: line.reply_to,
+            })
+            .collect();
+        talking_with(&lines).map(str::to_owned)
+    }
+
+    #[test]
+    fn an_unmarked_follow_up_continues_with_the_one_member_who_answered() {
+        let lines = [
+            said("m1", "felix"),
+            replying(said("m2", "story"), "m1"),
+            said("m3", "felix"),
+        ];
+        assert_eq!(partner(&lines).as_deref(), Some("story"));
+    }
+
+    #[test]
+    fn several_answers_or_a_first_message_show_no_partner() {
+        let both = [
+            said("m1", "felix"),
+            replying(said("m2", "story"), "m1"),
+            replying(said("m3", "tiro"), "m1"),
+            said("m4", "felix"),
+        ];
+        assert_eq!(partner(&both), None);
+        assert_eq!(partner(&[said("m1", "tiro"), said("m2", "felix")]), None);
+        assert_eq!(partner(&[]), None);
+    }
+
+    #[test]
+    fn a_mention_or_reply_in_the_latest_run_names_the_partner() {
+        let switched = [
+            said("m1", "felix"),
+            replying(said("m2", "story"), "m1"),
+            mentioning(said("m3", "felix"), &["tiro"]),
+            said("m4", "felix"),
+        ];
+        assert_eq!(partner(&switched).as_deref(), Some("tiro"));
+        let reply = [
+            said("m1", "felix"),
+            replying(said("m2", "tiro"), "m1"),
+            replying(said("m3", "story"), "m1"),
+            replying(said("m4", "felix"), "m2"),
+        ];
+        assert_eq!(partner(&reply).as_deref(), Some("tiro"));
+        let several = [
+            said("m1", "felix"),
+            replying(said("m2", "story"), "m1"),
+            mentioning(said("m3", "felix"), &["story", "tiro"]),
+        ];
+        assert_eq!(partner(&several), None);
+    }
+
+    #[test]
+    fn the_previous_message_s_addressee_holds_until_someone_else_answers_instead() {
+        let pending = [
+            mentioning(said("m1", "felix"), &["story"]),
+            said("m2", "felix"),
+        ];
+        assert_eq!(partner(&pending).as_deref(), Some("story"));
+        let joined = [
+            mentioning(said("m1", "felix"), &["story"]),
+            replying(said("m2", "story"), "m1"),
+            said("m3", "tiro"),
+            said("m4", "felix"),
+        ];
+        assert_eq!(partner(&joined).as_deref(), Some("story"));
+        let other = [
+            mentioning(said("m1", "felix"), &["story"]),
+            said("m2", "anna"),
+            said("m3", "felix"),
+        ];
+        assert_eq!(partner(&other), None);
+    }
+
+    #[test]
+    fn people_talking_together_are_partners_too() {
+        let lines = [said("m1", "felix"), said("m2", "anna"), said("m3", "felix")];
+        assert_eq!(partner(&lines).as_deref(), Some("anna"));
+    }
+
     #[test]
     fn a_turn_serializes_with_lowercase_ids_and_no_empty_batch() {
         let turn = BotTurn {
@@ -542,6 +890,7 @@ mod tests {
             reply_message_id: None,
             error_code: None,
             hops: 0,
+            discussion_hops: None,
             owner_id: "user_a".into(),
             requester_id: Some("user_a".into()),
             requester_name: None,

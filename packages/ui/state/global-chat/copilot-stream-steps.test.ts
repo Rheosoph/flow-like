@@ -220,6 +220,23 @@ describe("tool activity lifecycle", () => {
 		expect(acc.steps.get("thinking-1")?.detail).toBeUndefined();
 	});
 
+	test("shows context checkpoints as progress, not as thinking", () => {
+		const acc = createStreamAccumulator();
+		applyStreamEvent(acc, {
+			type: "plan_step",
+			data: {
+				id: "checkpoint_3",
+				tool_name: "context_checkpoint",
+				description: "Summarizing earlier steps so the work can continue",
+				status: "progress",
+			},
+		});
+		const step = acc.steps.get("checkpoint_3");
+		expect(step?.title).not.toBe("Thinking");
+		expect(step?.reasoning).toBeUndefined();
+		expect(step?.detail).toMatchObject({ label: "Saving progress" });
+	});
+
 	test("retains request context and timing through progress, completion and plan updates", () => {
 		const acc = createStreamAccumulator();
 		applyStreamEvent(acc, { type: "text", text: "Checking the license. " });

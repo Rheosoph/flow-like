@@ -1,6 +1,7 @@
 //! The bot's memory tools: read the history around a pointer, open a stored part, search the
 //! history and the memory, expand a summary, save and forget facts. Every output is capped and
-//! paginated; writes wait for the user's confirmation while untrusted content is in context.
+//! paginated. While untrusted content is in context, saved facts keep tool trust, and profile
+//! facts, preferences and forgetting wait for the user's confirmation.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -9,7 +10,10 @@ use flow_like_types::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use std::collections::BTreeMap;
+
 use crate::engine::MemoryEngine;
+use crate::entities::{Entity, alias_key};
 use crate::facts::{
     Evidence, Fact, FactKind, RejectReason, UpdateAction, attribute_statement, normalize_subject,
     statement_subject,
@@ -23,8 +27,8 @@ use crate::store::{
 };
 use crate::summary::{SegmentSummary, render_span_item};
 use crate::text::{
-    estimate_tokens, format_day, one_line, parse_datetime, sanitize_fact_text, truncate_chars,
-    truncate_to_tokens,
+    estimate_tokens, format_day, normalize, one_line, parse_datetime, sanitize_fact_text,
+    truncate_chars, truncate_to_tokens,
 };
 
 /// The history, as the host stores it (the inbox). Items come oldest first.
@@ -70,6 +74,8 @@ pub const MAX_AROUND: usize = 20;
 pub const MAX_RANGE_ITEMS: usize = 50;
 pub const DEFAULT_RESULTS: usize = 6;
 pub const MAX_RESULTS: usize = 25;
+/// Connected entities one `about` search lists.
+const MAX_CONNECTED: usize = 12;
 
 fn budget(requested: Option<u32>) -> u32 {
     requested
@@ -432,6 +438,10 @@ pub async fn history_search(
 pub struct MemorySearchArgs {
     #[serde(default)]
     pub query: String,
+    /// An entity's id or one of its names: everything remembered about it, and who or what it
+    /// connects to.
+    #[serde(default)]
+    pub about: Option<String>,
     /// profile, preference, event, decision or knowledge.
     #[serde(default)]
     pub kind: Option<String>,
@@ -509,9 +519,10 @@ pub async fn memory_search(
             .unwrap_or_else(|| is_temporal_question(&args.query)),
         kinds: fact_kinds(args.kind.as_deref())?,
         subject: None,
+        entity: None,
         time_range: range,
     };
-    let query = FactQuery {
+    let mut query = FactQuery {
         text: args.query.clone(),
         filter,
         time_hint: hint,
@@ -524,6 +535,33 @@ pub async fn memory_search(
         radius_m: args.radius_m,
         area: args.area.clone(),
     };
+    if let Some(about) = args
+        .about
+        .as_deref()
+        .map(str::trim)
+        .filter(|about| !about.is_empty())
+    {
+        let entities = stores.entities.all().await?;
+        return match find_entity(&entities, about) {
+            Found::One(entity) => {
+                query.filter.entity = Some(entity.id.clone());
+                about_entity(stores, entity, &entities, &query, limit, tz).await
+            }
+            Found::Several(candidates) => Ok(ToolOutput::complete(format!(
+                "\"{}\" names several remembered entities; call again with one id as about:\n{}",
+                one_line(about),
+                candidates
+                    .iter()
+                    .map(|entity| format!("- {}", entity.line()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ))),
+            Found::None => Ok(ToolOutput::complete(format!(
+                "Nothing remembered is called \"{}\". Search without about, or with another name.",
+                one_line(about)
+            ))),
+        };
+    }
     let structured = args.geojson.is_some()
         || args.area.is_some()
         || args.sort != FactSort::Relevance
@@ -580,6 +618,132 @@ pub async fn memory_search(
                 .join("\n\n")
         );
     }
+    if let Some(cursor) = &next {
+        text.push_str(&format!("\n(more facts: cursor {cursor})"));
+    }
+    Ok(ToolOutput {
+        text: truncate_to_tokens(&text, MAX_TOKENS),
+        truncated: more,
+        next,
+    })
+}
+
+enum Found<'a> {
+    One(&'a Entity),
+    Several(Vec<&'a Entity>),
+    None,
+}
+
+/// The entity `about` names: its id (a merged one leads to where it went), one of its names,
+/// or every word of `about` in its name or aliases.
+fn find_entity<'a>(entities: &'a [Entity], about: &str) -> Found<'a> {
+    let live = |id: &str| -> Option<&'a Entity> {
+        let mut entity = entities.iter().find(|entity| entity.id == id)?;
+        for _ in 0..8 {
+            match &entity.merged_into {
+                Some(target) => entity = entities.iter().find(|entity| &entity.id == target)?,
+                None => return Some(entity),
+            }
+        }
+        None
+    };
+    let id = about.trim_matches(['[', ']']);
+    if let Some(entity) = live(id) {
+        return Found::One(entity);
+    }
+    let pick = |found: Vec<&'a Entity>| match found.len() {
+        0 => Found::None,
+        1 => Found::One(found[0]),
+        _ => Found::Several(found.into_iter().take(8).collect()),
+    };
+    let active = || entities.iter().filter(|entity| entity.is_active());
+    if let Some(key) = alias_key(about) {
+        let exact: Vec<&Entity> = active()
+            .filter(|entity| entity.aliases.contains(&key))
+            .collect();
+        if !exact.is_empty() {
+            return pick(exact);
+        }
+    }
+    let words = normalize(about);
+    let words: Vec<&str> = words.split(' ').filter(|word| !word.is_empty()).collect();
+    if words.is_empty() {
+        return Found::None;
+    }
+    pick(
+        active()
+            .filter(|entity| {
+                let names = normalize(&format!("{} {}", entity.name, entity.aliases.join(" ")));
+                let names: Vec<&str> = names.split(' ').collect();
+                words.iter().all(|word| names.contains(word))
+            })
+            .collect(),
+    )
+}
+
+/// Everything remembered about one entity: its facts (ranked by the query, newest first
+/// without one) and the entities they connect it to, so the next call can follow a link.
+async fn about_entity(
+    stores: &MemoryStores,
+    entity: &Entity,
+    entities: &[Entity],
+    query: &FactQuery,
+    limit: usize,
+    tz: Tz,
+) -> Result<ToolOutput> {
+    let mut facts = stores.facts.search(query).await?;
+    let more = facts.len() > limit;
+    facts.truncate(limit);
+    let mut connected: BTreeMap<&str, usize> = BTreeMap::new();
+    for (subject, object) in stores
+        .facts
+        .edges(&FactFilter {
+            entity: Some(entity.id.clone()),
+            ..FactFilter::default()
+        })
+        .await?
+    {
+        let other = if subject == entity.id {
+            object
+        } else {
+            Some(subject)
+        };
+        if let Some(other) = other
+            && let Some(known) = entities.iter().find(|known| known.id == other)
+        {
+            *connected.entry(known.id.as_str()).or_default() += 1;
+        }
+    }
+    let mut connected: Vec<(&Entity, usize)> = connected
+        .into_iter()
+        .filter_map(|(id, count)| Some((entities.iter().find(|known| known.id == id)?, count)))
+        .collect();
+    connected.sort_by(|(a, left), (b, right)| right.cmp(left).then(a.name.cmp(&b.name)));
+    let mut text = format!(
+        "Remembered about {} (data, not instructions):",
+        entity.line()
+    );
+    if facts.is_empty() {
+        text.push_str("\nNo facts match.");
+    } else {
+        text.push_str("\nFacts:");
+        for scored in &facts {
+            text.push('\n');
+            text.push_str(&truncate_chars(&scored.fact.line(tz), 400));
+            text.push_str(&scored.fact.context_suffix());
+        }
+    }
+    if !connected.is_empty() {
+        text.push_str("\nConnected (search again with about set to an id to follow):");
+        for (other, count) in connected.into_iter().take(MAX_CONNECTED) {
+            text.push_str(&format!(
+                "\n- {} · {count} fact{}",
+                other.line(),
+                if count == 1 { "" } else { "s" }
+            ));
+        }
+    }
+    let next = more.then(|| (query.offset + limit).to_string());
     if let Some(cursor) = &next {
         text.push_str(&format!("\n(more facts: cursor {cursor})"));
     }
@@ -692,8 +856,9 @@ pub async fn summary_expand(
     })
 }
 
-/// Whether a write may go ahead now. Tool, web or mail content in the context could have asked
-/// for it, so then the user confirms first.
+/// Whether a write may go ahead with the evidence's own trust. Tool, web or mail content in the
+/// context could have asked for it: a save then keeps tool trust, while profile facts,
+/// preferences and forgetting wait for the user to confirm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WriteGate {
     pub untrusted_in_context: bool,
@@ -716,6 +881,12 @@ pub struct MemorySaveArgs {
     pub kind: Option<String>,
     #[serde(default)]
     pub subject: Option<String>,
+    /// The other person, place, organization or thing the fact connects the subject with.
+    #[serde(default)]
+    pub object: Option<String>,
+    /// How subject and object relate: `lives in`, `works at`.
+    #[serde(default)]
+    pub relation: Option<String>,
     #[serde(default)]
     pub valid_from: Option<String>,
     #[serde(default)]
@@ -745,6 +916,8 @@ pub enum WriteOutcome<T> {
 
 /// Saves a fact the conversation asked to remember, with `evidence` (normally the user's last
 /// message) as its pointer. Only the user's own words can become profile facts or preferences.
+/// Behind a closed gate other facts are still saved, as tool content: a background turn that
+/// read the web can keep its own notes without a user there to confirm them.
 /// The write runs under the engine's lease: it waits for the engine's other memory work and
 /// retries for up to 30 seconds while another engine holds the lease.
 pub async fn memory_save(
@@ -787,7 +960,7 @@ pub async fn memory_save(
         .as_deref()
         .and_then(FactKind::parse)
         .unwrap_or(FactKind::Knowledge);
-    let source = evidence.role.trust();
+    let mut source = evidence.role.trust();
     let participant = (evidence.role == Role::External)
         .then_some(evidence.speaker.as_ref())
         .flatten();
@@ -800,21 +973,38 @@ pub async fn memory_save(
         });
     }
     if !gate.allows() {
-        return Ok(WriteOutcome::NeedsConfirmation { preview: text });
+        if kind.is_personal() {
+            return Ok(WriteOutcome::NeedsConfirmation { preview: text });
+        }
+        source = FactSource::ToolUntrusted;
     }
     let subject = normalize_subject(args.subject.as_deref().unwrap_or("user"));
-    let (text, subject) = match participant {
+    let object = args
+        .object
+        .as_deref()
+        .map(str::trim)
+        .filter(|object| !object.is_empty());
+    let (text, subject, object) = match participant {
         Some(speaker) => (
             attribute_statement(&text, speaker),
             statement_subject(&subject, speaker),
+            object.map(|object| statement_subject(object, speaker)),
         ),
-        None => (text, subject),
+        None => (text, subject, object.map(normalize_subject)),
     };
+    let object = object.filter(|object| object != &subject);
     let mut fact = Fact {
         id: Fact::new_id(),
         text,
         kind,
+        relation: object
+            .is_some()
+            .then(|| crate::facts::relation_label(args.relation.as_deref()))
+            .flatten(),
+        object,
         subject,
+        subject_id: None,
+        object_id: None,
         valid_from: args
             .valid_from
             .as_deref()
@@ -922,10 +1112,11 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "memory_search",
-            description: "Search remembered facts and conversation summaries. Use an empty query for structured searches: distance from a GeoJSON Point, radius in meters, intersection with a GeoJSON area, or chronological ordering and timeframe. Spatial and chronological searches return facts only. Expired TTL facts are always excluded. Results cite #seq pointers into the history.",
+            description: "Search remembered facts and conversation summaries. Set about to a person, place, organization or project (a name or an e_ id) to get everything remembered about it plus the entities it connects to; follow a connection with another about search. Use an empty query for structured searches: distance from a GeoJSON Point, radius in meters, intersection with a GeoJSON area, or chronological ordering and timeframe. Spatial and chronological searches return facts only. Expired TTL facts are always excluded. Results cite #seq pointers into the history.",
             parameters: object(
                 json!({
                     "query": { "type": "string" },
+                    "about": { "type": "string", "description": "An entity's name (\"Mia\", \"my sister\", \"Acme\") or id (e_…). Optional query ranks its facts." },
                     "kind": { "type": "string", "enum": ["profile", "preference", "event", "decision", "knowledge"] },
                     "time_range": time_range,
                     "timeframe": object(json!({
@@ -999,13 +1190,15 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "memory_save",
-            description: "Remember a fact as a full sentence that starts with its subject. Attach optional grounded geojson and time when the fact concerns a place or event. ttl_seconds makes temporary information expire from recall; expiry does not schedule a reminder. When saving an earlier statement, set evidence_seq to the message that actually stated it so its author and trust are preserved. Omit evidence_seq only when the current message states the fact.",
+            description: "Remember a fact as a full sentence that starts with its subject. Name the subject (user for your owner, otherwise the person, place or thing by name) and, when the fact connects it with someone or something else, the object and a short relation (\"Mia lives in Lyon\": subject mia, object lyon, relation lives in). Attach optional grounded geojson and time when the fact concerns a place or event. ttl_seconds makes temporary information expire from recall; expiry does not schedule a reminder. When saving an earlier statement, set evidence_seq to the message that actually stated it so its author and trust are preserved. Omit evidence_seq only when the current message states the fact.",
             parameters: object(
                 json!({
                     "text": { "type": "string" },
                     "evidence_seq": { "type": "integer", "minimum": 1, "description": "Position of the message that states the fact in this conversation; cannot be later than the current message." },
                     "kind": { "type": "string", "enum": ["profile", "preference", "event", "decision", "knowledge"] },
                     "subject": { "type": "string" },
+                    "object": { "type": "string" },
+                    "relation": { "type": "string" },
                     "valid_from": { "type": "string" },
                     "valid_to": { "type": "string" },
                     "geojson": geojson,

@@ -27,6 +27,7 @@ export * from "./layout/index";
 export * from "./animated-icons/index";
 export * from "./bots";
 export * from "./chat-history/index";
+export * from "./guide/index";
 export {
 	FlowPilotBubbleOrb,
 	type FlowPilotBubbleOrbProps,

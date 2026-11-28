@@ -134,7 +134,7 @@ describe("the room layout", () => {
 });
 
 describe("without a layout", () => {
-	test("your message keeps its Asked card and the inline copy row", async () => {
+	test("your message keeps its Asked card with hover actions in its header", async () => {
 		const { MessageComponent } = await import("./message");
 		const { container, root } = await setup();
 
@@ -147,7 +147,10 @@ describe("without a layout", () => {
 		expect(card?.className).not.toContain("bg-muted");
 		expect(container.textContent).toContain("Asked");
 		expect(container.querySelector("[data-fl-chat-room-actions]")).toBeNull();
-		expect(copyIn(container)).not.toBeNull();
+		const copy = copyIn(container);
+		expect(copy?.closest("[data-fl-chat-hover-action]")).not.toBeNull();
+		expect(copy?.closest(".absolute")).toBeNull();
+		expect(container.querySelector(".h-6.w-full")).toBeNull();
 	});
 
 	test("an answer keeps its padding and the persistent copy row", async () => {

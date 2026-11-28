@@ -1396,6 +1396,71 @@ impl Dispatcher {
         Ok(Some(tenant_id))
     }
 
+    /// Start up to `count` executor environments for `user_id` before a page open's runs reach
+    /// them. A fresh environment is still building its node registry after init, and its first
+    /// run waits for the rest; a warm-up absorbs that wait. Only the streaming Lambda backend
+    /// starts environments per request. Best effort: a failed warm-up only costs the start it
+    /// would have hidden.
+    pub async fn warm_executors(&self, user_id: &str, count: usize) {
+        #[cfg(feature = "lambda")]
+        {
+            if self.config.backend == ExecutionBackend::LambdaStream
+                && count > 0
+                && let Err(error) = self.warm_lambda_executors(user_id, count).await
+            {
+                tracing::debug!(error = %error, "Executor warm-up skipped");
+            }
+        }
+        #[cfg(not(feature = "lambda"))]
+        let _ = (user_id, count);
+    }
+
+    #[cfg(feature = "lambda")]
+    async fn warm_lambda_executors(
+        &self,
+        user_id: &str,
+        count: usize,
+    ) -> Result<(), DispatchError> {
+        let function_name = self.config.lambda_function_name.as_ref().ok_or_else(|| {
+            DispatchError::Configuration("LAMBDA_EXECUTOR_FUNCTION not configured".into())
+        })?;
+        let client = self
+            .lambda_client
+            .as_ref()
+            .ok_or_else(|| DispatchError::Configuration("Lambda client not initialized".into()))?;
+        let tenant_id = self.lambda_tenant_id_for_user(user_id)?;
+        let payload = serde_json::to_vec(&wrap_as_apigw_v2_event("/warm", serde_json::json!({})))
+            .map_err(|e| DispatchError::Serialization(e.to_string()))?;
+        let invokes = (0..count).map(|_| {
+            let mut invoke = client
+                .invoke()
+                .function_name(function_name)
+                .invocation_type(aws_sdk_lambda::types::InvocationType::Event)
+                .payload(aws_sdk_lambda::primitives::Blob::new(payload.clone()));
+            if let Some(tenant_id) = tenant_id.as_deref() {
+                invoke = invoke.tenant_id(tenant_id);
+            }
+            invoke.send()
+        });
+        let results = futures::future::join_all(invokes)
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "aws.lambda.warm",
+                cloud.service = "lambda",
+                warm.count = count
+            ))
+            .await;
+        for result in results {
+            if let Err(error) = result {
+                tracing::debug!(
+                    error = %lambda_dispatch_error(error, tenant_id.is_some()),
+                    "Executor warm-up invoke failed"
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "lambda")]
     fn lambda_tenant_id_for_user(&self, user_id: &str) -> Result<Option<String>, DispatchError> {
         let enabled = *LAMBDA_TENANT_ISOLATION
@@ -2578,7 +2643,7 @@ fn lambda_invoke_complete_error(
 /// the body of an `application/vnd.awslambda.http-integration-response`
 /// streaming response.
 #[cfg(any(feature = "lambda", test))]
-const LAMBDA_PRELUDE_SEPARATOR: [u8; 8] = [0; 8];
+pub(crate) const LAMBDA_PRELUDE_SEPARATOR: [u8; 8] = [0; 8];
 
 /// A real prelude is a small JSON object (status, headers, cookies). Anything
 /// still unterminated past this many bytes is body data, not a prelude.
@@ -2591,7 +2656,7 @@ const LAMBDA_PRELUDE_ERROR_BODY_CAP: usize = 4 * 1024;
 
 #[cfg(any(feature = "lambda", test))]
 #[derive(Debug, PartialEq, Eq)]
-enum LambdaPreludeScan {
+pub(crate) enum LambdaPreludeScan {
     /// More bytes are needed to decide.
     Incomplete,
     /// The bytes are not the http-integration-response format.
@@ -2601,7 +2666,7 @@ enum LambdaPreludeScan {
 }
 
 #[cfg(any(feature = "lambda", test))]
-fn scan_lambda_http_prelude(buffer: &[u8]) -> LambdaPreludeScan {
+pub(crate) fn scan_lambda_http_prelude(buffer: &[u8]) -> LambdaPreludeScan {
     let Some(first) = buffer.first() else {
         return LambdaPreludeScan::Incomplete;
     };
@@ -2705,18 +2770,32 @@ async fn confirm_lambda_stream_prelude(
 /// Lambda SDK invocation rather than HTTP.
 #[cfg(feature = "lambda")]
 fn wrap_as_apigw_v2_event(path: &str, body: serde_json::Value) -> serde_json::Value {
+    use hyper::http::{HeaderMap, header::CONTENT_TYPE};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+    apigw_v2_event(
+        path,
+        &serde_json::to_vec(&body).unwrap_or_default(),
+        headers,
+    )
+}
+
+/// A `POST` of `body` to `path` with `headers`, as the API Gateway v2 event `lambda_http`
+/// turns back into an HTTP request.
+#[cfg(feature = "lambda")]
+pub(crate) fn apigw_v2_event(
+    path: &str,
+    body: &[u8],
+    headers: hyper::http::HeaderMap,
+) -> serde_json::Value {
     use aws_lambda_events::apigw::{
         ApiGatewayV2httpRequest, ApiGatewayV2httpRequestContext,
         ApiGatewayV2httpRequestContextHttpDescription,
     };
-    use hyper::http::{HeaderMap, Method, header::CONTENT_TYPE};
+    use hyper::http::Method;
 
-    let body_string = serde_json::to_string(&body).unwrap_or_default();
-    let body_base64 =
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &body_string);
-
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+    let body_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, body);
 
     let now = chrono::Utc::now();
 

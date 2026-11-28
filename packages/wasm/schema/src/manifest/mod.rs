@@ -8,7 +8,8 @@ mod permissions;
 #[cfg(feature = "nodes")]
 pub use node::PackageNodeEntry;
 pub use package::{
-    MANIFEST_VERSION, PackageAuthor, PackageManifest, PackageSkillEntry, PackageWidgetEntry, WasmPackageCategory,
+    MANIFEST_VERSION, PackageAuthor, PackageManifest, PackageSkillEntry, PackageWidgetEntry,
+    WasmPackageCategory,
 };
 pub use permissions::{
     DatabasePermissions, FileSystemPermissions, MemoryTier, NetworkPermissions,

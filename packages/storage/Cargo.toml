@@ -26,9 +26,9 @@ lance-datafusion = { version = "=13.0.0", optional = true }
 lance-index = { version = "=13.0.0", features = ["geo"], optional = true }
 lance-file = { version = "=13.0.0", optional = true }
 lance-table = { version = "=13.0.0", optional = true }
-arrow-array = { version = "=58.4.0", optional = true }
-arrow-schema = { version = "=58.4.0", features = ["serde"], optional = true }
-arrow = { version = "=58.4.0", optional = true }
+arrow-array = { version = "=58.4.2", optional = true }
+arrow-schema = { version = "=58.4.2", features = ["serde"], optional = true }
+arrow = { version = "=58.4.2", optional = true }
 serde_arrow = { version = "0.14.2", features = ["arrow-58"], optional = true }
 blake3 = { workspace = true, features = ["rayon"], optional = true }
 futures = { workspace = true, optional = true }

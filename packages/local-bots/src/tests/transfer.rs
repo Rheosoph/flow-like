@@ -933,6 +933,7 @@ async fn the_check_sends_the_local_id_as_import_key_with_settings_apps_and_creat
             "classification": { "classification": "internal", "pii": false },
             "capabilities": ["internet", "computer_use"],
             "profile_id": "profile-1",
+            "calendar_wake": serde_json::to_value(flow_like_types::bot_calendar::CalendarWake::default()).unwrap(),
             "location": "desktop",
             "device_id": null,
             "app_ids": ["app-1", "app-2"],
@@ -1032,7 +1033,9 @@ async fn entries_from_senders_outside_the_chat_and_the_account_stay_out_and_are_
         json!({ "text": "old" }),
     );
     w.f.store.remove_member(&w.team, &old.id).unwrap();
-    w.f.store.delete_bot(&gone.id).unwrap();
+    w.f.store
+        .delete_bot(&gone.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     moved_earlier(&w.f, &old, "bot_old");
     w.hub.add_bot("bot_old");
 
@@ -1067,6 +1070,7 @@ async fn a_move_carries_connectors_and_leaves_oauth_grants_behind_with_a_warning
         grant: grant.map(str::to_string),
         scopes: Vec::new(),
         default_policy: None,
+        calendar_url: None,
     };
     for request in [
         connector("Docs", ConnectorAuth::None, None),

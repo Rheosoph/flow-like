@@ -69,6 +69,8 @@ pub struct NativeRunOptions {
     pub trail: Option<flow_like::flow::copilot::ToolTrail>,
     /// Collects the files the bot attaches to its reply; set by hosts that store the reply.
     pub reply_files: Option<flow_like::flow::copilot::ReplyFiles>,
+    /// The longer discussion a room turn proposes, for the host that posts it on the reply.
+    pub discussion: Option<flow_like::flow::copilot::bot_discussion::DiscussionReply>,
     /// Shared or unreadable interactive conversation metadata forbids legacy memory writes.
     pub legacy_memory_read_only: bool,
     /// An interactive inbox run's explicit owner-memory permission. Missing metadata denies
@@ -103,6 +105,8 @@ pub struct NativeRunOptions {
     pub bot_turn_id: Option<String>,
     /// A headless live-call turn's reply as the model writes it, for the call on this computer.
     pub reply_stream: Option<flow_like::flow::copilot::reply_stream::ReplySink>,
+    /// The person asked to compact the conversation before this reply.
+    pub compaction_requested: bool,
 }
 
 impl NativeRunOptions {
@@ -570,6 +574,41 @@ pub fn supports(tool: &str, args: &Value) -> bool {
         || super::native_specialist_tools::supports(tool)
 }
 
+/// Native platform tools that only read.
+const READ_ONLY_TOOLS: &[&str] = &[
+    "http_request",
+    "research_agent",
+    "project_scout",
+    "list_apps",
+    "describe_app_interface",
+    "get_app_detail",
+    "search_apps",
+    "inspect_app",
+    "get_template_preview",
+    "fork_preview",
+    "search_templates",
+    "read_flowscript_source",
+    "search_workspace",
+    "read_symbol",
+    "graph_query_tool",
+    "query_execution_logs",
+    "ui_inspect",
+    "get_home_context",
+    "get_home_widget_catalog",
+    "list_home_data_sources",
+    "validate_home_layout",
+];
+
+/// Whether a finished call may have changed data the app's views show, so the windows refetch
+/// them. Reads and the bot's own browser, screen and web calls leave them as they were: a bot
+/// taking a `browser_snapshot` every few seconds refetched every query each time.
+pub fn may_change_views(tool: &str) -> bool {
+    if let Some(spec) = flow_like_bot_tools::spec(tool) {
+        return spec.mutating && !matches!(spec.module, "browser" | "computer" | "web");
+    }
+    !READ_ONLY_TOOLS.contains(&tool)
+}
+
 pub async fn execute(
     app: &AppHandle,
     tool: &str,
@@ -693,6 +732,32 @@ fn mutates_app(tool: &str, args: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_calls_that_can_change_app_data_refresh_views() {
+        for tool in [
+            "browser_snapshot",
+            "browser_act",
+            "computer_screenshot",
+            "web_request",
+            "file_read",
+            "list_apps",
+            "http_request",
+        ] {
+            assert!(!may_change_views(tool), "{tool} must not refresh views");
+        }
+        for tool in [
+            "file_write",
+            "create_bot",
+            "create_app",
+            "upsert_event",
+            "database_tool",
+            "flowpilot_board",
+            "shell_run",
+        ] {
+            assert!(may_change_views(tool), "{tool} must refresh views");
+        }
+    }
 
     #[test]
     fn inbox_binding_is_owned_by_the_run_and_inherited_by_children() {

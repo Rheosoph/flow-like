@@ -537,6 +537,20 @@ pub(crate) async fn storage(
             "Storage authorization changed while credentials were issued; retry the lease",
         ));
     }
+    crate::audit::storage_access::authorize_instance_storage(
+        state,
+        crate::audit::storage_access::InstanceStorageAuthorization {
+            instance_id: &a.claims.instance_id,
+            device_id: &a.claims.device_id,
+            grant_id: &a.claims.grant_id,
+            subject: &a.claims.sub,
+            app_id: &a.claims.project_id,
+            write: access == OnlineProjectAccess::ReadWrite,
+            expiration: issued.expires_at,
+            credentials: &issued.credentials,
+        },
+    )
+    .await?;
     audit(
         state,
         &a.claims,

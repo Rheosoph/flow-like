@@ -27,7 +27,12 @@ const SENDER_OPTIONS: Readonly<
 };
 
 const PERSON_CAP =
-	" Messages from people other than you count toward a cap of 20 turns per person per day.";
+	" Messages from people other than you count toward a cap of 20 turns per person per day, together with the turns bots take in a discussion their message started.";
+
+const DISCUSSION_MESSAGES = 10;
+const LONG_DISCUSSION_MESSAGES = 40;
+const BOT_CAP =
+	" Turns that bots start for each other count toward a daily cap, and toward the 20-turn cap of the person whose message started the chain.";
 
 function wakeOutcome(
 	place: Place,
@@ -35,6 +40,7 @@ function wakeOutcome(
 	mentioned: boolean,
 	reply: boolean,
 	mentionedOnly: boolean,
+	followUp: boolean,
 ): Outcome {
 	const cap = sender === "person" ? PERSON_CAP : "";
 	if (place === "direct") {
@@ -45,25 +51,39 @@ function wakeOutcome(
 		};
 	}
 	if (sender === "bot") {
-		return mentioned || reply
-			? {
-					tone: "good",
-					title: "It answers",
-					detail:
-						"A bot's message wakes another bot only when it mentions or replies to it. Chains stop after 3 hops, and turns that bots start for each other count toward a daily cap.",
-				}
-			: {
-					tone: "bad",
-					title: "It stays quiet",
-					detail:
-						"Bots never read along with other bots. The message is stored and shown, nothing more.",
-				};
+		if (mentioned) {
+			return {
+				tone: "good",
+				title: "It answers",
+				detail: `The @mention hands Byte the word. Two bots can go back and forth for up to ${DISCUSSION_MESSAGES} messages after each message from a person, or ${LONG_DISCUSSION_MESSAGES} when someone allows a longer discussion.${BOT_CAP}`,
+			};
+		}
+		if (reply) {
+			return {
+				tone: "good",
+				title: "It answers",
+				detail: `A bot's reply hands Byte the word like an @mention does, for up to ${DISCUSSION_MESSAGES} messages after each message from a person, or ${LONG_DISCUSSION_MESSAGES} when someone allows a longer discussion. A reply that ends the discussion wakes no one.${BOT_CAP}`,
+			};
+		}
+		return {
+			tone: "bad",
+			title: "It stays quiet",
+			detail:
+				"Bots never read along with other bots. The message is stored and shown, nothing more.",
+		};
 	}
 	if (mentioned || reply) {
 		return {
 			tone: "good",
 			title: "It answers",
 			detail: `An @mention or a reply to one of its messages always wakes the bot.${cap}`,
+		};
+	}
+	if (followUp) {
+		return {
+			tone: "good",
+			title: "It takes the follow-up",
+			detail: `The message names nobody but continues the sender's exchange with Byte, so Byte reads it as meant for it, even with “Answer only when mentioned” on. Other bots in the room stay out of it.${cap}`,
 		};
 	}
 	if (mentionedOnly) {
@@ -87,6 +107,7 @@ export default function WakeChecker() {
 	const [mentioned, setMentioned] = useState(false);
 	const [reply, setReply] = useState(false);
 	const [mentionedOnly, setMentionedOnly] = useState(false);
+	const [followUp, setFollowUp] = useState(false);
 
 	const changePlace = (next: Place) => {
 		setPlace(next);
@@ -94,7 +115,14 @@ export default function WakeChecker() {
 			setSender("owner");
 	};
 
-	const outcome = wakeOutcome(place, sender, mentioned, reply, mentionedOnly);
+	const outcome = wakeOutcome(
+		place,
+		sender,
+		mentioned,
+		reply,
+		mentionedOnly,
+		followUp,
+	);
 	const inRoom = place === "room";
 	const senderName =
 		sender === "owner" ? "You" : sender === "person" ? "Mara" : "Scout";
@@ -146,12 +174,20 @@ export default function WakeChecker() {
 								onChange={setReply}
 							/>
 							{sender !== "bot" ? (
-								<Toggle
-									label="Room limit: Answer only when mentioned"
-									hint="Set by the bot's owner for this room."
-									checked={mentionedOnly}
-									onChange={setMentionedOnly}
-								/>
+								<>
+									<Toggle
+										label="Follows up on a talk with Byte"
+										hint="The sender's previous message named Byte, and Byte answered it."
+										checked={followUp}
+										onChange={setFollowUp}
+									/>
+									<Toggle
+										label="Room limit: Answer only when mentioned"
+										hint="Set by the bot's owner for this room."
+										checked={mentionedOnly}
+										onChange={setMentionedOnly}
+									/>
+								</>
 							) : null}
 						</div>
 					) : null}
@@ -163,6 +199,11 @@ export default function WakeChecker() {
 							{inRoom && reply ? (
 								<span className="bd-wake-quote">
 									↪ Byte: “Revenue is up 12%.”
+								</span>
+							) : null}
+							{inRoom && followUp && !reply && sender !== "bot" ? (
+								<span className="bd-wake-quote">
+									After Byte answered: “Revenue is up 12%.”
 								</span>
 							) : null}
 							{inRoom && mentioned ? <mark>@Byte</mark> : null}

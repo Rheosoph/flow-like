@@ -29,7 +29,7 @@ export function wholeDayZone(time: number): "UTC" | "local" | null {
 }
 
 /** The local instant that shows the same calendar day as `time` does where it was meant. */
-function calendarInstant(time: number): number {
+export function calendarInstant(time: number): number {
 	if (wholeDayZone(time) !== "UTC") return time;
 	const date = new Date(time);
 	return new Date(

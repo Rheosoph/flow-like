@@ -5,6 +5,7 @@
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     bot::{BotCapability, BotExecutionMode, BotLocation, BotModelPolicy, BotSystemKind},
+    bot_calendar::{CalendarWake, UpdateCalendarWake},
     bot_restrictions::BotRestrictions,
     data_classification::DataSensitivity,
     inbox::{ConversationEncryption, ConversationKind, InboxEntryKind, PrincipalKind},
@@ -42,6 +43,7 @@ pub struct Bot {
     pub classification: DataSensitivity,
     pub capabilities: Vec<BotCapability>,
     pub profile_id: Option<String>,
+    pub calendar_wake: CalendarWake,
     /// Always `desktop`.
     pub location: BotLocation,
     /// Always null.
@@ -138,6 +140,7 @@ pub struct UpdateBotRequest {
     pub execution_mode: Option<BotExecutionMode>,
     #[serde(default, deserialize_with = "nullable")]
     pub device_id: Option<Option<String>>,
+    pub calendar_wake: Option<UpdateCalendarWake>,
 }
 
 /// Tells an explicit `null` (`Some(None)`) from an omitted field (`None`).

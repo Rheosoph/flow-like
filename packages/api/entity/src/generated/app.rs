@@ -62,6 +62,8 @@ pub struct Model {
     pub bot_id: Option<String>,
     #[sea_orm(column_name = "refuseBots", nullable)]
     pub refuse_bots: Option<bool>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub showcase: Option<Json>,
     #[sea_orm(has_many)]
     pub ai_act_assessments: HasMany<super::ai_act_assessment::Entity>,
     #[sea_orm(has_many)]
@@ -70,6 +72,8 @@ pub struct Model {
     pub app_analytics_dailies: HasMany<super::app_analytics_daily::Entity>,
     #[sea_orm(has_many)]
     pub app_board_scores: HasMany<super::app_board_score::Entity>,
+    #[sea_orm(has_many)]
+    pub app_data_sources: HasMany<super::app_data_source::Entity>,
     #[sea_orm(has_many)]
     pub app_discounts: HasMany<super::app_discount::Entity>,
     #[sea_orm(has_many)]

@@ -7,7 +7,7 @@ description = "The generic host of account bots: turn claiming, leases, approval
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
-flow-like = { workspace = true, features = ["flow-runtime"] }
+flow-like = { workspace = true, features = ["copilot", "flow-runtime"] }
 flow-like-bot-memory.workspace = true
 flow-like-bot-tools.workspace = true
 flow-like-device-crypto.workspace = true

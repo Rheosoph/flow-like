@@ -11,27 +11,32 @@ export function AboutSection({
 }: Readonly<{ app: IApp; meta: IMetadata }>) {
 	const { t } = useTranslation("store");
 	const tags = asArray(meta.tags);
-	const media = asArray(meta.preview_media);
+	const media = [...new Set(asArray(meta.preview_media))];
 	const hasRelease = !!(meta.release_notes || app.changelog);
 
 	return (
 		<div className="space-y-8">
-			<p className="text-base leading-relaxed text-muted-foreground max-w-prose">
-				{meta.description ?? t("noDescriptionFound", "No description found.")}
-			</p>
+			<div className="space-y-4">
+				<p className="text-base leading-relaxed text-foreground/80 max-w-prose">
+					{meta.description ?? t("noDescriptionFound", "No description found.")}
+				</p>
 
-			{tags.length ? (
-				<div className="flex flex-wrap gap-1.5">
-					{tags.map((t) => (
-						<span
-							key={t}
-							className="rounded-full bg-muted/30 px-2.5 py-0.5 text-[11px] text-muted-foreground capitalize"
-						>
-							{t}
-						</span>
-					))}
-				</div>
-			) : null}
+				{tags.length ? (
+					<ul
+						className="flex flex-wrap gap-1.5"
+						aria-label={t("storeTags", "Tags")}
+					>
+						{tags.map((tag) => (
+							<li
+								key={tag}
+								className="rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground capitalize"
+							>
+								{tag}
+							</li>
+						))}
+					</ul>
+				) : null}
+			</div>
 
 			{media.length > 0 && (
 				<div className="-mx-6 md:-mx-10">
@@ -40,7 +45,7 @@ export function AboutSection({
 						style={{ scrollbarWidth: "none" }}
 					>
 						{media.map((m, i) => (
-							<div key={`${m}-${i}`} className="snap-start shrink-0">
+							<div key={m} className="snap-start shrink-0">
 								<img
 									src={m}
 									alt={t("previewVal", "Preview {{val}}", { val: i + 1 })}

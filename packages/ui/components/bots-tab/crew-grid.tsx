@@ -90,11 +90,12 @@ export function CrewBotCard({
 		<div
 			className={crewCardClass(
 				selected,
-				"group relative flex min-w-0 @max-[520px]/crew:rounded-xl",
+				"group relative flex min-w-0 active:scale-[0.98] active:bg-muted/60 @max-[520px]/crew:rounded-xl",
 			)}
 		>
 			<button
 				type="button"
+				data-guide="crew-bot"
 				aria-current={selected ? "true" : undefined}
 				onClick={() => onSelect(member)}
 				className="flex w-full min-w-0 flex-col items-center gap-2 rounded-2xl px-2.5 pt-3 pb-3.5 text-center outline-none focus-visible:ring-2 focus-visible:ring-ring @max-[520px]/crew:flex-row @max-[520px]/crew:gap-3 @max-[520px]/crew:rounded-xl @max-[520px]/crew:px-3 @max-[520px]/crew:py-2.5 @max-[520px]/crew:pr-10 @max-[520px]/crew:text-left"
@@ -166,7 +167,7 @@ export function NewBotTile({
 			type="button"
 			disabled={disabled}
 			onClick={onClick}
-			className="flex min-h-59 flex-col items-center justify-center gap-2.5 rounded-2xl border-[1.5px] border-dashed border-border px-2.5 py-3.5 text-center text-muted-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 @max-[520px]/crew:min-h-11 @max-[520px]/crew:flex-row @max-[520px]/crew:rounded-xl @max-[520px]/crew:py-2"
+			className="flex min-h-59 flex-col items-center justify-center gap-2.5 rounded-2xl border-[1.5px] active:scale-[0.98] active:bg-muted/60 border-dashed border-border px-2.5 py-3.5 text-center text-muted-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 @max-[520px]/crew:min-h-11 @max-[520px]/crew:flex-row @max-[520px]/crew:rounded-xl @max-[520px]/crew:py-2"
 		>
 			<span className="flex size-11 items-center justify-center rounded-full bg-muted text-foreground @max-[520px]/crew:size-7">
 				<PlusIcon className="size-5" aria-hidden />

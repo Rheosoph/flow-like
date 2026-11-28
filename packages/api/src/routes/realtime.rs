@@ -133,13 +133,35 @@ pub async fn connect(
     if let AppUser::PAT(pat) = &user {
         fresh_pat_permissions(pat, &state).await?;
     }
-    let prefer_http = request.transport == RealtimeTransportPreference::Http;
-    let attempt = match timeout(
-        Duration::from_secs(5),
-        state.channels.realtime_connect(&sub, prefer_http),
-    )
-    .await
+    if matches!(user, AppUser::OpenID(_))
+        && let Err(error) = crate::routes::user::last_seen::mark_seen(
+            &state.db,
+            &sub,
+            chrono::Utc::now().fixed_offset(),
+        )
+        .await
     {
+        tracing::warn!(%error, "Failed to record when the person was last seen");
+    }
+    let prefer_http = request.transport == RealtimeTransportPreference::Http;
+    let channels = &state.channels;
+    issue_realtime_grant(channels.transport(), prefer_http, |http| {
+        channels.realtime_connect(&sub, http)
+    })
+    .await
+}
+
+/// A grant from `mint`, or for a while HTTP replay when the provider cannot issue one in time.
+pub(crate) async fn issue_realtime_grant<Mint, Minted>(
+    transport: &str,
+    prefer_http: bool,
+    mint: Mint,
+) -> Result<(HeaderMap, Json<RealtimeConnectResponse>), ApiError>
+where
+    Mint: Fn(bool) -> Minted,
+    Minted: std::future::Future<Output = flow_like_types::Result<RealtimeConnectResponse>>,
+{
+    let attempt = match timeout(Duration::from_secs(5), mint(prefer_http)).await {
         Ok(Ok(grant)) => Ok(grant),
         Ok(Err(error)) => Err(crate::channel::redact_provider_error(&error)),
         Err(_) => Err("timed out".to_owned()),
@@ -148,15 +170,11 @@ pub async fn connect(
         Ok(grant) => grant,
         Err(reason) => {
             tracing::warn!(
-                transport = state.channels.transport(),
+                transport,
                 %reason,
                 "Realtime grant unavailable; using HTTP replay"
             );
-            let mut grant = state
-                .channels
-                .realtime_connect(&sub, true)
-                .await
-                .map_err(ApiError::internal_error)?;
+            let mut grant = mint(true).await.map_err(ApiError::internal_error)?;
             grant.expires_at = now_unix() + HTTP_FALLBACK_TTL_SECS;
             grant
         }
@@ -1944,10 +1962,13 @@ mod tests {
                 invited_by: Set(None),
                 invited_at: Set(None),
                 accepted_at: Set(None),
+                invite_reason: Set(None),
                 hidden_at: Set(None),
                 cleared_at: Set(None),
                 cleared_legacy_at: Set(None),
                 cleared_seq: Set(None),
+                unread_count: Set(None),
+                last_entry_id: Set(None),
             }
             .insert(db)
             .await

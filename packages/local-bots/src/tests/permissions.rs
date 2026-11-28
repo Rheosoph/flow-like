@@ -95,6 +95,9 @@ fn revoking_and_deleting_a_bot_take_its_grants_back() {
         ]
     );
 
-    fixture.store.delete_bot(&digest.id).unwrap();
+    fixture
+        .store
+        .delete_bot(&digest.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     assert!(fixture.store.permissions().unwrap().is_empty());
 }

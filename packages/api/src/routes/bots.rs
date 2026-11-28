@@ -15,6 +15,8 @@ pub mod apps;
 pub mod ask;
 pub(crate) mod authorization;
 pub mod avatar;
+pub mod calendar;
+pub mod calendar_feed;
 pub(crate) mod checkpoint;
 pub mod clone;
 pub mod configuration;
@@ -31,8 +33,10 @@ pub mod notes;
 pub mod notify;
 pub mod people;
 pub mod permissions;
+pub mod places;
 pub mod presence;
 mod provision;
+mod room_invite_mail;
 pub mod rooms;
 pub(crate) mod runtime;
 pub mod runtime_token;
@@ -50,6 +54,8 @@ pub mod workspace;
 
 #[cfg(test)]
 mod app_gate_tests;
+#[cfg(test)]
+mod calendar_feed_tests;
 #[cfg(test)]
 mod connectors_tests;
 #[cfg(test)]
@@ -99,7 +105,16 @@ pub fn routes() -> Router<AppState> {
         .route("/import", post(import::import_bot))
         .route("/import/check", post(import::check_bot_import))
         .route("/presence", get(presence::get_presence))
+        .route("/places", get(places::list_places))
         .route("/mobile-status", get(live_activities::mobile_status))
+        .route(
+            "/email-domain",
+            get(crate::mail_ingress::bot_address::get_bot_mail_domain),
+        )
+        .route(
+            "/email-address/check/{alias}",
+            get(crate::mail_ingress::bot_address::check_new_bot_address),
+        )
         .route(
             "/hosts/{host_id}",
             put(presence::report_host).delete(presence::forget_host),
@@ -167,6 +182,15 @@ pub fn routes() -> Router<AppState> {
             "/{bot_id}/memory/facts/{fact_id}",
             delete(memory::forget_fact),
         )
+        .route("/{bot_id}/memory/entities", get(memory::list_entities))
+        .route(
+            "/{bot_id}/memory/entities/{entity_id}",
+            axum::routing::patch(memory::update_entity).delete(memory::forget_entity),
+        )
+        .route(
+            "/{bot_id}/memory/entities/{entity_id}/merge",
+            post(memory::merge_entity),
+        )
         .route(
             "/{bot_id}/email-address",
             get(crate::mail_ingress::bot_address::get_bot_address)
@@ -198,6 +222,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{bot_id}/talk", post(talk::talk))
         .route("/{bot_id}/talk/exchange", post(talk::talk_exchange))
         .route("/{bot_id}/talk/roster", get(talk::talk_roster))
+        .route("/{bot_id}/talk/org", get(talk::talk_org))
         .route(
             "/{bot_id}/turns/{turn_id}/ask-result",
             get(talk::turn_ask_result),
@@ -276,7 +301,29 @@ pub fn routes() -> Router<AppState> {
             "/{bot_id}/tasks/{task_id}",
             axum::routing::patch(tasks::update_bot_task).delete(tasks::delete_bot_task),
         )
+        .route(
+            "/{bot_id}/calendar",
+            get(calendar::get_calendar_wake).put(calendar::put_calendar_wake),
+        )
+        .route(
+            "/{bot_id}/calendar/events",
+            get(calendar::list_calendar_events),
+        )
+        .route(
+            "/{bot_id}/calendar/feed",
+            get(calendar_feed::get_calendar_feed)
+                .put(calendar_feed::put_calendar_feed)
+                .delete(calendar_feed::delete_calendar_feed),
+        )
+        .route(
+            "/{bot_id}/calendar/feed/rotate",
+            post(calendar_feed::rotate_calendar_feed),
+        )
         .route("/{bot_id}/tasks/{task_id}/fire", post(tasks::fire_bot_task))
+        .route(
+            "/{bot_id}/tasks/{task_id}/crossing",
+            post(places::report_crossing),
+        )
         .route("/{bot_id}/turns/{turn_id}/retry", post(turns::retry_turn))
         .route("/{bot_id}/turns/{turn_id}/cancel", post(turns::cancel_turn))
         .route(
@@ -329,6 +376,8 @@ pub fn routes() -> Router<AppState> {
             "/{bot_id}/workspace/upload",
             post(workspace::upload_to_bot_workspace),
         )
+        .merge(crate::bot_channels::routes())
+        .merge(crate::teams::bot::routes())
 }
 
 /// The caller's bot `bot_id` if it is not deleted. Someone else's bot reads as 404 too, so the

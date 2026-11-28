@@ -1,7 +1,6 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use flow_like_types::tokio;
 use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_TYPE;
@@ -195,7 +194,7 @@ async fn delete_orphaned_schedule(event_id: &str, schedule_arn: &str) {
         .name(schedule_name)
         // Fresh token per attempt so a retry after a transient failure can
         // actually re-delete rather than replay a cached success.
-        .client_token(flow_like_types::create_id())
+        .client_token(cuid2::create_id())
         .send()
         .await
     {

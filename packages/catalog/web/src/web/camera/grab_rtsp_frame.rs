@@ -1,6 +1,8 @@
 #[cfg(feature = "execute")]
 use std::{borrow::Cow, time::Duration};
 
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::{ExecutionEnvironment, egress};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -163,7 +165,8 @@ impl NodeLogic for GrabRtspFrameNode {
             .await
             .unwrap_or(DEFAULT_MAX_FRAMES as i64);
 
-        match capture_frame(&rtsp_url, &transport, timeout_ms, max_frames).await {
+        let environment = context.execution_environment();
+        match capture_frame(&rtsp_url, &transport, timeout_ms, max_frames, environment).await {
             Ok(image) => {
                 let node_image = NodeImage::new(context, image).await;
                 context.set_pin_value("image", json!(node_image)).await?;
@@ -194,6 +197,7 @@ async fn capture_frame(
     transport: &str,
     timeout_ms: i64,
     max_frames: i64,
+    environment: ExecutionEnvironment,
 ) -> flow_like_types::Result<DynamicImage> {
     let transport = normalize_transport(transport)?;
     let timeout_ms = normalize_timeout_ms(timeout_ms);
@@ -202,7 +206,7 @@ async fn capture_frame(
 
     match timeout(
         Duration::from_millis(timeout_ms),
-        capture_frame_inner(&rtsp_url, transport, max_frames),
+        capture_frame_inner(&rtsp_url, transport, max_frames, environment),
     )
     .await
     {
@@ -216,8 +220,10 @@ async fn capture_frame_inner(
     rtsp_url: &str,
     transport: Transport,
     max_frames: usize,
+    environment: ExecutionEnvironment,
 ) -> flow_like_types::Result<DynamicImage> {
     let (url, credentials) = parse_rtsp_url(rtsp_url)?;
+    egress::ensure_url_resolves_allowed(environment, &url).await?;
     let mut session_options =
         SessionOptions::default().user_agent("FlowLike RTSP Frame Grabber".to_string());
 
@@ -2663,6 +2669,22 @@ mod tests {
             Transport::Udp(_)
         ));
         assert!(normalize_transport("file").is_err());
+    }
+
+    #[tokio::test]
+    async fn server_side_refuses_host_plane_cameras_before_connecting() {
+        for url in [
+            "rtsp://169.254.169.254/live",
+            "rtsp://127.0.0.1:8554/live",
+            "rtsp://user:pass@localhost/live",
+            "rtsps://[::1]/live",
+        ] {
+            let error = capture_frame(url, "tcp", 2_000, 1, ExecutionEnvironment::Server)
+                .await
+                .expect_err(url)
+                .to_string();
+            assert!(error.contains("refused"), "{url}: {error}");
+        }
     }
 
     #[test]

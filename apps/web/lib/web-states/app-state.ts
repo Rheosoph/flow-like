@@ -49,6 +49,12 @@ import type {
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import {
+	type IAppShowcase,
+	type IAppShowcaseSettings,
+	mergeShowcaseSettings,
+	normalizeShowcase,
+} from "@flow-like/flow-like-ui/lib/schema/app/showcase";
 import type { AppPackage } from "@flow-like/flow-like-ui/lib/schema/wasm";
 import {
 	stabilizeMetadata,
@@ -375,6 +381,34 @@ export class WebAppState implements IAppState {
 			links,
 			this.backend.auth,
 		);
+	}
+
+	async getShowcaseSettings(appId: string): Promise<IAppShowcaseSettings> {
+		const response = await apiGet<unknown>(
+			`apps/${appId}/settings/showcase`,
+			this.backend.auth,
+		);
+		return mergeShowcaseSettings(response);
+	}
+
+	async updateShowcaseSettings(
+		appId: string,
+		settings: IAppShowcaseSettings,
+	): Promise<IAppShowcaseSettings> {
+		const response = await apiPut<unknown>(
+			`apps/${appId}/settings/showcase`,
+			settings,
+			this.backend.auth,
+		);
+		return mergeShowcaseSettings(response, settings);
+	}
+
+	async getShowcase(appId: string): Promise<IAppShowcase> {
+		const response = await apiGet<unknown>(
+			`apps/${appId}/showcase`,
+			this.backend.auth,
+		);
+		return normalizeShowcase(appId, response);
 	}
 
 	async changeAppAllowForking(appId: string, allow: boolean): Promise<void> {

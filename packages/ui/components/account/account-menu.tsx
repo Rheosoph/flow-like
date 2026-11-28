@@ -6,6 +6,7 @@ import {
 	BarChart3,
 	BellIcon,
 	ChevronsUpDown,
+	CompassIcon,
 	CreditCard,
 	KeyIcon,
 	LogInIcon,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useHub } from "../../hooks/use-hub";
+import { guideWelcomeHref } from "../../lib/guide/guide-tours";
 import { userInitials } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import { useFlowLikeLegalLinks } from "../legal/legal-links";
@@ -221,6 +223,12 @@ export function AccountMenu({
 						<Link href="/settings">
 							<SettingsIcon />
 							{t("settings", "Settings")}
+						</Link>
+					</DropdownMenuItem>
+					<DropdownMenuItem asChild className={itemClass}>
+						<Link href={guideWelcomeHref("question")}>
+							<CompassIcon />
+							{t("guide:menu.tour", "Show me around")}
 						</Link>
 					</DropdownMenuItem>
 					{signedIn && (

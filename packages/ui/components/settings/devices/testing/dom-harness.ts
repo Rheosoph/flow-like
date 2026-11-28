@@ -489,3 +489,17 @@ export async function settle(): Promise<void> {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 	});
 }
+
+/** Settle until `done` holds: for work that takes real time (key derivation, decryption). */
+export async function settleUntil(
+	done: () => boolean,
+	timeoutMs = 15_000,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	await settle();
+	while (!done() && Date.now() < deadline) {
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		});
+	}
+}

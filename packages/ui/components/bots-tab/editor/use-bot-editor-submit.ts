@@ -4,7 +4,10 @@ import { useTranslation } from "@flow-like/locales";
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+	isDeletableBot,
 	useBotLabels,
+	useBots,
+	useClaimBotMailAddress,
 	useCloneBot,
 	useCreateBot,
 	useDeleteBot,
@@ -100,8 +103,8 @@ export function useDuplicateBot():
 }
 
 /**
- * Creates or saves the bot, attaches apps picked before it existed, deletes custom bots and
- * duplicates saved ones.
+ * Creates or saves the bot, attaches apps picked before it existed, deletes custom bots and a
+ * built-in listed twice (this computer's copy beside the account's), and duplicates saved ones.
  */
 export function useBotEditorSubmit(
 	editor: BotEditor,
@@ -115,6 +118,9 @@ export function useBotEditorSubmit(
 	const { mutateAsync: deleteBot } = useDeleteBot();
 	const { mutateAsync: setBotApp } = useSetBotApp();
 	const { mutateAsync: setAppRestrictions } = useSetBotAppRestrictions();
+	const { mutateAsync: claimMailAddress } = useClaimBotMailAddress();
+	const { data: bots = [] } = useBots();
+	const labels = useBotLabels();
 	const [error, setError] = useState<string | null>(null);
 	const { task, begin, release } = useBotEditorTask();
 
@@ -134,9 +140,21 @@ export function useBotEditorSubmit(
 			});
 	};
 
+	const claimPendingAddress = async (bot: IBot) => {
+		const alias = editor.pendingEmailAlias.trim().toLowerCase();
+		if (!alias || bot.local || !bot.capabilities.includes("email")) return;
+		try {
+			await claimMailAddress({ botId: bot.id, alias });
+		} catch (cause) {
+			toast.warning(t("editor.emailClaimFailed", { alias }), {
+				description: errorMessage(cause, "") || undefined,
+			});
+		}
+	};
+
 	const create = async () => {
 		const bot = await createBot(buildCreateBotRequest(editor.draft));
-		await attachPendingApps(bot);
+		await Promise.all([attachPendingApps(bot), claimPendingAddress(bot)]);
 		return bot;
 	};
 
@@ -187,7 +205,7 @@ export function useBotEditorSubmit(
 
 	const remove = async () => {
 		const bot = editor.original;
-		if (!bot || bot.system || !begin("deleting")) return;
+		if (!bot || !isDeletableBot(bot, bots) || !begin("deleting")) return;
 		setError(null);
 		try {
 			await deleteBot(bot.id);
@@ -197,7 +215,7 @@ export function useBotEditorSubmit(
 			return;
 		}
 		void forgetBotChat(bot.id);
-		toast.success(t("editor.deleted", { name: bot.name ?? "" }));
+		toast.success(t("editor.deleted", { name: labels(bot).name }));
 		close();
 	};
 

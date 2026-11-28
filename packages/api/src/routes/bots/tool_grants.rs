@@ -1,7 +1,8 @@
 //! A bot's standing tool approvals and the owner's answers to the approval cards of parked
 //! turns. A grant says the bot may run a tool for a scope without asking again, on every host;
-//! an answer is stored with the turn and queues it again. Only the owner reads or changes any of
-//! it, and every query is scoped to the owner in SQL.
+//! an answer is stored with the turn and queues it again. A bot's turn token may read its grants,
+//! report their use and consume answer tokens. Only the owner creates or revokes standing grants
+//! and answers approval cards. Every query is scoped to the bot's owner in SQL.
 
 use super::owned_bot;
 use crate::{
@@ -26,14 +27,101 @@ use axum::{
 use flow_like::flow::copilot::tool_grants::GrantStore;
 use flow_like_types::{
     bot_message::{ApprovalRequest, ItemDecision},
-    tool_grant::{ApprovalAnswer, ApprovalDecision, SealedApprovalCard, ToolGrantKey},
+    tool_grant::{
+        ApprovalAnswer, ApprovalDecision, SealedApprovalCard, ToolGrantKey, check_key,
+        is_token_scope,
+    },
 };
+use sea_orm::ConnectionTrait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 use utoipa::{IntoParams, ToSchema};
 
 const MAX_TOUCHED_GRANTS: usize = 50;
+
+async fn grant_host_owner<C: ConnectionTrait>(
+    db: &C,
+    user: &AppUser,
+    bot_id: &str,
+) -> Result<String, ApiError> {
+    if matches!(user, AppUser::Bot(bot) if bot.turn_id.starts_with("direct:")) {
+        return Err(ApiError::forbidden(
+            "A direct bot app token cannot access tool approvals",
+        ));
+    }
+    bot_caller::acting_owner_for(db, user, bot_id).await
+}
+
+async fn list_grants_for<C: ConnectionTrait>(
+    db: &C,
+    user: &AppUser,
+    bot_id: &str,
+    tokens: bool,
+) -> Result<Vec<flow_like_types::tool_grant::ToolGrant>, ApiError> {
+    let owner = grant_host_owner(db, user, bot_id).await?;
+    approvals::list_grants(db, &owner, bot_id, tokens).await
+}
+
+async fn put_grant_for<C: ConnectionTrait>(
+    db: &C,
+    user: &AppUser,
+    bot_id: &str,
+    key: &ToolGrantKey,
+) -> Result<(flow_like_types::tool_grant::ToolGrant, bool), ApiError> {
+    let owner = user.sub()?;
+    let held = approvals::list_grants(db, &owner, bot_id, true)
+        .await?
+        .iter()
+        .any(|grant| grant.tool == key.tool && grant.scope == key.scope);
+    let grant = approvals::grant_in(db, &owner, bot_id, key, now_millis()).await?;
+    Ok((grant, held))
+}
+
+async fn touch_grants_for<C: ConnectionTrait>(
+    db: &C,
+    user: &AppUser,
+    bot_id: &str,
+    grants: Vec<BotToolGrantKey>,
+) -> Result<(), ApiError> {
+    let owner = grant_host_owner(db, user, bot_id).await?;
+    if grants.len() > MAX_TOUCHED_GRANTS {
+        return Err(ApiError::bad_request(format!(
+            "At most {MAX_TOUCHED_GRANTS} grants per call; this one has {}",
+            grants.len()
+        )));
+    }
+    owned_bot(db, &owner, bot_id).await?;
+    let keys: Vec<(String, String)> = grants
+        .into_iter()
+        .map(|key| (key.tool, key.scope))
+        .collect();
+    approvals::touch_in(db, bot_id, &keys, now_millis()).await?;
+    Ok(())
+}
+
+async fn remove_grant_for<C: ConnectionTrait + Send>(
+    db: &C,
+    user: &AppUser,
+    bot_id: &str,
+    key: &ToolGrantKey,
+) -> Result<bool, ApiError> {
+    let owner = grant_host_owner(db, user, bot_id).await?;
+    if matches!(user, AppUser::Bot(_)) {
+        check_key(key).map_err(ApiError::bad_request)?;
+        if !is_token_scope(&key.scope) {
+            return Err(ApiError::forbidden(
+                "A bot turn can consume answer tokens, but only the owner can revoke standing approvals",
+            ));
+        }
+        // Consumption expires old answers before deleting, unlike an owner's revocation.
+        return GrantRows::new(db, bot_id, &owner)
+            .delete(&key.tool, &key.scope)
+            .await
+            .map_err(ApiError::from);
+    }
+    approvals::revoke_in(db, &owner, bot_id, key).await
+}
 
 /// One standing approval.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -139,7 +227,7 @@ pub struct GrantsQuery {
     tag = "Bots",
     params(("bot_id" = String, Path, description = "Your bot's id"), GrantsQuery),
     responses(
-        (status = 200, description = "What the bot may run without asking you again, oldest first. Each grant carries `expires_at`: it lapses 90 days after the bot last used it, and lapsed grants are left out.", body = BotToolGrantList),
+        (status = 200, description = "The owner or the bot's live turn may read its approvals, oldest first. Standing grants lapse 90 days after use; answer tokens are included only with tokens=true and expire after 24 hours.", body = BotToolGrantList),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no bot with this id")
     ),
@@ -152,8 +240,7 @@ pub async fn list_tool_grants(
     Path(bot_id): Path<String>,
     Query(query): Query<GrantsQuery>,
 ) -> Result<Json<BotToolGrantList>, ApiError> {
-    let sub = user.sub()?;
-    let grants = approvals::list_grants(&state.db, &sub, &bot_id, query.tokens).await?;
+    let grants = list_grants_for(&state.db, &user, &bot_id, query.tokens).await?;
     Ok(Json(BotToolGrantList {
         grants: grants.into_iter().map(Into::into).collect(),
     }))
@@ -180,14 +267,8 @@ pub async fn put_tool_grant(
     Path(bot_id): Path<String>,
     Json(body): Json<BotToolGrantKey>,
 ) -> Result<Json<BotToolGrant>, ApiError> {
-    let sub = user.sub()?;
     let key = ToolGrantKey::from(body);
-    let now = now_millis();
-    let held = approvals::list_grants(&state.db, &sub, &bot_id, true)
-        .await?
-        .iter()
-        .any(|grant| grant.tool == key.tool && grant.scope == key.scope);
-    let grant = approvals::grant_in(&state.db, &sub, &bot_id, &key, now).await?;
+    let (grant, held) = put_grant_for(&state.db, &user, &bot_id, &key).await?;
     if !held {
         audit!(
             state,
@@ -222,20 +303,7 @@ pub async fn touch_tool_grants(
     Path(bot_id): Path<String>,
     Json(body): Json<BotToolGrantTouch>,
 ) -> Result<StatusCode, ApiError> {
-    let sub = user.sub()?;
-    if body.grants.len() > MAX_TOUCHED_GRANTS {
-        return Err(ApiError::bad_request(format!(
-            "At most {MAX_TOUCHED_GRANTS} grants per call; this one has {}",
-            body.grants.len()
-        )));
-    }
-    owned_bot(&state.db, &sub, &bot_id).await?;
-    let keys: Vec<(String, String)> = body
-        .grants
-        .into_iter()
-        .map(|key| (key.tool, key.scope))
-        .collect();
-    approvals::touch_in(&state.db, &bot_id, &keys, now_millis()).await?;
+    touch_grants_for(&state.db, &user, &bot_id, body.grants).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -246,7 +314,7 @@ pub async fn touch_tool_grants(
     params(("bot_id" = String, Path, description = "Your bot's id")),
     request_body = BotToolGrantKey,
     responses(
-        (status = 200, description = "The bot has to ask you again for this tool and scope (or never had permission).", body = BotToolGrantRemoved),
+        (status = 200, description = "The owner revokes a grant, or the bot's live turn consumes a once:/deny: answer token. A bot token cannot revoke standing grants.", body = BotToolGrantRemoved),
         (status = 400, description = "The tool or scope is malformed"),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no bot with this id")
@@ -260,9 +328,8 @@ pub async fn delete_tool_grant(
     Path(bot_id): Path<String>,
     Json(body): Json<BotToolGrantKey>,
 ) -> Result<Json<BotToolGrantRemoved>, ApiError> {
-    let sub = user.sub()?;
     let key = ToolGrantKey::from(body);
-    let deleted = approvals::revoke_in(&state.db, &sub, &bot_id, &key).await?;
+    let deleted = remove_grant_for(&state.db, &user, &bot_id, &key).await?;
     if deleted {
         audit!(
             state,
@@ -434,3 +501,7 @@ pub(crate) fn rows_for_owner(
 ) -> Arc<dyn GrantStore> {
     Arc::new(GrantRows::new(Arc::new(state.db.clone()), bot_id, owner_id))
 }
+
+#[cfg(test)]
+#[path = "tool_grants_tests.rs"]
+mod tests;

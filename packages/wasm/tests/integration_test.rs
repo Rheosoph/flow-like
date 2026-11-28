@@ -1,3 +1,5 @@
+#![cfg(feature = "execution")]
+
 //! Integration tests for WASM node loading and execution
 //!
 //! These tests verify that the WASM runtime can correctly load and execute

@@ -114,6 +114,10 @@
     "fs:write-all",
     "fs:read-all",
     "opener:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "webcal://*" }]
+    },
     "notification:default",
     "notification:allow-notify",
     "notification:allow-request-permission",

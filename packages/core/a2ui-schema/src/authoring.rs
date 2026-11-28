@@ -93,7 +93,13 @@ const PROP_VALUES: &[(&str, &str, &[&str])] = &[
         "variant",
         &["default", "secondary", "destructive", "outline"],
     ),
+    (
+        "badge",
+        "tone",
+        &["neutral", "info", "success", "warning", "danger"],
+    ),
     ("avatar", "size", &["sm", "md", "lg", "xl"]),
+    ("stat", "trend", &["up", "down", "flat"]),
     (
         "progress",
         "variant",
@@ -154,6 +160,8 @@ const PROP_VALUES: &[(&str, &str, &[&str])] = &[
     ),
     ("link", "underline", &["always", "hover", "none"]),
     ("card", "variant", &["default", "bordered", "elevated"]),
+    ("card", "headerImageAspect", &["16:9", "3:2", "4:3", "1:1"]),
+    ("card", "density", &["comfortable", "compact"]),
     ("modal", "size", &["sm", "md", "lg", "xl", "full"]),
     ("tabs", "orientation", &["horizontal", "vertical"]),
     ("tabs", "variant", &["default", "pills", "underline"]),
@@ -258,6 +266,8 @@ const PROP_SHAPES: &[(&str, &str, &str)] = &[
 /// Props the renderers ignore today. They stay valid on the wire but are left out of prompts.
 const UNRENDERED_PROPS: &[(&str, &str)] = &[
     ("card", "headerIcon"),
+    ("card", "padding"),
+    ("badge", "color"),
     ("image", "aspectRatio"),
     ("markdown", "allowHtml"),
     ("select", "multiple"),
@@ -289,6 +299,7 @@ pub const CHAT_UI_COMPONENTS: &[&str] = &[
     "badge",
     "avatar",
     "progress",
+    "stat",
     "divider",
     "skeleton",
     "card",
@@ -314,7 +325,6 @@ pub const CHAT_PROMPT_COMPONENTS: &[&str] = &[
     "column",
     "row",
     "grid",
-    "box",
     "text",
     "markdown",
     "image",
@@ -322,6 +332,7 @@ pub const CHAT_PROMPT_COMPONENTS: &[&str] = &[
     "badge",
     "avatar",
     "progress",
+    "stat",
     "divider",
     "card",
     "tabs",
@@ -347,6 +358,19 @@ pub const CHAT_UI_ACTIONS: &[&str] = &["send_message", "external_link"];
 /// Props listed in the chat prompt for components whose full prop list would dominate it or
 /// needs an app (routes, page state).
 const CHAT_PROMPT_PROPS: &[(&str, &[&str])] = &[
+    ("column", &["gap", "align", "justify"]),
+    ("row", &["gap", "align", "justify", "wrap"]),
+    ("grid", &["columns", "gap"]),
+    (
+        "text",
+        &["content", "variant", "size", "weight", "maxLines"],
+    ),
+    ("image", &["src", "alt", "fit"]),
+    ("icon", &["name", "size"]),
+    ("badge", &["content", "tone"]),
+    ("progress", &["value", "max", "showLabel", "variant"]),
+    ("divider", &["orientation"]),
+    ("tooltip", &["content", "side"]),
     (
         "nivoChart",
         &[
@@ -354,42 +378,36 @@ const CHAT_PROMPT_PROPS: &[(&str, &[&str])] = &[
             "data",
             "indexBy",
             "keys",
-            "title",
             "height",
-            "colors",
             "showLegend",
         ],
     ),
     (
         "table",
-        &[
-            "columns", "data", "caption", "striped", "compact", "sortable",
-        ],
+        &["columns", "data", "caption", "compact", "sortable"],
     ),
-    ("link", &["href", "label", "variant", "underline"]),
-    ("card", &["title", "description", "headerImage", "footer"]),
+    ("link", &["href", "label", "variant"]),
     (
-        "button",
+        "card",
         &[
-            "label",
-            "variant",
-            "size",
-            "icon",
-            "iconPosition",
-            "disabled",
+            "title",
+            "description",
+            "headerImage",
+            "headerImageAspect",
+            "href",
+            "footer",
         ],
     ),
+    ("button", &["label", "variant", "size", "icon"]),
     (
         "textField",
-        &[
-            "value",
-            "label",
-            "placeholder",
-            "helperText",
-            "inputType",
-            "multiline",
-        ],
+        &["value", "label", "placeholder", "inputType", "multiline"],
     ),
+    (
+        "slider",
+        &["value", "label", "min", "max", "step", "showValue"],
+    ),
+    ("accordion", &["items"]),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -905,22 +923,24 @@ fn prop_signature(prop: &PropSpec) -> String {
 }
 
 const CHAT_UI_PROMPT_RULES: &str = r#"### Interactive UI (`a2ui` fence)
-Build an `a2ui` fence whenever the reader will scan or choose rather than read: several items that share attributes (products, models, places, offers, results), key figures (prices, weather, KPIs, status), pictures, a plan or timeline, a small dashboard, or a short form whose values feed your next turn. It replaces the Markdown list or table; don't repeat its content in prose. Lead with one sentence, then the fence; explanations and single facts stay Markdown. Tag the fence `a2ui`, never `json`.
-Make it look finished: one card per item in a `grid`, its picture as `headerImage`, the key figure in large semibold text, a `row` of badges for facts, and a button for the next step.
-
-One JSON object per line, root first: `{"id":"…","type":"…",…props}`. Values are plain JSON; `children` lists child ids; `style.className` takes Tailwind theme classes (bg-card, bg-muted, text-muted-foreground, border, rounded-xl, p-4, gap-3, w-full). Cards do not space their children: give a card one `column` child with a `gap`. Finish each line before the next and close the fence before prose; lines render as they arrive.
+Build an `a2ui` fence whenever the reader will scan, compare or choose rather than read: several items that share attributes (listings, products, places, offers, results), key figures (prices, weather, KPIs), pictures, a plan, or a short form whose values feed your next turn. It replaces the Markdown list or table; don't repeat its content in prose. Lead with one sentence, then the fence; explanations stay Markdown. Tag the fence `a2ui`, never `json`.
+One JSON object per line, root first: `{"id":"…","type":"…",…props}`. Values are plain JSON; `children` lists child ids; a card stacks its children. Finish each line before the next and close the fence before prose; lines render as they arrive.
 ```a2ui
-{"id":"root","type":"column","gap":"12px","children":["title","cards"]}
-{"id":"title","type":"text","content":"Recipe Remix","variant":"heading","size":"xl"}
-{"id":"cards","type":"grid","columns":2,"gap":"12px","children":["c1"]}
-{"id":"c1","type":"card","title":"Bean & Rice Skillet","description":"25 min · serves 2","headerImage":"https://example.com/skillet.jpg","children":["c1-body"]}
-{"id":"c1-body","type":"column","gap":"10px","children":["c1-cost","c1-tags","c1-go"]}
-{"id":"c1-cost","type":"text","content":"€3.40 per serving","size":"lg","weight":"semibold"}
-{"id":"c1-tags","type":"row","gap":"6px","children":["c1-veg","c1-fast"]}
-{"id":"c1-veg","type":"badge","content":"Vegetarian"}
-{"id":"c1-fast","type":"badge","content":"One pan","variant":"secondary"}
-{"id":"c1-go","type":"button","label":"Remix this","action":{"name":"send_message","context":{"message":"Remix the bean skillet"}}}
+{"id":"root","type":"grid","columns":2,"gap":"12px","children":["c1"]}
+{"id":"c1","type":"card","title":"Trek Allant+ 7","href":"https://example.com/bikes/1","headerImage":"https://example.com/bikes/1.jpg","headerImageAspect":"4:3","children":["c1-price","c1-facts","c1-tags"]}
+{"id":"c1-price","type":"text","content":"€2,150","size":"lg","weight":"semibold"}
+{"id":"c1-facts","type":"text","content":"2023 · 1,200 km · 625 Wh · Berlin","variant":"caption"}
+{"id":"c1-tags","type":"row","gap":"6px","children":["c1-deal","c1-warranty"]}
+{"id":"c1-deal","type":"badge","content":"Good price","tone":"success"}
+{"id":"c1-warranty","type":"badge","content":"Warranty"}
 ```
+Look (the chat supplies theme, fonts and spacing):
+- Cards in a set share parts and order: picture, title, key figure, one caption line, at most 2 badges. 3–8 items.
+- The card is the link: the item's URL goes in `href`. No buttons in item cards; one `send_message` button may follow the set.
+- Three text levels: title (name only, never the price), key figure (`size` lg, `weight` semibold), details (`variant` caption, facts joined with " · ").
+- Colour means status: badges stay neutral unless `tone` marks one (good deal → success, defect → danger). Never set colours, widths or `style`.
+- Standalone figures (totals, weather, KPIs) are `stat` tiles in a `grid`; options compared on 3+ attributes are a `table`. Buttons sit in a `row`.
+- Numbers in the reader's format (€2,150; 1,200 km).
 Actions: `send_message` posts `context.message` as the user's next message (`{{id}}` inserts that input's value); `external_link` opens `context.url`. Nothing else runs. Pictures (`headerImage`, image `src`): a verified https URL, or a stored file's `storage://` link exactly as a tool returned it; leave them out rather than guess. Links: verified https only.
 Components (`*` required, `(a|b)` values, `[…]` item fields):"#;
 
@@ -928,6 +948,155 @@ Components (`*` required, `(a|b)` values, `[…]` item fields):"#;
 /// generated reference for [`CHAT_UI_COMPONENTS`].
 pub fn chat_ui_prompt_section() -> String {
     format!("{CHAT_UI_PROMPT_RULES}\n{}", chat_component_reference())
+}
+
+/// The tool that returns one [`CHAT_UI_PATTERNS`] recipe on demand.
+pub const CHAT_UI_PATTERNS_TOOL: &str = "ui_patterns";
+
+/// Layout recipes for `a2ui` chat fences, by name. The prompt section names them; a model loads
+/// one through [`CHAT_UI_PATTERNS_TOOL`] before building that kind of reply.
+pub const CHAT_UI_PATTERNS: &[(&str, &str)] = &[
+    ("listing", LISTING_PATTERN),
+    ("detail", DETAIL_PATTERN),
+    ("comparison", COMPARISON_PATTERN),
+    ("metrics", METRICS_PATTERN),
+    ("steps", STEPS_PATTERN),
+    ("form", FORM_PATTERN),
+];
+
+const LISTING_PATTERN: &str = r#"## listing: items to scan and pick (products, listings, stays, places, search results)
+- 3–8 items in a `grid`: `columns` 2, or 3 for six or more small cards. Narrow screens drop columns on their own.
+- One `card` per item, every card with the same parts in the same order:
+  - `headerImage`, with one `headerImageAspect` for the whole set: 4:3 for products and places, 1:1 for people and covers, 16:9 for videos and articles.
+  - `title`: the name only.
+  - The key figure as `text` (`size` lg, `weight` semibold).
+  - One `caption` line of 3–4 facts joined with " · ".
+  - At most 2 `badge`s in a `row`. They stay neutral; set `tone` only for a status (good price → success, damage → danger).
+- `href` on the card opens the item. Put no buttons inside item cards.
+- If an item has no verified picture, leave pictures out of every card, or use list rows instead.
+- List rows suit items without pictures, or more than 8 items. Use a `column` of rows split by `divider`s. Each row is a `row` (`justify` between, `wrap` false) holding an inner `row` (`avatar` or `icon`, then a `column` with the name and a caption line), and the key figure last.
+- After the set, at most one next step: a `row` with one `outline` `button` that sends `send_message`.
+```a2ui
+{"id":"root","type":"column","gap":"12px","children":["grid","next"]}
+{"id":"grid","type":"grid","columns":2,"gap":"12px","children":["c1"]}
+{"id":"c1","type":"card","title":"Casa Lumen","href":"https://example.com/stays/1","headerImage":"https://example.com/stays/1.jpg","headerImageAspect":"4:3","children":["c1-price","c1-facts","c1-tags"]}
+{"id":"c1-price","type":"text","content":"€142 / night","size":"lg","weight":"semibold"}
+{"id":"c1-facts","type":"text","content":"4.8 rating · 2 bedrooms · 600 m to the beach","variant":"caption"}
+{"id":"c1-tags","type":"row","gap":"6px","children":["c1-cancel"]}
+{"id":"c1-cancel","type":"badge","content":"Free cancellation","tone":"success"}
+{"id":"next","type":"row","children":["more"]}
+{"id":"more","type":"button","label":"Show more like Casa Lumen","variant":"outline","action":{"name":"send_message","context":{"message":"Show more stays like Casa Lumen"}}}
+```"#;
+
+const DETAIL_PATTERN: &str = r#"## detail: one item, place or result in depth
+- One `card`:
+  - `headerImage` at 16:9 or 4:3.
+  - `title`.
+  - `description`: a one-line summary.
+- Inside the card:
+  - A `grid` of 2–4 `stat` tiles for the key figures.
+  - The specs: a `compact` `table` (Property and Value columns) for up to 8 of them, or one `caption` line for three or fewer.
+- At most 2 actions, in a `row` at the bottom:
+  - one default `button` for the main next step;
+  - one `link` or `outline` button for the second.
+- When the only action is opening the source, put its URL in the card's `href` instead.
+```a2ui
+{"id":"root","type":"card","title":"Lisbon in March","description":"Mild, dry and before the Easter crowds","headerImage":"https://example.com/lisbon.jpg","children":["figures","actions"]}
+{"id":"figures","type":"grid","columns":3,"gap":"8px","children":["f1","f2","f3"]}
+{"id":"f1","type":"stat","label":"Daytime","value":"19 °C"}
+{"id":"f2","type":"stat","label":"Rain days","value":"8"}
+{"id":"f3","type":"stat","label":"Flights","value":"from €89","caption":"from Berlin"}
+{"id":"actions","type":"row","gap":"8px","align":"center","children":["plan","guide"]}
+{"id":"plan","type":"button","label":"Plan 4 days","action":{"name":"send_message","context":{"message":"Plan 4 days in Lisbon in March"}}}
+{"id":"guide","type":"link","href":"https://example.com/lisbon-guide","label":"City guide"}
+```"#;
+
+const COMPARISON_PATTERN: &str = r#"## comparison: 2–4 options across several attributes
+- Use a `table`:
+  - Options are the columns and attributes are the rows; the first column names the attribute.
+  - Set `compact`. The `caption` names the source or the date.
+  - Format every value alike, with units in each cell or in the row name.
+- Add pictures only when the options look different. Then put a `listing` grid of the options above the table, without badges.
+- Your sentence before the fence gives the verdict and calls out the winners. The table stays neutral.
+```a2ui
+{"id":"root","type":"table","compact":true,"caption":"Monthly prices, November 2026","columns":[{"id":"spec","header":"","accessor":"spec"},{"id":"basic","header":"Basic","accessor":"basic"},{"id":"plus","header":"Plus","accessor":"plus"},{"id":"pro","header":"Pro","accessor":"pro"}],"data":[{"spec":"Price","basic":"€9","plus":"€19","pro":"€39"},{"spec":"Storage","basic":"50 GB","plus":"500 GB","pro":"2 TB"},{"spec":"Seats","basic":"1","plus":"3","pro":"10"}]}
+```"#;
+
+const METRICS_PATTERN: &str = r#"## metrics: key figures, status or a trend
+- Show the figures as a `grid` of 2–4 `stat` tiles:
+  - `label`: short.
+  - `value`: formatted, with its unit.
+  - `change` and `trend` (up, down or flat) when there is a comparison. `trend` colours up as good and down as bad, so leave it out when a rise is bad (costs, errors, churn).
+  - `caption`: the period or the source.
+- For a trend over time, put one `nivoChart` under the tiles:
+  - `chartType`: line for time, bar for categories, pie only for 2–5 shares of one whole.
+  - `height` 220, at most 3 series. The theme picks the colours.
+- For progress toward a goal, use `progress` with `showLabel`.
+```a2ui
+{"id":"root","type":"column","gap":"12px","children":["tiles","chart"]}
+{"id":"tiles","type":"grid","columns":3,"gap":"8px","children":["s1","s2","s3"]}
+{"id":"s1","type":"stat","label":"Revenue","value":"€48.2k","change":"+12% vs Oct","trend":"up"}
+{"id":"s2","type":"stat","label":"Orders","value":"1,284","change":"−3%","trend":"down"}
+{"id":"s3","type":"stat","label":"Refunds","value":"1.9%","change":"−0.4 pts","caption":"Nov 1–24"}
+{"id":"chart","type":"nivoChart","chartType":"line","height":220,"indexBy":"week","keys":["revenue"],"data":[{"week":"W44","revenue":10.1},{"week":"W45","revenue":11.8},{"week":"W46","revenue":12.4},{"week":"W47","revenue":13.9}]}
+```"#;
+
+const STEPS_PATTERN: &str = r#"## steps: a plan, itinerary, timeline or how-to
+- A `column` (`gap` 12px) of step rows. Each step is a `row` (`gap` 10px, `align` start, `wrap` false) holding:
+  - an `avatar` (`size` sm) whose `fallback` is the step number;
+  - a `column` with the step title (`text`, `weight` medium) and one `caption` line (time, duration, cost).
+- Separate days or phases with a `divider` and a `text` (`variant` label) that names the next one. With more than 4 phases, use `tabs`, one tab per phase.
+- At most one last action: a `row` with one `button` that sends the next step ("Book day 1", "Change the plan").
+```a2ui
+{"id":"root","type":"column","gap":"12px","children":["day1","s1"]}
+{"id":"day1","type":"text","content":"Day 1 · Alfama","variant":"label"}
+{"id":"s1","type":"row","gap":"10px","align":"start","wrap":false,"children":["s1-n","s1-body"]}
+{"id":"s1-n","type":"avatar","size":"sm","fallback":"1"}
+{"id":"s1-body","type":"column","gap":"2px","children":["s1-title","s1-facts"]}
+{"id":"s1-title","type":"text","content":"Walking tour from Sé Cathedral","weight":"medium"}
+{"id":"s1-facts","type":"text","content":"09:30 · 2 h · free","variant":"caption"}
+```"#;
+
+const FORM_PATTERN: &str = r#"## form: a few choices that feed your next turn
+- A `card` with no picture:
+  - `title`: what the form decides.
+  - 2–5 inputs, each with a label and a sensible default `value`.
+- Pick the input by answer type:
+  - a few fixed choices: `radioGroup` (`orientation` horizontal, up to 4 options);
+  - 5 or more choices: `select`;
+  - amounts: `slider` with `showValue`;
+  - yes or no: `switch`;
+  - dates: `dateTimeInput`;
+  - free text, only when nothing else fits: `textField`.
+- End with a `row` holding one `button` whose `send_message` text reads as the user's own request, with `{{id}}` for every input.
+```a2ui
+{"id":"root","type":"card","title":"Plan your Lisbon trip","children":["days","pace","budget","go-row"]}
+{"id":"days","type":"slider","label":"Days","value":4,"min":2,"max":10,"showValue":true}
+{"id":"pace","type":"radioGroup","label":"Pace","value":"balanced","orientation":"horizontal","options":["relaxed","balanced","packed"]}
+{"id":"budget","type":"select","label":"Budget per night","value":"€100–150","options":["under €100","€100–150","€150–250","over €250"]}
+{"id":"go-row","type":"row","children":["go"]}
+{"id":"go","type":"button","label":"Plan it","action":{"name":"send_message","context":{"message":"Plan {{days}} days in Lisbon at a {{pace}} pace, {{budget}} per night"}}}
+```"#;
+
+/// [`chat_ui_prompt_section`] for hosts that offer [`CHAT_UI_PATTERNS_TOOL`].
+pub fn chat_ui_prompt_section_with_patterns() -> String {
+    let names = CHAT_UI_PATTERNS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{}\nBefore your first fence of a kind in a conversation, load its recipe with `{CHAT_UI_PATTERNS_TOOL}`: {names}.",
+        chat_ui_prompt_section()
+    )
+}
+
+/// The recipe for one pattern name from [`CHAT_UI_PATTERNS`].
+pub fn chat_ui_pattern(name: &str) -> Option<&'static str> {
+    CHAT_UI_PATTERNS
+        .iter()
+        .find(|(pattern, _)| pattern.eq_ignore_ascii_case(name.trim()))
+        .map(|(_, recipe)| *recipe)
 }
 
 /// Build the manifest from the typed component schemas. The checked-in
@@ -1569,31 +1738,72 @@ mod tests {
         ] {
             assert!(!section.contains(hidden), "chat prompt advertises {hidden}");
         }
+        for advertised in ["tone", "headerImageAspect", "href", "\n- stat:"] {
+            assert!(
+                section.contains(advertised),
+                "chat prompt omits {advertised}"
+            );
+        }
         assert!(
-            section.len() <= 5_000,
-            "chat UI prompt section grew to {} bytes",
-            section.len()
+            !section.contains("w-full"),
+            "chat prompt teaches full-width"
         );
+        let with_patterns = chat_ui_prompt_section_with_patterns();
         if let Some(path) = std::env::var_os("A2UI_PROMPT_DUMP") {
-            std::fs::write(path, &section).expect("write the prompt dump");
+            std::fs::write(path, &with_patterns).expect("write the prompt dump");
+        }
+        assert!(with_patterns.starts_with(&section));
+        assert!(with_patterns.contains(CHAT_UI_PATTERNS_TOOL));
+        assert!(
+            with_patterns.len() <= 5_000,
+            "chat UI prompt section grew to {} bytes",
+            with_patterns.len()
+        );
+    }
+
+    fn example_fence(text: &str) -> Vec<Value> {
+        text.split("```a2ui\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\n```").next())
+            .expect("the text carries an example fence")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("each example line is JSON"))
+            .collect()
+    }
+
+    fn assert_chat_example_lowers(text: &str) {
+        let (lowered, errors) = lower_components(example_fence(text));
+        assert!(errors.is_empty(), "{errors:?}");
+        for component in &lowered {
+            let component_type = component["component"]["type"].as_str().unwrap();
+            assert!(
+                CHAT_UI_COMPONENTS.contains(&component_type),
+                "{component_type} does not render in chat"
+            );
         }
     }
 
     #[test]
     fn chat_prompt_example_lowers_cleanly() {
-        let example: Vec<Value> = CHAT_UI_PROMPT_RULES
-            .split("```a2ui\n")
-            .nth(1)
-            .and_then(|rest| rest.split("\n```").next())
-            .expect("the prompt carries an example fence")
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("each example line is JSON"))
-            .collect();
-        let (lowered, errors) = lower_components(example);
-        assert!(errors.is_empty(), "{errors:?}");
-        for component in &lowered {
-            let component_type = component["component"]["type"].as_str().unwrap();
-            assert!(CHAT_UI_COMPONENTS.contains(&component_type));
+        assert_chat_example_lowers(CHAT_UI_PROMPT_RULES);
+    }
+
+    #[test]
+    fn every_chat_ui_pattern_has_one_example_that_lowers_cleanly() {
+        for (name, recipe) in CHAT_UI_PATTERNS {
+            assert!(
+                recipe.starts_with(&format!("## {name}: ")),
+                "{name} heading"
+            );
+            assert_eq!(recipe.matches("```a2ui").count(), 1, "{name} examples");
+            assert!(
+                recipe.len() <= 2_500,
+                "{name} grew to {} bytes",
+                recipe.len()
+            );
+            assert_chat_example_lowers(recipe);
         }
+        assert_eq!(chat_ui_pattern(" Listing "), Some(LISTING_PATTERN));
+        assert_eq!(chat_ui_pattern("carousel"), None);
     }
 }

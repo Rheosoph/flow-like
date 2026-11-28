@@ -31,6 +31,10 @@ model Conversation {
   meetings       Meeting[]
   inviteLinks    ConversationInviteLink[]
   botNotes       BotNote[]
+  botTeam        BotTeam?
+  botTeamThread  BotTeamThread?
+  botTeamChat    BotTeamChat?
+  channelLinks   BotChannelLink[]
 
   @@unique([createdBy, importKey])
 }
@@ -58,7 +62,7 @@ model ConversationInviteLink {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   token          String       @unique
   name           String?
-  /// The member who made it, a user sub; no foreign key.
+  /// The member who made it: a user sub, or the bot that sent an email invitation; no foreign key.
   createdBy      String
   /// -1 is unlimited.
   maxUses        BigInt       @default(-1)
@@ -66,6 +70,11 @@ model ConversationInviteLink {
   expiresAt      DateTime?    @db.Timestamptz(3)
   createdAt      DateTime     @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime     @updatedAt @db.Timestamptz(3)
+  /// A bot's email invitation to someone without an account: the lowercased address it went to.
+  /// Such a link works once and is never listed to members.
+  email          String?
+  /// Why the bot invited them, as its owner approved it; shown on the link's page and in the email.
+  reason         String?
 
   @@index([conversationId, createdAt])
   @@index([createdBy])
@@ -135,6 +144,8 @@ model ConversationMember {
   invitedBy      String?
   invitedAt      DateTime?    @db.Timestamptz(3)
   acceptedAt     DateTime?    @db.Timestamptz(3)
+  /// Why a bot invited this person, as its owner approved it; shown with the pending invitation.
+  inviteReason   String?
 
   /// Hidden until a new message or explicit reopening; the history boundaries survive reopening.
   hiddenAt        DateTime? @db.Timestamptz(3)
@@ -144,9 +155,17 @@ model ConversationMember {
   clearedLegacyAt DateTime? @db.Timestamptz(3)
   clearedSeq      BigInt?
 
+  /// Visible messages from others after `lastReadAt` in this principal's copy. Null until a write
+  /// computes it; the conversation list counts live meanwhile.
+  unreadCount     Int?
+  /// This principal's newest visible message copy; only meaningful once `unreadCount` is set.
+  lastEntryId     String?
+
   @@id([conversationId, principalId])
   @@index([principalId, leftAt])
   @@index([principalId, status])
+  // The realtime poll's read, clear and hide aggregates per principal, from the index alone.
+  @@index([principalId, lastReadAt, clearedAt, hiddenAt], map: "ConversationMember_principalId_markers_idx")
 }
 
 /// One principal's copy of one conversation event. Pages are ordered by (createdAt, id).

@@ -53,6 +53,7 @@ const harness = vi.hoisted(() => {
 		getUser: vi.fn(),
 		signinCallback: vi.fn(),
 		loadConfiguration: vi.fn(),
+		storedConfiguration: undefined as Record<string, unknown> | undefined,
 		createUserManager: vi.fn(),
 		stopSilentRenew: vi.fn(),
 		auth: {
@@ -133,6 +134,7 @@ vi.mock("react-oidc-context", async (importOriginal) => {
 });
 vi.mock("../lib/oidc-configuration", () => ({
 	loadWebOidcConfiguration: harness.loadConfiguration,
+	storedWebOidcConfiguration: () => harness.storedConfiguration,
 }));
 vi.mock("../lib/oidc-settings", () => ({
 	getWebOidcSettings: (settings: unknown) => settings,
@@ -145,6 +147,8 @@ vi.mock("./sign-in-required", () => ({
 	SignInRequired: () => <div>Sign in required</div>,
 }));
 vi.mock("./web-provider", () => ({ WebBackend: harness.WebBackend }));
+// The bridge's own availability queries would reach the persister these tests watch.
+vi.mock("./web-realtime-bridge", () => ({ WebRealtimeBridge: () => null }));
 
 const { WebAuthProvider, useOAuthCallbackReady } = await import(
 	"./auth-provider"
@@ -248,6 +252,7 @@ beforeEach(() => {
 		client_id: "web-client",
 		authority: "https://login.test",
 	});
+	harness.storedConfiguration = undefined;
 	harness.createUserManager.mockReset();
 	harness.stopSilentRenew.mockReset();
 	window.history.replaceState(null, "", harness.path);
@@ -301,6 +306,44 @@ describe("WebAuthProvider", () => {
 		expect(harness.createUserManager).toHaveBeenCalledOnce();
 		await act(async () => root.render(null));
 		expect(harness.stopSilentRenew).toHaveBeenCalledOnce();
+	});
+
+	it("starts the session from the stored configuration without waiting for auth/openid", async () => {
+		harness.storedConfiguration = {
+			client_id: "web-client",
+			authority: "https://login.test",
+		};
+		harness.loadConfiguration.mockReturnValueOnce(new Promise(() => {}));
+		await renderProvider();
+
+		expect(harness.createUserManager).toHaveBeenCalledOnce();
+		expect(container.textContent).toBe("App content");
+	});
+
+	it("reloads once when the live configuration differs from the stored one", async () => {
+		const reload = vi.fn();
+		const location = window.location;
+		Object.defineProperty(window, "location", {
+			configurable: true,
+			value: { ...location, reload },
+		});
+		try {
+			harness.storedConfiguration = {
+				client_id: "old-client",
+				authority: "https://login.test",
+			};
+			await renderProvider();
+			expect(reload).toHaveBeenCalledOnce();
+
+			await act(async () => root.render(null));
+			await renderProvider();
+			expect(reload).toHaveBeenCalledOnce();
+		} finally {
+			Object.defineProperty(window, "location", {
+				configurable: true,
+				value: location,
+			});
+		}
 	});
 
 	it.each(["network", "http"])(
@@ -628,9 +671,46 @@ describe("WebAuthProvider", () => {
 		await act(async () => vi.runAllTimersAsync());
 
 		expect(harness.backend.userState.getInfo).toHaveBeenCalledTimes(1);
-		expect(harness.backend.userState.getProfile).not.toHaveBeenCalled();
+		// The profile read runs beside the account check; a rejected session discards it.
+		expect(harness.backend.userState.getProfile).toHaveBeenCalledTimes(1);
 		expect(harness.backend.pushProfile).not.toHaveBeenCalled();
 		expect(harness.childMounts).toBe(0);
+	});
+
+	it("reads the profile beside the account check instead of after it", async () => {
+		let finishInfo!: (info: { id: string }) => void;
+		harness.backend.userState.getInfo.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finishInfo = resolve;
+				}),
+		);
+		await renderProvider();
+
+		expect(harness.backend.userState.getSettingsProfile).toHaveBeenCalledOnce();
+		expect(
+			harness.backend.userState.getAllSettingsProfiles,
+		).toHaveBeenCalledOnce();
+		expect(harness.backend.pushProfile).not.toHaveBeenCalled();
+		expect(harness.childMounts).toBe(0);
+
+		await act(async () => finishInfo({ id: "user-1" }));
+		expect(harness.backend.pushProfile).toHaveBeenCalledOnce();
+		expect(harness.backend.userState.getSettingsProfile).toHaveBeenCalledOnce();
+		expect(container.textContent).toBe("App content");
+	});
+
+	it("reads the profile again after the account check when the early read failed", async () => {
+		harness.backend.userState.getSettingsProfile.mockRejectedValueOnce(
+			new Error("account not created yet"),
+		);
+		await renderProvider();
+
+		expect(harness.backend.userState.getSettingsProfile).toHaveBeenCalledTimes(
+			2,
+		);
+		expect(harness.backend.pushProfile).toHaveBeenCalledOnce();
+		expect(container.textContent).toBe("App content");
 	});
 
 	it("does not substitute a default profile when the profile request returns 401", async () => {

@@ -19,6 +19,7 @@ import {
 	peerPresenceListEqual,
 	readPeerPresence,
 } from "../lib/realtime/peer-presence";
+import { realtimeIceExpiryMs } from "../lib/realtime/webrtc";
 import type { IBoard } from "../lib/schema/flow/board";
 
 export type {
@@ -45,18 +46,9 @@ const EMPTY_CURSORS: PeerCursor[] = [];
 /** Rotate the realtime token this long before its `exp` so reconnects never
  *  replay an expired credential. */
 const TOKEN_ROTATE_MARGIN_MS = 5 * 60 * 1000;
-/** Refresh provider-issued TURN credentials before existing connections need
- * to be rebuilt with an expired credential. */
+/** Refresh provider-issued TURN credentials before the ones in use lapse. */
 const ICE_ROTATE_MARGIN_MS = 2 * 60 * 1000;
 const ACCESS_REFRESH_RETRY_MS = 15 * 1000;
-
-function realtimeIceExpiryMs(access: IRealtimeAccess): number | null {
-	return typeof access.ice_expires_at === "number" &&
-		Number.isFinite(access.ice_expires_at) &&
-		access.ice_expires_at > 0
-		? access.ice_expires_at * 1000
-		: null;
-}
 
 function cursorsEqual(a: PeerCursor[], b: PeerCursor[]): boolean {
 	if (a.length !== b.length) return false;

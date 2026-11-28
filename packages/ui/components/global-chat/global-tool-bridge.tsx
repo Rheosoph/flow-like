@@ -8179,6 +8179,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									request.arguments,
 									contextAppId,
 								) ?? [],
+								asksAgain !== undefined,
 							))
 						))
 				) {

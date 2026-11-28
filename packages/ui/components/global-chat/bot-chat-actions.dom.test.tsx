@@ -64,6 +64,7 @@ async function render(
 				chatBot={chatBot}
 				defaultModelLabel={defaultModelLabel}
 				onOpenSettings={() => {}}
+				canCompact
 			/>,
 		);
 	});

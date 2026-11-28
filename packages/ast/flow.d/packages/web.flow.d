@@ -79,6 +79,19 @@ declare namespace auth {
      * @returns auth — OIDC auth config
      */
     function oidcDiscovery({ issuer: string, audience: string, requiredScopes: string[] }): Struct;
+
+    /**
+     * Checks the HMAC signature of an incoming webhook, such as GitHub's X-Hub-Signature-256 or Stripe-style headers. The body must be the raw request body exactly as received; a re-serialized JSON payload produces a different signature.
+     * @node verify_webhook_signature @alias verifyWebhookSignature
+     * @param body — Raw request body as received
+     * @param signature — Signature header value, e.g. sha256=5d61…
+     * @param secret — Shared webhook secret
+     * @param algorithm (optional) — HMAC hash algorithm
+     * @param prefix (optional) — Prefix removed from the signature before decoding. Empty for none
+     * @param encoding (optional) — Encoding of the signature
+     * @returns valid — True when the signature matches the body and secret
+     */
+    function verifyWebhookSignature({ body: string, signature: string, secret: string, algorithm?: string, prefix?: string, encoding?: string }): bool;
 }
 
 declare namespace camera {

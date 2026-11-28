@@ -3,17 +3,15 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{
-        ScopedPaginationParams, column_reader, resolve_connection, validate_table_name,
-    },
+    routes::app::db::{ScopedPaginationParams, read_table, validate_table_name},
     state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_query::table::TableOperation;
 use flow_like_storage::contracts::database::DatabaseSelector;
-use flow_like_storage::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
 
 #[utoipa::path(
     get,
@@ -44,7 +42,7 @@ pub async fn list_items(
     Path((app_id, table)): Path<(String, String)>,
     Query(params): Query<ScopedPaginationParams>,
     Query(selector): Query<DatabaseSelector>,
-) -> Result<Json<Vec<flow_like_types::Value>>, ApiError> {
+) -> Result<Json<flow_like_types::Value>, ApiError> {
     let permission = ensure_any_permission!(
         user,
         &app_id,
@@ -60,12 +58,20 @@ pub async fn list_items(
     let offset = params.offset.unwrap_or(0).min(100_000) as usize;
     let limit = params.limit.unwrap_or(25).min(250) as usize;
 
-    let connection = resolve_connection(&state, &user, &app_id, &params.scope_params()).await?;
-    let db = LanceDBVectorStore::from_connection_with_selector(connection, table, selector)
-        .await?
-        .with_column_reader(column_reader(&permission, &params.scope_params()));
-
-    let items = db.list(None, limit, offset).await?;
-
+    let items = read_table(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &params.scope_params(),
+        limit,
+        TableOperation::List {
+            table,
+            selector,
+            limit,
+            offset,
+        },
+    )
+    .await?;
     Ok(Json(items))
 }

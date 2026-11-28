@@ -11,6 +11,7 @@ use crate::{
     routes::app::{
         board::{
             scoring::save_board_and_refresh_summary,
+            sealed_commands::{CommandSeal, SealedCommand},
             sink_rebind::{rebind_latest_sinks, try_rebind_latest_sinks},
             sync_board::{board_sync_tail, seed_board_revision},
         },
@@ -35,8 +36,10 @@ use utoipa::ToSchema;
 
 #[derive(Clone, Deserialize, ToSchema)]
 pub struct ExecuteCommandsBody {
+    /// Commands to run. One taken from an earlier response is sent back as it was received,
+    /// `__sealed` included.
     #[schema(value_type = Vec<Object>)]
-    pub commands: Vec<GenericCommand>,
+    pub commands: Vec<SealedCommand>,
     /// The client's board sync manifest. When present the response also carries the sync diff
     /// against the revision this batch produced, saving the follow-up `/sync` round trip. Absent
     /// for clients that predate it, which get the bare command list back as before.
@@ -52,15 +55,15 @@ pub struct ExecuteCommandsBody {
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum ExecuteCommandsResponse {
-    Commands(Vec<GenericCommand>),
+    Commands(Vec<SealedCommand>),
     WithSync {
-        commands: Vec<GenericCommand>,
+        commands: Vec<SealedCommand>,
         sync: Option<BoardSyncResponse>,
     },
 }
 
 impl ExecuteCommandsResponse {
-    fn new(commands: Vec<GenericCommand>, sync: Option<Option<BoardSyncResponse>>) -> Self {
+    fn new(commands: Vec<SealedCommand>, sync: Option<Option<BoardSyncResponse>>) -> Self {
         match sync {
             Some(sync) => Self::WithSync { commands, sync },
             None => Self::Commands(commands),
@@ -231,10 +234,11 @@ fn prune_command_receipts(
     ),
     request_body = ExecuteCommandsBody,
     responses(
-        (status = 200, description = "Commands executed. Returns the resulting commands, or `{commands, sync}` when the request carried a sync manifest", body = Object),
+        (status = 200, description = "Commands executed. Returns the resulting commands, or `{commands, sync}` when the request carried a sync manifest. Secret variable values and sensitive pin values are never part of a returned command: a command that held any carries them encrypted in `__sealed`, and is sent back unchanged to undo or redo it", body = Object),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Board not found"),
+        (status = 422, description = "The batch cannot be applied to this board, or a command carries protected values that were sealed for another board or can no longer be read. Nothing was changed."),
         (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly."),
         (status = 503, description = "The event triggers that run this board could not be switched to run as you first (code SINK_REBIND_UNAVAILABLE). Nothing was written; retry the identical request shortly.")
     )
@@ -268,14 +272,18 @@ pub async fn execute_commands(
             "FlowLike-Idempotency-Ack must reference a previous batch, not this request's Idempotency-Key.",
         ));
     }
-    let digest = idempotency_key
-        .as_ref()
-        .map(|_| request_digest(&params.commands))
-        .transpose()?;
     // The idempotent sync contract is an acknowledgement of this exact submitted batch. Keep the
     // first response byte-semantically aligned with replay instead of returning server-mutated undo
     // state only on the first attempt.
     let idempotent_response = idempotency_key.as_ref().map(|_| params.commands.clone());
+    // Every other response carries state the board held, so it leaves sealed and a command that
+    // comes back from one is opened before it is digested or run.
+    let seal = CommandSeal::new(&state, &app_id, &board_id);
+    let mut commands = seal.open(params.commands)?;
+    let digest = idempotency_key
+        .as_ref()
+        .map(|_| request_digest(&commands))
+        .transpose()?;
 
     let mut board = state
         .master_board(&sub, &app_id, &board_id, &state, None)
@@ -299,21 +307,29 @@ pub async fn execute_commands(
     };
 
     if receipt_ack_key.is_some() && idempotency_key.is_none() {
-        if !params.commands.is_empty() {
+        if !commands.is_empty() {
             return Err(ApiError::bad_request(
                 "A receipt ACK request must contain an empty command list.",
             ));
         }
         let mut cached = None;
+        let mut source = None;
         if released_receipt || pruned_receipts {
             mutation_guard.ensure_held()?;
-            let put = board.save(None).await?;
+            let saved = board.save_with_source(None).await?;
             // Re-pin the cache to what this request just wrote. Without it the next mutation's
             // `If-None-Match` misses and pays a full board load and normalisation sweep for an
             // object this instance is already holding.
-            cached = state.seed_board_cache(&app_id, &board_id, board, &put);
+            cached = state.seed_board_cache(&app_id, &board_id, board, &saved.put);
+            source = Some(saved.source);
         }
         drop(mutation_guard);
+        if let (Some(cached), Some(source)) = (&cached, &source) {
+            crate::routes::app::prerun_shared::prewarm_draft_revision(
+                &state, &app_id, &board_id, cached, source,
+            )
+            .await;
+        }
         let sync = match &sync_request {
             Some(request) => {
                 Some(board_sync_tail(&state, &app_id, &board_id, cached, request).await)
@@ -340,7 +356,7 @@ pub async fn execute_commands(
                     "The Idempotency-Key was already used for a different command payload.",
                 ));
             }
-            if !params.commands.is_empty() {
+            if !commands.is_empty() {
                 rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
             }
             drop(mutation_guard);
@@ -350,7 +366,10 @@ pub async fn execute_commands(
                 }
                 None => None,
             };
-            return Ok(Json(ExecuteCommandsResponse::new(params.commands, sync)));
+            return Ok(Json(ExecuteCommandsResponse::new(
+                idempotent_response.unwrap_or_default(),
+                sync,
+            )));
         }
 
         // Restore the exact opaque value removed by pruning. Only an explicit receipt ACK may
@@ -395,15 +414,15 @@ pub async fn execute_commands(
     if hydrate_board_wasm_metadata(&mut board, &wasm.nodes, &builtin_nodes) {
         board.mark_changed();
     }
-    sanitize_wasm_command_metadata(&mut params.commands, &wasm.nodes, &builtin_nodes)?;
+    sanitize_wasm_command_metadata(&mut commands, &wasm.nodes, &builtin_nodes)?;
 
     // A rejected batch is a property of the payload, not a server fault: the client will resubmit
     // the identical bytes forever. Falling through the generic `Error` conversion would answer 500
     // "Internal Server Error" with the real reason stripped, leaving the client unable to tell a
     // permanently unapplicable batch from an outage.
-    let batch = params.commands.len();
+    let batch = commands.len();
     let commands = board
-        .execute_commands(params.commands, flow_state)
+        .execute_commands(commands, flow_state)
         .instrument(tracing::debug_span!("execute_commands.apply", batch))
         .await
         .map_err(|error| {
@@ -444,7 +463,7 @@ pub async fn execute_commands(
         try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
     }
     mutation_guard.ensure_held()?;
-    let put = save_board_and_refresh_summary(&state, &app_id, &board)
+    let saved = save_board_and_refresh_summary(&state, &app_id, &board)
         .instrument(tracing::debug_span!("execute_commands.save"))
         .await?;
     if batch > 0 {
@@ -470,7 +489,7 @@ pub async fn execute_commands(
     // window in which an unrequested snapshot could be built off the critical path anyway.
     let sync = match &sync_request {
         Some(request) => {
-            let cached = seed_board_revision(&state, &app_id, &board_id, board, &put)
+            let cached = seed_board_revision(&state, &app_id, &board_id, board, &saved)
                 .instrument(tracing::debug_span!("execute_commands.snapshot"))
                 .await;
             Some(
@@ -480,13 +499,22 @@ pub async fn execute_commands(
             )
         }
         None => {
-            state.seed_board_cache(&app_id, &board_id, board, &put);
+            if let Some(cached) = state.seed_board_cache(&app_id, &board_id, board, &saved.put) {
+                crate::routes::app::prerun_shared::prewarm_draft_revision(
+                    &state,
+                    &app_id,
+                    &board_id,
+                    &cached,
+                    &saved.source,
+                )
+                .await;
+            }
             None
         }
     };
 
     Ok(Json(ExecuteCommandsResponse::new(
-        idempotent_response.unwrap_or(commands),
+        idempotent_response.unwrap_or_else(|| seal.seal(commands)),
         sync,
     )))
 }

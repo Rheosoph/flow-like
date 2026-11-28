@@ -1,11 +1,12 @@
 [package]
 name = "flow-like-standalone"
-version = "0.1.17"
+version = "0.1.19"
 edition = "2024"
 description = "Persistent Flow-Like device agent and project service host"
 
 [features]
-default = ["runtime", "training-auto", "playground", "bot-host"]
+default = ["runtime", "training-auto", "playground", "bot-host", "aws-developer-auth"]
+aws-developer-auth = ["dep:aws-config", "aws-config/sso", "aws-config/credentials-login", "aws-config/credentials-process"]
 frontend = ["runtime", "training-auto"]
 training-auto = ["runtime", "flow-like-catalog/training-auto"]
 training-cpu = ["runtime", "flow-like-catalog/training-cpu"]
@@ -17,6 +18,7 @@ runtime = [
     "dep:flow-like-catalog",
     "dep:flow-like-storage",
     "dep:flow-like-types",
+    "dep:flow-like-channels",
     "dep:jsonschema",
     "dep:flow-like-wasm",
     "dep:croner",
@@ -47,6 +49,7 @@ bot-host = [
 ]
 
 [dependencies]
+aws-config = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 anyhow = "1"
 flow-like-device-protocol.workspace = true
@@ -77,7 +80,7 @@ webrtc = "=0.20.5"
 sysinfo = { version = "0.38.4", default-features = false, features = ["system", "network"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-rusqlite = { version = "0.32.1", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled", "fallible_uint"] }
 fs2 = "0.4.3"
 flate2.workspace = true
 tar = { version = "0.4.46", default-features = false }
@@ -101,13 +104,14 @@ flow-like-runtime = { workspace = true, optional = true, features = ["app-runtim
 flow-like-catalog = { workspace = true, optional = true, features = ["remote-metadata", "portable-execute", "local"] }
 flow-like-storage = { workspace = true, optional = true, features = ["files", "database-runtime"] }
 flow-like-types = { workspace = true, optional = true }
+flow-like-channels = { workspace = true, optional = true, features = ["aws-receiver", "azure", "gcp", "nats"] }
 jsonschema = { workspace = true, optional = true }
 flow-like-wasm = { workspace = true, optional = true, features = ["model"] }
 croner = { version = "2.2.0", optional = true }
 chrono = { workspace = true, optional = true }
 chrono-tz = { workspace = true, optional = true }
 flow-like-bots = { workspace = true, optional = true }
-flow-like = { workspace = true, optional = true }
+flow-like = { workspace = true, optional = true, features = ["copilot"] }
 flow-like-bot-host = { workspace = true, optional = true }
 flow-like-bot-tools = { workspace = true, optional = true, features = ["documents", "barcodes", "code", "image", "mcp"] }
 flow-like-bot-tools-host = { workspace = true, optional = true }

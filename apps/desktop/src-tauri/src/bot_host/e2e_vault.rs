@@ -25,34 +25,47 @@ impl KeychainVault {
 }
 
 #[cfg(not(target_os = "android"))]
+static SEALS: crate::keychain_cache::KeychainCache = crate::keychain_cache::KeychainCache::new();
+
+#[cfg(not(target_os = "android"))]
 impl KeychainVault {
     fn entry(&self, owner: &str) -> Result<keyring::Entry, String> {
         keyring::Entry::new(self.service, owner)
             .map_err(|_| "Cannot open the system credential store".to_owned())
+    }
+
+    fn cached(&self, owner: &str) -> String {
+        format!("{}/{owner}", self.service)
     }
 }
 
 #[cfg(not(target_os = "android"))]
 impl InboxKeyVault for KeychainVault {
     fn load(&self, owner: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
-        match self.entry(owner)?.get_secret() {
-            Ok(secret) => Ok(Some(Zeroizing::new(secret))),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(_) => Err("The system credential store is unavailable or locked".into()),
-        }
+        SEALS.read(&self.cached(owner), || {
+            match self.entry(owner)?.get_secret() {
+                Ok(secret) => Ok(Some(Zeroizing::new(secret))),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(_) => Err("The system credential store is unavailable or locked".into()),
+            }
+        })
     }
 
     fn store(&self, owner: &str, secret: &[u8]) -> Result<(), String> {
-        self.entry(owner)?
-            .set_secret(secret)
-            .map_err(|_| "Cannot save the inbox key".to_owned())
+        SEALS.write(&self.cached(owner), secret, || {
+            self.entry(owner)?
+                .set_secret(secret)
+                .map_err(|_| "Cannot save the inbox key".to_owned())
+        })
     }
 
     fn remove(&self, owner: &str) -> Result<(), String> {
-        match self.entry(owner)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err("Cannot delete the inbox key".into()),
-        }
+        SEALS.delete(&self.cached(owner), || {
+            match self.entry(owner)?.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(_) => Err("Cannot delete the inbox key".into()),
+            }
+        })
     }
 }
 

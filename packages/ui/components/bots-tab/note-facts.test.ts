@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ConversationTrigger } from "./fold-entries";
 import {
 	addressLabel,
+	channelFacts,
 	mailFacts,
 	payloadText,
 	triggerModelText,
@@ -103,5 +104,31 @@ describe("texts", () => {
 				}),
 			),
 		).toBe('Order\n\nPayload (webhook): {"body":1}');
+	});
+});
+
+describe("channel facts", () => {
+	test("names the provider and the outside sender", () => {
+		expect(
+			channelFacts(
+				trigger({
+					source: "channel",
+					payload: {
+						provider: "teams",
+						sender: { id: "t:1", name: "Anna" },
+						untrusted: true,
+					},
+				}),
+			),
+		).toEqual({ provider: "teams", sender: "Anna" });
+	});
+
+	test("is null for other triggers and tolerates a thin payload", () => {
+		expect(
+			channelFacts(trigger({ source: "webhook", payload: {} })),
+		).toBeNull();
+		expect(
+			channelFacts(trigger({ source: "channel", payload: { provider: "x" } })),
+		).toEqual({ provider: "x", sender: "" });
 	});
 });

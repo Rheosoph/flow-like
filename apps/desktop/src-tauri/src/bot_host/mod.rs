@@ -21,6 +21,7 @@
 mod account;
 mod approvals;
 mod authorization;
+pub(crate) mod calendar;
 pub(crate) mod commands;
 pub(crate) mod connector_commands;
 mod e2e;
@@ -160,6 +161,7 @@ pub fn start(app: &AppHandle) {
         HostConfig::default(),
     );
     let hub = Arc::new(hub::ProfileHub::new(app.clone()));
+    tauri::async_runtime::spawn(calendar::run(app.clone(), hub.clone()));
     let account = AccountHost::new(
         hub.clone(),
         runner,

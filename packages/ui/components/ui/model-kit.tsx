@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowRightIcon,
 	AudioLinesIcon,
@@ -10,11 +11,16 @@ import {
 	ImageIcon,
 	ListChecksIcon,
 	type LucideIcon,
+	MapPinIcon,
 	MicIcon,
 	TypeIcon,
 	VideoIcon,
 } from "lucide-react";
 import { useMemo } from "react";
+import {
+	type HostingRegion,
+	bitHostingRegion,
+} from "../../lib/bit/hosting-region";
 import { providerDisplayName } from "../../lib/bit/model-display-name";
 import { type IBit, IBitTypes } from "../../lib/schema/bit/bit";
 import { cn } from "../../lib/utils";
@@ -233,6 +239,38 @@ export function DeploymentLabel({
 				className="h-1.5 w-1.5 shrink-0 rounded-full bg-(--dc)"
 			/>
 			{info.label}
+		</span>
+	);
+}
+
+/** The jurisdiction a hosted Bit declares it is served from; nothing when undeclared. */
+export function HostingRegionBadge({
+	bit,
+	className,
+}: Readonly<{ bit: Pick<IBit, "parameters">; className?: string }>) {
+	const { t } = useTranslation("common");
+	const region = bitHostingRegion(bit);
+	if (!region) return null;
+	const copy: Record<HostingRegion, { text: string; title: string }> = {
+		eu: {
+			text: t("hostingRegionEu", "EU"),
+			title: t(
+				"hostingRegionEuTitle",
+				"Hosted in the European Union: requests to this model are served from EU data centers.",
+			),
+		},
+	};
+	return (
+		<span
+			data-hosting-region={region}
+			title={copy[region].title}
+			className={cn(
+				"inline-flex shrink-0 items-center gap-0.5 rounded border border-border px-1 text-[10px]/4 font-medium text-muted-foreground",
+				className,
+			)}
+		>
+			<MapPinIcon aria-hidden className="size-2.5" />
+			{copy[region].text}
 		</span>
 	);
 }

@@ -197,8 +197,8 @@ impl WasmError {
     }
 
     /// Convert to flow_like_types error
-    pub fn into_flow_error(self) -> flow_like_types::Error {
-        flow_like_types::anyhow!("WASM error: {}", self)
+    pub fn into_flow_error(self) -> anyhow::Error {
+        anyhow::anyhow!("WASM error: {}", self)
     }
 }
 

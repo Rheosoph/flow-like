@@ -5,6 +5,7 @@ import {
 	EmptyAppState,
 	EmptyBitState,
 	EmptyBoardState,
+	EmptyDataSourceState,
 	EmptyDatabaseState,
 	EmptyEventState,
 	EmptyGraphState,
@@ -26,6 +27,7 @@ import {
 	type IBitState,
 	type IBoardState,
 	type ICapabilities,
+	type IDataSourceState,
 	type IDatabaseState,
 	type IEventState,
 	type IGraphState,
@@ -76,6 +78,7 @@ export class EmptyBackend implements IBackendState {
 	userState: IUserState = new EmptyUserState();
 	dbState: IDatabaseState = new EmptyDatabaseState();
 	queryState: IQueryState = new EmptyQueryState();
+	dataSourceState: IDataSourceState = new EmptyDataSourceState();
 	graphState: IGraphState = new EmptyGraphState();
 	widgetState: IWidgetState = unavailableState<IWidgetState>("WidgetState");
 	pageState: IPageState = unavailableState<IPageState>("PageState");

@@ -39,15 +39,9 @@ ignore = [
     # RustCrypto 0.14 elliptic-curve stack across those crates and the AWS SDK.
     "RUSTSEC-2026-0387",
 
-    # zstd 0.13.3 / zstd-safe 7.2.4 have reused-context stream leaks,
-    # legacy-frame streaming decompression and seekable decompression exposure
-    # (RUSTSEC-2026-0391, RUSTSEC-2026-0398, RUSTSEC-2026-0403). Fixes require
-    # zstd 0.14 / zstd-safe 8; older copies remain in Arrow/Parquet, DataFusion,
-    # Lance, Iceberg, apache-avro, tonic and compression-codecs.
-    # First-party code uses encode_all, decode_all, the bulk API and a fresh
-    # stream Encoder, never with_context, the write-side Decoder or seekable.
-    "RUSTSEC-2026-0391",
-    "RUSTSEC-2026-0398",
-    "RUSTSEC-2026-0403",
-
+    # kube-client 0.98/0.99: the `openssl-tls` connector also trusts OpenSSL's default CA store
+    # (RUSTSEC-2026-0600). Fixed only in kube 4.2.1. Not exposed: flow-like-api (kube 0.98
+    # defaults) and flow-like-sinks (kube 0.99, `rustls-tls`) build only the rustls connector, and
+    # hyper-openssl is absent from Cargo.lock.
+    "RUSTSEC-2026-0600",
 ]

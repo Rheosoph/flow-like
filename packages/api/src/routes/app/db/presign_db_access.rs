@@ -156,12 +156,13 @@ pub async fn presign_db_access(
     }
 
     // Get scoped credentials for the user
-    let scoped_credentials = RuntimeCredentials::scoped(&sub, &app_id, &state, credentials_access)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to generate scoped credentials: {}", e);
-            ApiError::internal("Failed to generate database access credentials")
-        })?;
+    let scoped_credentials =
+        RuntimeCredentials::scoped(&sub, &app_id, &state, credentials_access.clone())
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to generate scoped credentials: {}", e);
+                ApiError::internal("Failed to generate database access credentials")
+            })?;
 
     let shared_credentials = serde_json::to_value(
         scoped_credentials.clone().into_shared_credentials(),
@@ -175,6 +176,17 @@ pub async fn presign_db_access(
 
     // Get expiration time if available
     let expiration = scoped_credentials.expiration();
+
+    crate::audit::storage_access::authorize_credentials(
+        &state,
+        &user,
+        &app_id,
+        &sub,
+        &credentials_access,
+        "user_database",
+        &scoped_credentials,
+    )
+    .await?;
 
     Ok(Json(PresignDbAccessResponse {
         shared_credentials,
@@ -258,7 +270,7 @@ pub async fn presign_project_db_access(
     }
 
     let scoped_credentials =
-        RuntimeCredentials::scoped(&identifier, &app_id, &state, credentials_access)
+        RuntimeCredentials::scoped(&identifier, &app_id, &state, credentials_access.clone())
             .await
             .map_err(|e| {
                 tracing::error!("Failed to generate scoped credentials: {}", e);
@@ -275,6 +287,17 @@ pub async fn presign_project_db_access(
 
     let db_path = format!("apps/{}/storage/db", app_id);
     let expiration = scoped_credentials.expiration();
+
+    crate::audit::storage_access::authorize_credentials(
+        &state,
+        &user,
+        &app_id,
+        &identifier,
+        &credentials_access,
+        "project_database",
+        &scoped_credentials,
+    )
+    .await?;
 
     Ok(Json(PresignDbAccessResponse {
         shared_credentials,

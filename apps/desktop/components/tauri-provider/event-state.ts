@@ -2541,6 +2541,7 @@ export class EventState implements IEventState {
 				has_wasm_nodes: requirements.wasm_package_ids.length > 0,
 				wasm_package_ids: requirements.wasm_package_ids,
 				wasm_package_permissions: requirements.wasm_package_permissions,
+				has_prompt_variables: requirements.has_prompt_variables,
 			};
 		};
 

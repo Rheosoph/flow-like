@@ -12,7 +12,13 @@ export interface IApp {
 	events: string[];
 	execution_mode: IAppExecutionMode;
 	forked_at?: ISystemTime | null;
+	/** The app this one was forked from. Copies of a fork keep that original. */
 	forked_from?: null | string;
+	/**
+	 * The id seeds that map ids of `forked_from` into this app, oldest first.
+	 * Empty: ids were copied unchanged. Absent: never recorded.
+	 */
+	fork_id_seeds?: null | string[];
 	frontend?: null | IFrontendConfiguration;
 	id: string;
 	interactions_count: number;

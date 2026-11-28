@@ -4,6 +4,8 @@
 extern crate flow_like_runtime as flow_like;
 
 pub mod limits;
+pub mod node_definition;
+pub mod package_node;
 
 #[cfg(feature = "manifest")]
 pub mod manifest;

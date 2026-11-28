@@ -107,10 +107,13 @@ pub(super) async fn conversation(
             invited_by: Set(None),
             invited_at: Set(None),
             accepted_at: Set(None),
+            invite_reason: Set(None),
             hidden_at: Set(None),
             cleared_at: Set(None),
             cleared_legacy_at: Set(None),
             cleared_seq: Set(None),
+            unread_count: Set(None),
+            last_entry_id: Set(None),
         }
         .insert(db)
         .await
@@ -197,5 +200,9 @@ pub(super) fn delivery(kind: ConversationKind, recipients: Vec<BotRecipient>) ->
         kind: InboxEntryKind::Message,
         seq: 1,
         recipients,
+        hands_over: false,
+        chain_origin: None,
+        discussion_hops: None,
+        team_addressed: false,
     }
 }

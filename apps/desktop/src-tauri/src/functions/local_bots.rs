@@ -13,11 +13,12 @@ pub mod notes;
 pub mod workspace;
 
 use flow_like_local_bots::{
-    Bot, BotApp, BotMover, BotPermission, BotSecretInfo, ChangeNotifier, Conversation,
-    ConversationPinState, CreateBotRequest, CreateConversationRequest, EntriesQuery, HubBody,
-    HubCall, HubMethod, InboxEntriesPage, InboxEntry, KeyError, LOCAL_OWNER_ID, LocalBotBundle,
-    LocalBotStore, LocalConversationFile, MarkReadResponse, PinnedMessage, SecretKeyProvider,
-    SendEntryRequest, StarredMessage, StarredMessagesPage, UpdateBotRequest, codes,
+    Bot, BotApp, BotMover, BotPermission, BotSecretInfo, BuiltInDeletion, ChangeNotifier,
+    Conversation, ConversationPinState, CreateBotRequest, CreateConversationRequest, EntriesQuery,
+    HubBody, HubCall, HubMethod, InboxEntriesPage, InboxEntry, KeyError, LOCAL_OWNER_ID,
+    LocalBotBundle, LocalBotStore, LocalConversationFile, MarkReadResponse, PinnedMessage,
+    SecretKeyProvider, SendEntryRequest, StarredMessage, StarredMessagesPage, UpdateBotRequest,
+    codes,
 };
 use flow_like_types::{bot::BotSystemKind, bot_restrictions::BotRestrictions};
 use hub::HubClient;
@@ -158,27 +159,30 @@ impl SecretKeyProvider for KeychainKey {
 fn keychain_key(create: bool) -> Result<Zeroizing<[u8; 32]>, KeyError> {
     use chacha20poly1305::{KeyInit, XChaCha20Poly1305, aead::OsRng};
 
+    static KEY: crate::keychain_cache::KeychainCache = crate::keychain_cache::KeychainCache::new();
     let unavailable = |reason: &str| KeyError::Unavailable(reason.into());
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-        .map_err(|_| unavailable("Cannot open the system credential store"))?;
-    let secret = match entry.get_secret() {
-        Ok(secret) => Zeroizing::new(secret),
-        Err(keyring::Error::NoEntry) if create => {
-            let secret = Zeroizing::new(XChaCha20Poly1305::generate_key(&mut OsRng).to_vec());
-            save_key(&entry, &secret).map_err(KeyError::Unavailable)?;
-            secret
-        }
-        Err(keyring::Error::NoEntry) => {
-            return Err(KeyError::Missing(
-                "This device's key for bot secrets is missing from the keychain".into(),
-            ));
-        }
-        Err(_) => {
-            return Err(unavailable(
-                "The system credential store is unavailable or locked",
-            ));
-        }
+    let missing = || {
+        KeyError::Missing("This device's key for bot secrets is missing from the keychain".into())
     };
+    let secret = KEY
+        .read(KEYCHAIN_ACCOUNT, || {
+            let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+                .map_err(|_| unavailable("Cannot open the system credential store"))?;
+            match entry.get_secret() {
+                Ok(secret) => Ok(Some(Zeroizing::new(secret))),
+                Err(keyring::Error::NoEntry) if create => {
+                    let secret =
+                        Zeroizing::new(XChaCha20Poly1305::generate_key(&mut OsRng).to_vec());
+                    save_key(&entry, &secret).map_err(KeyError::Unavailable)?;
+                    Ok(Some(secret))
+                }
+                Err(keyring::Error::NoEntry) => Err(missing()),
+                Err(_) => Err(unavailable(
+                    "The system credential store is unavailable or locked",
+                )),
+            }
+        })?
+        .ok_or_else(missing)?;
     let key: [u8; 32] = secret
         .as_slice()
         .try_into()
@@ -363,26 +367,32 @@ pub async fn local_bots_update(
     with_store(state, move |store| store.update_bot(&bot_id, request)).await
 }
 
-/// Deletes the bot with its workspace app and its memory; Assistant and Flux stay.
+/// Deletes the bot with its workspace app and its memory. Assistant and Flux stay unless
+/// `account_built_ins`, the built-ins the signed-in account holds, has the bot's kind: this
+/// computer's copy is a second one then.
 #[tauri::command]
 pub async fn local_bots_delete(
     app_handle: AppHandle,
     state: State<'_, LocalBots>,
     bot_id: String,
+    account_built_ins: Option<Vec<BotSystemKind>>,
 ) -> Result<(), CommandError> {
-    delete_local_bot(&app_handle, &state, &bot_id).await
+    let built_ins = BuiltInDeletion::AccountHolds(account_built_ins.unwrap_or_default());
+    delete_local_bot(&app_handle, &state, &bot_id, built_ins).await
 }
 
-/// What the Bots tab's delete runs on this device; Flux's `delete_bot` runs it too.
+/// What the Bots tab's delete runs on this device; Flux's `delete_bot` runs it too, refusing
+/// built-ins.
 pub(crate) async fn delete_local_bot(
     app_handle: &AppHandle,
     bots: &LocalBots,
     bot_id: &str,
+    built_ins: BuiltInDeletion,
 ) -> Result<(), CommandError> {
     let host = workspace::DesktopWorkspaces::new(app_handle);
     Ok(bots
         .store()?
-        .delete_bot_with_workspace(&host, bot_id)
+        .delete_bot_with_workspace(&host, bot_id, built_ins)
         .await?)
 }
 

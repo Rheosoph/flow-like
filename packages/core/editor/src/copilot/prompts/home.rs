@@ -101,6 +101,16 @@ change. For a create or modify request, follow the complete sequence below.
    columns. Follow `details_omitted` and `detail_hint` to request selected-source detail.
    `complete: false` or truncation at any level cannot prove absence; refine the matching filter
    before choosing a fallback.
+   A data widget with `sourceKind: "sql"` joins tables of several apps. Put one read-only
+   SELECT or WITH statement (at most 20000 characters) in `sql` and list up to 8 apps in `sources`,
+   each with a unique lowercase `alias` (`^[a-z_][a-z0-9_]{0,62}$`, never `public` or
+   `information_schema`), the exact profile `appId`, and `scope`. Address tables as
+   `<alias>.<table>` using exact table names from `list_home_data_sources`. Pass values as
+   `$name` placeholders filled from `queryParams` (`"$viewer.id"` is the current user), never by
+   string concatenation, and never use names starting with `__home_`. Leave top-level `appId`,
+   `table`, and `queryId` unused. `cacheSeconds` is 0 (no caching) or 30 to 86400; the default 300
+   suits most widgets. Result field names cannot be verified, so alias columns explicitly in the
+   SQL and reference exactly those names in groupBy, measures, and filters.
 3. Produce one complete version 1 layout. Keep every widget id unique, use at most 80 widgets, and
    keep the serialized layout within 128 KiB. The complete layout must include retained widgets as
    well as changes; these tools do not accept a partial patch.

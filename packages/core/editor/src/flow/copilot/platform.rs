@@ -59,12 +59,12 @@ use super::stream::{
 use super::subtasks::{REQUEST_ID_ARGUMENT, SPAWN_SUBTASKS_TOOL};
 use super::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, HTTP_REQUEST_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL,
-    MEMORY_STORE_TOOL, OPEN_URL_TOOL, PlatformToolSpec, RESEARCH_AGENT_TOOL,
+    MEMORY_STORE_TOOL, OPEN_URL_TOOL, PlatformToolSpec, RESEARCH_AGENT_TOOL, UI_PATTERNS_TOOL,
     data_studio_specialist_tool_specs, find_data_studio_tool_spec, find_global_tool_spec,
     find_home_tool_spec, find_scout_tool_spec, flowpilot_file_tool_specs,
     global_assistant_tool_specs, home_specialist_tool_specs, home_specialist_tool_specs_for_access,
-    public_web_tool_specs, research_agent_prompt, resolve_tool_effect, scout_specialist_tool_specs,
-    spec_arg_str,
+    public_web_tool_specs, research_agent_prompt, resolve_tool_effect, run_ui_patterns,
+    scout_specialist_tool_specs, spec_arg_str,
 };
 use super::turn_label::{TurnLabel, brings_web_content};
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
@@ -97,6 +97,22 @@ const MAX_PLATFORM_TOOL_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PLATFORM_TOOL_INLINE_TOTAL_BYTES: usize = 24 * 1024 * 1024;
 const MAX_PLATFORM_TOOL_INLINE_BASE64_CHARS: usize =
     MAX_PLATFORM_TOOL_INLINE_IMAGE_BYTES.div_ceil(3) * 4;
+/// Plan-step kind for context checkpoints; "think" is reserved for model reasoning.
+const CONTEXT_CHECKPOINT_STEP: &str = "context_checkpoint";
+
+/// A held checkpoint's step text while it is written, once written, and once it failed.
+fn checkpoint_step_text(hold: context::Hold, waited: Option<context::Waited>) -> &'static str {
+    use context::{Hold, Waited};
+    match (hold, waited) {
+        (Hold::Full, None) => "Summarizing earlier steps so the work can continue",
+        (Hold::Full, Some(Waited::Summarized)) => "Earlier steps summarized",
+        (Hold::Full, Some(_)) => "Earlier steps shortened without a summary",
+        (Hold::Requested, None) => "Compacting the earlier conversation",
+        (Hold::Requested, Some(Waited::Summarized)) => "Earlier conversation compacted",
+        (Hold::Requested, Some(_)) => "Could not compact the earlier conversation",
+    }
+}
+
 static SEARCH_CONCURRENCY: LazyLock<tokio::sync::Semaphore> =
     LazyLock::new(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_SEARCH_CALLS));
 
@@ -580,6 +596,49 @@ fn retry_for_room_updates(
     Ok(true)
 }
 
+/// Requests that still offer tools, counting the one about to be sent. A durable run also spends
+/// its budget on model calls that ran no tools, so `reserved_calls` (this one included) bounds it.
+fn tool_rounds_left(
+    max_tool_rounds: usize,
+    iteration: usize,
+    reserved_calls: Option<usize>,
+) -> usize {
+    let by_rounds = max_tool_rounds.saturating_sub(iteration);
+    reserved_calls.map_or(by_rounds, |reserved| {
+        by_rounds.min((max_tool_rounds + 1).saturating_sub(reserved))
+    })
+}
+
+/// The budget a long-running turn has left, stated with every request that offers tools so the
+/// model can pace its work instead of learning about the limit when it is already spent.
+fn turn_budget_note(
+    rounds_left: usize,
+    max_tool_rounds: usize,
+    deadline_in_ms: Option<i64>,
+) -> String {
+    let mut note = if rounds_left <= 1 {
+        format!(
+            "Turn budget: this is the last of {max_tool_rounds} tool rounds; the next request offers no tools."
+        )
+    } else {
+        format!(
+            "Turn budget: {rounds_left} of {max_tool_rounds} tool rounds left, counting this one."
+        )
+    };
+    match deadline_in_ms {
+        Some(ms) if ms < 60_000 => note.push_str(" Less than a minute until the turn deadline."),
+        Some(ms) => {
+            let minutes = (ms as u64).div_ceil(60_000);
+            note.push_str(&format!(
+                " About {minutes} minute{} until the turn deadline.",
+                if minutes == 1 { "" } else { "s" }
+            ));
+        }
+        None => {}
+    }
+    note
+}
+
 /// Whether a platform tool must preserve the model's declared call order within its round.
 ///
 /// Read-only calls can run concurrently, but side-effecting actions must not race each other:
@@ -859,6 +918,7 @@ pub struct PlatformCopilot {
     web_access: WebAccess,
     turn_label: Option<Arc<TurnLabel>>,
     conversation_scope: Option<String>,
+    compaction_requested: bool,
     initial_usage: LLMUsageStats,
     vision: Option<Arc<ImageDetour>>,
 }
@@ -888,6 +948,7 @@ impl PlatformCopilot {
             web_access: WebAccess::default(),
             turn_label: None,
             conversation_scope: None,
+            compaction_requested: false,
             initial_usage: LLMUsageStats::default(),
             vision: None,
         }
@@ -904,6 +965,13 @@ impl PlatformCopilot {
     /// from this run's summary of the older messages instead of summarizing them again.
     pub(super) fn with_conversation_scope(mut self, scope: Option<String>) -> Self {
         self.conversation_scope = scope;
+        self
+    }
+
+    /// Folds the conversation's older messages before the first request when `requested`: the
+    /// person asked to compact the conversation.
+    pub(super) fn with_compaction_requested(mut self, requested: bool) -> Self {
+        self.compaction_requested = requested;
         self
     }
 
@@ -1551,6 +1619,13 @@ impl PlatformCopilot {
                 session_stats.merge(&usage);
             }
         }
+        // The provider caches the turn's request. A summary asked for at its end reads that cache,
+        // unless it would send other thinking settings, which some providers key the cache on.
+        let continuation =
+            (thinking == model_context.checkpoint_thinking).then(|| context::Continuation {
+                system: system_prompt.clone(),
+                tools: tool_definitions.clone(),
+            });
         // A resumed run's history is its saved working context, not the conversation as passed.
         let mut compaction = context::Compaction::open(
             context::ContextBudget::for_window(model_context.window_tokens),
@@ -1561,6 +1636,10 @@ impl PlatformCopilot {
                 .filter(|_| long_running && !resumed),
             &mut current_history,
         );
+        compaction.set_continuation(continuation);
+        if self.compaction_requested && !resumed {
+            compaction.request();
+        }
 
         macro_rules! snapshot {
             ($phase:expr, $pending:expr, $answer:expr) => {
@@ -1725,58 +1804,55 @@ impl PlatformCopilot {
                             model_context.window_tokens,
                             fixed.estimated_tokens,
                             reserved_output_tokens,
+                            session_stats
+                                .context
+                                .as_ref()
+                                .map_or(1.0, context::estimate_scale),
                         ));
                         compaction
                             .collect(&mut current_history, &facts, &mut session_stats)
                             .await;
                         // The checkpoint is written beside the turn. Only a history that is still at the
-                        // hard limit after its stale tool results were shortened holds the request back.
-                        if compaction.start(
+                        // hard limit after its stale tool results were shortened, or a fold the
+                        // person asked for, holds the request back. A checkpoint that fails at the
+                        // hard limit is replaced by a shortened record, so the turn goes on.
+                        if let Some(hold) = compaction.start(
                             completion_client,
                             &model_name,
                             &mut current_history,
+                            &facts,
                             || work_plan.context(),
+                            &mut session_stats,
                         ) {
                             if let Some(callback) = &on_token {
                                 callback(plan_step_frame(
                                     format!("checkpoint_{iteration}"),
-                                    "Preserving progress for the next steps".into(),
+                                    checkpoint_step_text(hold, None).into(),
                                     PlanStepStatus::InProgress,
-                                    "think",
+                                    CONTEXT_CHECKPOINT_STEP,
                                 ));
                             }
-                            let preserved = context::cancellable(
+                            let waited = context::cancellable(
                                 &bridge,
-                                compaction.wait(&mut current_history, &facts, &mut session_stats),
+                                compaction.wait(
+                                    hold,
+                                    &mut current_history,
+                                    &facts,
+                                    &mut session_stats,
+                                ),
                             )
                             .await?;
                             if let Some(callback) = &on_token {
                                 callback(plan_step_frame(
                                     format!("checkpoint_{iteration}"),
-                                    if preserved.is_ok() {
-                                        "Progress preserved"
-                                    } else {
-                                        "Could not preserve progress"
-                                    }
-                                    .into(),
-                                    if preserved.is_ok() {
-                                        PlanStepStatus::Completed
-                                    } else {
+                                    checkpoint_step_text(hold, Some(waited)).into(),
+                                    if waited == context::Waited::Failed {
                                         PlanStepStatus::Failed
+                                    } else {
+                                        PlanStepStatus::Completed
                                     },
-                                    "think",
+                                    CONTEXT_CHECKPOINT_STEP,
                                 ));
-                            }
-                            if let Err(error) = preserved {
-                                tracing::warn!("Long-running bot checkpoint failed: {error:#}");
-                                let notice = "\n\nI stopped because I could not preserve the working context for the next steps. The task is unfinished; actions already completed have not been repeated.";
-                                full_response.push_str(notice);
-                                if let Some(callback) = &on_token {
-                                    callback(notice.into());
-                                }
-                                answer_closed = true;
-                                stop_reason = Some(WorkStopReason::Blocked);
-                                break;
                             }
                         }
                     }
@@ -1809,6 +1885,26 @@ impl PlatformCopilot {
                             &mut request_prompt,
                             &mut request_history,
                             plan,
+                        );
+                    }
+                    if long_running && tools_enabled {
+                        let rounds_left = tool_rounds_left(
+                            max_tool_rounds,
+                            iteration,
+                            recovery
+                                .is_some()
+                                .then(|| model_calls_reserved.saturating_sub(room_drafts_replaced)),
+                        );
+                        merge_room_note_into_prompt(
+                            &mut request_prompt,
+                            &mut request_history,
+                            turn_budget_note(
+                                rounds_left,
+                                max_tool_rounds,
+                                recovery_deadline.map(|deadline| {
+                                    deadline - chrono::Utc::now().timestamp_millis()
+                                }),
+                            ),
                         );
                     }
                     session_stats.context = Some(context::request_usage(
@@ -2399,13 +2495,10 @@ impl PlatformCopilot {
                             .iter()
                             .chain(std::iter::once(&current_prompt))
                             .collect();
+                        let links = crate::models::llm::media_links(&self.state).await;
                         Err(context::cancellable(
                             &bridge,
-                            run_image_view(
-                                &tool_call.function.arguments,
-                                &messages,
-                                self.state.execution_environment,
-                            ),
+                            run_image_view(&tool_call.function.arguments, &messages, &links),
                         )
                         .await?)
                     }
@@ -3640,7 +3733,7 @@ fn platform_tool_enters_private_context(name: &str) -> bool {
     !is_public_web_tool(name)
         && !matches!(
             name,
-            "list_apps" | RESEARCH_AGENT_TOOL | UPDATE_WORK_PLAN_TOOL
+            "list_apps" | RESEARCH_AGENT_TOOL | UPDATE_WORK_PLAN_TOOL | UI_PATTERNS_TOOL
         )
 }
 
@@ -3736,6 +3829,7 @@ async fn execute_platform_tool(
             web_research_session.register_and_decorate_tool_result(name, &mut result);
             serde_json::to_string(&result).unwrap_or_else(|_| "{\"status\":\"error\"}".to_string())
         }
+        UI_PATTERNS_TOOL => run_ui_patterns(&arguments),
         _ => bridge.call(name, arguments).await,
     }
 }

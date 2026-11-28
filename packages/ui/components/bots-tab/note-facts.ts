@@ -95,6 +95,25 @@ export function webhookFacts(
 	};
 }
 
+export interface ChannelFacts {
+	readonly provider: string;
+	readonly sender: string;
+}
+
+/** Who wrote in which outside chat; null for any other trigger. */
+export function channelFacts(
+	trigger: ConversationTrigger,
+): ChannelFacts | null {
+	if (trigger.source !== "channel" || !isRecord(trigger.payload)) return null;
+	const sender = isRecord(trigger.payload.sender)
+		? stringField(trigger.payload.sender.name)
+		: undefined;
+	return {
+		provider: stringField(trigger.payload.provider) ?? "",
+		sender: sender ?? "",
+	};
+}
+
 /** Strings as they are, anything else as indented JSON. */
 export function payloadText(value: unknown): string {
 	if (typeof value === "string") return value;

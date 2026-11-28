@@ -1,5 +1,5 @@
 use crate::{
-    entity::{comment, user, wasm_package},
+    entity::{comment, user},
     error::ApiError,
     middleware::jwt::AppUser,
     state::AppState,
@@ -44,13 +44,15 @@ pub struct CommentsResponse {
     get,
     path = "/registry/package/{package_id}/comments",
     tag = "package-comments",
-    description = "List review comments for a WASM package.",
+    description = "List review comments for a WASM package. Reviews of a private package are shown only to the people it is shared with.",
     params(
         ("package_id" = String, Path, description = "Package ID"),
         CommentsQuery,
     ),
     responses(
         (status = 200, description = "Paginated comment list", body = CommentsResponse),
+        (status = 401, description = "Sign in to read the reviews of a private package"),
+        (status = 403, description = "The package is private and not shared with you"),
         (status = 404, description = "Package not found")
     ),
     security(
@@ -62,18 +64,15 @@ pub struct CommentsResponse {
 )]
 #[tracing::instrument(
     name = "GET /registry/package/{package_id}/comments",
-    skip(state, _user, query)
+    skip(state, user, query)
 )]
 pub async fn get_comments(
     State(state): State<AppState>,
-    Extension(_user): Extension<AppUser>,
+    Extension(user): Extension<AppUser>,
     Path(package_id): Path<String>,
     Query(query): Query<CommentsQuery>,
 ) -> Result<Json<CommentsResponse>, ApiError> {
-    wasm_package::Entity::find_by_id(&package_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
+    super::ensure_reviewable(&state.db, &user, &package_id).await?;
 
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(20).min(100);

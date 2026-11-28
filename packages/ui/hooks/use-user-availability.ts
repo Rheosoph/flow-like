@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef } from "react";
 import { useAuth } from "react-oidc-context";
+import { adaptiveRefetchInterval } from "../lib/adaptive-polling";
 import { getApiOrigin } from "../lib/api-url";
 import {
 	type AvailabilityStatus,
@@ -15,6 +16,12 @@ import {
 } from "../lib/availability";
 import { useBackend } from "../state/backend-state";
 import { useInvoke } from "./use-invoke";
+
+/** Availability also changes when its `until` or a calendar interval passes, so it backs off only to a minute. */
+const AVAILABILITY_POLL = adaptiveRefetchInterval({
+	baseMs: 15_000,
+	maxMs: 60_000,
+});
 
 export function useUserAvailability({
 	local = false,
@@ -62,7 +69,7 @@ export function useUserAvailability({
 		queryFn: load,
 		enabled: enabled && (isLocal || Boolean(activeProfile)),
 		staleTime: 10_000,
-		refetchInterval: 15_000,
+		refetchInterval: AVAILABILITY_POLL,
 	});
 	const invalidate = async () => {
 		await Promise.all([

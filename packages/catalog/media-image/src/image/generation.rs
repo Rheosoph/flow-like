@@ -1807,7 +1807,7 @@ async fn generate_with_provider(
     options: &ImageGenerationProviderOptions,
 ) -> flow_like_types::Result<Vec<GeneratedImage>> {
     if provider.provider_name == flow_like_model_provider::stablediffusion::PROVIDER_NAME {
-        return stablediffusion::generate_image(provider, &req.prompt, options).await;
+        return stablediffusion::generate_image(environment, provider, &req.prompt, options).await;
     }
     if matches!(options, ImageGenerationProviderOptions::StableDiffusion(_)) {
         bail!("stable-diffusion.cpp image options require a stable-diffusion.cpp provider");
@@ -2616,6 +2616,7 @@ impl NodeLogic for GenerateImageNode {
             &provider,
             &context.profile,
             &context.app_state,
+            context.execution_environment(),
         )
         .await?;
         crate::ensure_vertex_credentials_explicit(context, &provider)?;

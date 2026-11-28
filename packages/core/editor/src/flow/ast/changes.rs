@@ -302,15 +302,18 @@ fn diff_nodes(before: &BoardIndex, after: &BoardIndex, changes: &mut FlowScriptC
             .collect();
         inputs.sort_by(|a, b| a.index.cmp(&b.index).then(a.name.cmp(&b.name)));
         for pin in inputs {
-            let previous = old.pins.get(&pin.id).and_then(pin_value);
+            let old_pin = old.pins.get(&pin.id);
+            let previous = old_pin.and_then(pin_value);
             let current = pin_value(pin);
             if previous != current {
+                // A sensitive literal is write-only: its change is reported, its values are not.
+                let hidden = pin.is_sensitive() || old_pin.is_some_and(Pin::is_sensitive);
                 changes.values_changed.push(FlowScriptValueChange {
                     node_id: node.id.clone(),
                     node_type: node.name.clone(),
                     pin: pin.name.clone(),
-                    before: previous,
-                    after: current,
+                    before: previous.filter(|_| !hidden),
+                    after: current.filter(|_| !hidden),
                 });
             }
         }
@@ -597,6 +600,46 @@ mod tests {
         assert_eq!(changes.descriptions_changed.len(), 1);
         assert_eq!(changes.descriptions_changed[0].before, "Find open tickets");
         assert_eq!(changes.descriptions_changed[0].after, "");
+    }
+
+    #[test]
+    fn a_changed_sensitive_literal_is_reported_without_its_values() {
+        let mut before = Board::new_detached(None, flow_like_storage::Path::default());
+        let mut node = node_with(
+            "http",
+            &[("api_key", PinType::Input), ("url", PinType::Input)],
+        );
+        node.id = "request".into();
+        for pin in node.pins.values_mut() {
+            pin.set_default_value(Some(flow_like_types::json::json!("old")));
+            if pin.name == "api_key" {
+                pin.set_options(
+                    crate::flow::pin::PinOptions::new()
+                        .set_sensitive(true)
+                        .build(),
+                );
+            }
+        }
+        before.nodes.insert(node.id.clone(), node);
+
+        let mut after = before.clone();
+        for pin in after.nodes.get_mut("request").unwrap().pins.values_mut() {
+            pin.set_default_value(Some(flow_like_types::json::json!("new")));
+        }
+
+        let mut changed = FlowScriptChanges::between(&before, &after).values_changed;
+        changed.sort_by(|left, right| left.pin.cmp(&right.pin));
+        assert_eq!(changed.len(), 2);
+        assert_eq!(changed[0].pin, "api_key");
+        assert_eq!((&changed[0].before, &changed[0].after), (&None, &None));
+        assert_eq!(changed[1].pin, "url");
+        assert_eq!(
+            (&changed[1].before, &changed[1].after),
+            (
+                &Some(flow_like_types::json::json!("old")),
+                &Some(flow_like_types::json::json!("new"))
+            )
+        );
     }
 
     fn connect(board: &mut Board, from: (&str, &str), to: (&str, &str)) {

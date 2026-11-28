@@ -16,7 +16,8 @@ use crate::{
     permission::role_permission::RolePermissions,
     routes::app::{
         connection::{
-            app_display_name, deny_connected_app, graph::presign_media_under, notify_app_admins,
+            app_display_name, deny_connected_app, graph::presign_media_under, listed_app_name,
+            notify_app_admins,
         },
         groups::{group_meta_as_app_meta, group_meta_lookup},
     },
@@ -210,11 +211,15 @@ pub async fn decline_group_request(
         .one(&state.db)
         .await?
     {
-        let member_name = app_display_name(&state, &app_id).await;
+        // Declining is not agreeing to be known: an unlisted app is named by the id it was
+        // invited by.
+        let member = listed_app_name(&state, &app_id)
+            .await
+            .unwrap_or_else(|| format!("The app {app_id}"));
         notify_app_admins(
             &state,
             &group.owner_app_id,
-            format!("{} declined joining your suite", member_name),
+            format!("{member} declined joining your suite"),
             "The app did not accept the group membership.".to_string(),
         )
         .await;

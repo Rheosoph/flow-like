@@ -620,32 +620,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_granted_web_request_parks_with_a_flagged_item_after_web_content() {
-        let fetch = json!({"url":"https://example.com/news"});
+    async fn a_granted_web_write_parks_with_a_flagged_item_after_web_content() {
+        let post = json!({"url":"https://example.com/news", "method": "POST"});
+        let read = json!({"url":"https://example.com/news"});
         let grants = Arc::new(Grants(Mutex::new(
-            grant_scopes("web_request", &fetch, None)
-                .unwrap()
+            [&post, &read]
                 .into_iter()
+                .flat_map(|args| grant_scopes("web_request", args, None).unwrap())
                 .map(|scope| GrantKey::new("web_request", scope))
                 .collect(),
         )));
         let gate = ApprovalGate::new(grants, "turn");
         scope_call(
             call("c1", false),
-            gate.clear("web_request", &fetch, None, "Fetch"),
+            gate.clear("web_request", &post, None, "Post"),
         )
         .await
         .expect("the grant covers the call before web content");
+        scope_call(
+            call("c0", true),
+            gate.clear("web_request", &read, None, "Read"),
+        )
+        .await
+        .expect("the site's read grant covers a read after web content");
         assert!(gate.parked().is_none());
         let marked = scope_call(
             call("c2", true),
-            gate.clear("web_request", &fetch, None, "Fetch"),
+            gate.clear("web_request", &post, None, "Post"),
         )
         .await;
         assert_eq!(marked.unwrap_err()["status"], "waiting");
         let asks = scope_call(
             call("c3", true),
-            gate.clearance("web_request", &fetch, None, "Fetch"),
+            gate.clearance("web_request", &post, None, "Post"),
         )
         .await;
         assert_eq!(asks, Clearance::Asks);

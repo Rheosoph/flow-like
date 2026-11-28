@@ -76,5 +76,31 @@ export default function prepare({
 			"browser randomness",
 		),
 	);
+	write(
+		"crates/mcp/src/backend.rs",
+		replaceOnce(
+			original("crates/mcp/src/backend.rs"),
+			`                    file_access::check_write(&path)?;
+                    let file = std::path::Path::new(&path);
+                    let folder = cadcraft_engine::atomic_write::missing_folder(file);
+                    cadcraft_engine::atomic_write::write_atomic_making_folders(file, &png).map_err(|e| format!("{path}: {e}"))?;
+                    if let Some(folder) = folder {
+                        r["createdFolder"] = json!(folder.display().to_string());
+                    }`,
+			`                    #[cfg(target_arch = "wasm32")]
+                    return Err("The embedded editor sends file output through its host.".into());
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        file_access::check_write(&path)?;
+                        let file = std::path::Path::new(&path);
+                        let folder = cadcraft_engine::atomic_write::missing_folder(file);
+                        cadcraft_engine::atomic_write::write_atomic_making_folders(file, &png).map_err(|e| format!("{path}: {e}"))?;
+                        if let Some(folder) = folder {
+                            r["createdFolder"] = json!(folder.display().to_string());
+                        }
+                    }`,
+			"native MCP preview file writer",
+		),
+	);
 	prepareLiveMcp({ id: "cadcraft", source, write, original, replaceOnce });
 }

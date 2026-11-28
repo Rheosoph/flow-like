@@ -38,7 +38,7 @@ use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     Value,
     bot_message::{InteractiveMark, MAX_NAME_CHARS, MessageBody},
-    bot_turn::is_interactive_host,
+    bot_turn::{MAX_LONG_DISCUSSION_ROUNDS, is_interactive_host},
     inbox::{
         ActivityBody, CallBody, ConversationEncryption, ConversationKind, EntryCursor,
         EnvelopeKind, InboxEntryKind, MAX_CONVERSATION_MEMBERS, ReactionEvent, TopicBody,
@@ -274,6 +274,12 @@ pub(crate) struct Links {
     pub mentions: Vec<String>,
     pub workspace_apps: BTreeSet<String>,
     pub conversation_files: Vec<super::files::ConversationFileUse>,
+    /// The bot turns `body.discussion` allows the discussion it starts to reach; only a person's
+    /// room message carries it on.
+    pub discussion_hops: Option<u32>,
+    /// The teams a person's `#Team` message goes to; the server sets it in [`fan_out`], never the
+    /// client. Such a message wakes no bot of its own conversation.
+    pub teams: Vec<String>,
 }
 
 /// A send request checked without the database.
@@ -356,7 +362,17 @@ pub(super) fn plain_links(kind: InboxEntryKind, envelope: &Value) -> Result<Link
                     ask.reply_by
                 )));
             }
+            let discussion_hops = match message.discussion {
+                Some(grant) => Some(grant.hops().ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "body.discussion.rounds must be 1 to {MAX_LONG_DISCUSSION_ROUNDS}, not {}",
+                        grant.rounds
+                    ))
+                })?),
+                None => None,
+            };
             Ok(Links {
+                discussion_hops,
                 workspace_apps: message
                     .handles()
                     .filter(|handle| !handle.is_conversation_file())
@@ -372,6 +388,7 @@ pub(super) fn plain_links(kind: InboxEntryKind, envelope: &Value) -> Result<Link
                     .collect(),
                 reply_to: message.reply_to,
                 mentions: message.mentions,
+                teams: Vec::new(),
             })
         }
         InboxEntryKind::Topic => TopicBody::parse(body)
@@ -653,7 +670,7 @@ pub(super) async fn send_in<C: ConnectionTrait>(
 /// messages, leaves a tombstone for a plain deletion and hands the bots that received it to
 /// [`deliver_to_bots`]. `hops` counts the bot turns that led to the event. The caller holds the
 /// conversation's lock and checked for a repeat.
-pub(super) async fn fan_out<C: ConnectionTrait>(
+pub(crate) async fn fan_out<C: ConnectionTrait>(
     txn: &C,
     conversation_id: &str,
     sender: &str,
@@ -665,6 +682,18 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
         checked_envelopes(txn, conversation_id, sender, outgoing).await?;
     let principals: Vec<Principal> = members.iter().map(Principal::from).collect();
     let bots = live_bots(txn, &principals).await?;
+    let named = super::bot_mentions::with_named_bots(sender, &bots, outgoing, &mut envelopes);
+    let outgoing = named.as_ref().unwrap_or(outgoing);
+    let tagged = super::team_request::with_team_tags(
+        txn,
+        &conversation,
+        sender,
+        &bots,
+        outgoing,
+        &mut envelopes,
+    )
+    .await?;
+    let outgoing = tagged.as_ref().unwrap_or(outgoing);
     if outgoing.interactive.is_some()
         && (ConversationKind::parse(&conversation.kind) != Some(ConversationKind::Direct)
             || members.len() != 2
@@ -807,6 +836,18 @@ async fn deliver<'e, C: ConnectionTrait>(
     let conversation_kind =
         ConversationKind::parse(&conversation.kind).unwrap_or(ConversationKind::Group);
     let mut reading_along = reading_along(conversation_kind, event.sender_id, bots, members);
+    if let Some(partner) = continued_exchange(
+        txn,
+        event,
+        conversation_kind,
+        bots,
+        &reading_along,
+        outgoing,
+    )
+    .await?
+    {
+        reading_along.insert(partner);
+    }
     if event.kind == InboxEntryKind::Transcript {
         reading_along.retain(|id| {
             bots.iter().any(|bot| {
@@ -819,16 +860,48 @@ async fn deliver<'e, C: ConnectionTrait>(
             })
         });
     }
+    let bot_sender = bots.iter().any(|bot| bot.id == event.sender_id);
+    let bot_body = match &outgoing.content {
+        Content::Plain(envelope) if bot_sender => MessageBody::parse(&envelope["body"]).ok(),
+        _ => None,
+    };
+    let rests = bot_body.as_ref().is_some_and(MessageBody::rests_discussion);
+    let hands_over = conversation_kind == ConversationKind::Group
+        && event.kind == InboxEntryKind::Message
+        && !super::conversations::is_exchange(conversation)
+        && bot_body
+            .as_ref()
+            .is_some_and(|body| body.ask.is_none() && !rests);
+    let chain = if bot_sender {
+        crate::bot_host::chain_of(txn, event.sender_id, outgoing.links.reply_to.as_deref()).await?
+    } else {
+        crate::bot_host::ledger::Chain {
+            origin: None,
+            discussion_hops: outgoing
+                .links
+                .discussion_hops
+                .filter(|_| conversation_kind == ConversationKind::Group),
+        }
+    };
     let mut delivery = BotDelivery {
         conversation_kind,
         sender_id: event.sender_id.to_string(),
         kind: event.kind,
         seq: event.seq,
         recipients: recipients_of(txn, event, bots, &reading_along, outgoing, hops).await?,
+        hands_over,
+        chain_origin: chain.origin,
+        discussion_hops: chain.discussion_hops,
+        team_addressed: !outgoing.links.teams.is_empty(),
     };
     if speaks_to_direct_bot(event.sender_id, conversation_kind, bots, outgoing) {
         for recipient in &mut delivery.recipients {
             recipient.mentioned = true;
+        }
+    }
+    if rests {
+        for recipient in &mut delivery.recipients {
+            recipient.replied_to = false;
         }
     }
     if let Content::Plain(envelope) = &outgoing.content
@@ -863,6 +936,43 @@ async fn deliver<'e, C: ConnectionTrait>(
         deliver_to_bots(txn, &delivery).await?;
     }
     Ok(delivery.recipients)
+}
+
+/// The bot that answers only when named whose exchange with the sender a person's group message
+/// continues ([`flow_like_types::bot_turn::talking_with`]), when the message names nobody and
+/// replies to nothing: the follow-up reaches the bot as reading along would, without naming it
+/// again.
+async fn continued_exchange<'e, C: ConnectionTrait>(
+    txn: &C,
+    event: &Event<'e>,
+    conversation_kind: ConversationKind,
+    bots: &[bot::Model],
+    reading_along: &HashSet<String>,
+    outgoing: &Outgoing,
+) -> Result<Option<String>, DbErr> {
+    let limited = |id: &str| bots.iter().any(|bot| bot.id == id) && !reading_along.contains(id);
+    let follows_up = conversation_kind == ConversationKind::Group
+        && matches!(
+            event.kind,
+            InboxEntryKind::Message | InboxEntryKind::Transcript
+        )
+        && matches!(outgoing.content, Content::Plain(_))
+        && outgoing.links.mentions.is_empty()
+        && outgoing.links.reply_to.is_none()
+        && bots.iter().all(|bot| bot.id != event.sender_id)
+        && bots.iter().any(|bot| limited(&bot.id));
+    if !follows_up {
+        return Ok(None);
+    }
+    let partner = crate::bot_host::history::partner_at(
+        txn,
+        event.sender_id,
+        event.conversation_id,
+        event.message_id,
+        event.seq,
+    )
+    .await?;
+    Ok(partner.filter(|partner| limited(partner)))
 }
 
 /// A person's line spoken in a direct conversation addresses its bot. Clients say so in
@@ -1127,7 +1237,7 @@ async fn advance_marker<C: ConnectionTrait>(
         return Ok((current, false));
     }
     let (conversation_id, reader) = (&membership.conversation_id, &membership.principal_id);
-    if move_marker(db, conversation_id, reader, read_at).await? {
+    if super::summary::move_marker(db, conversation_id, reader, read_at).await? {
         return Ok((read_at, true));
     }
     let current = active_membership(db, conversation_id, reader).await?;
@@ -1154,31 +1264,6 @@ async fn entry_time<C: ConnectionTrait>(
                 cursor.entry_id
             ))
         })
-}
-
-/// Sets the marker to `read_at` unless it already is there or later; whether it moved.
-async fn move_marker<C: ConnectionTrait>(
-    db: &C,
-    conversation_id: &str,
-    reader: &str,
-    read_at: DateTime<FixedOffset>,
-) -> Result<bool, DbErr> {
-    let updated = conversation_member::Entity::update_many()
-        .col_expr(
-            conversation_member::Column::LastReadAt,
-            Expr::value(read_at),
-        )
-        .filter(conversation_member::Column::ConversationId.eq(conversation_id))
-        .filter(conversation_member::Column::PrincipalId.eq(reader))
-        .filter(super::active_member())
-        .filter(
-            Condition::any()
-                .add(conversation_member::Column::LastReadAt.is_null())
-                .add(conversation_member::Column::LastReadAt.lt(read_at)),
-        )
-        .exec(db)
-        .await?;
-    Ok(updated.rows_affected == 1)
 }
 
 #[utoipa::path(
@@ -1350,6 +1435,7 @@ pub async fn send_entry(
     wake(&state, sent.wake).await;
     if person_sent && first_send {
         super::person_push::after_person_send(&state, &sent.entry).await;
+        super::team_request::after_person_send(&state, &sent.entry).await;
     }
     crate::bot_host::dispatch(&state, &sent.bots).await;
     if let Some((bot_id, turn_id)) = notify_turn {
@@ -1543,14 +1629,13 @@ pub async fn mark_read(
 ) -> Result<Json<MarkReadResponse>, ApiError> {
     let sub = user.sub()?;
     let up_to = parse_cursor("up_to", body.up_to.as_deref())?;
-    let (last_read_at, moved) = mark_read_in(
-        &state.db,
-        &conversation_id,
-        &sub,
-        up_to.as_ref(),
-        now_millis(),
-    )
-    .await?;
+    let now = now_millis();
+    let (last_read_at, moved) = state
+        .transaction(|txn| {
+            let (id, sub, up_to) = (conversation_id.clone(), sub.clone(), up_to.clone());
+            Box::pin(async move { mark_read_in(txn, &id, &sub, up_to.as_ref(), now).await })
+        })
+        .await?;
     if moved {
         wake(&state, [sub]).await;
     }

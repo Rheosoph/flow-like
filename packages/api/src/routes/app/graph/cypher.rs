@@ -1,17 +1,14 @@
 use crate::{
-    ensure_any_permission,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, column_reader},
-    state::AppState,
+    ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, routes::app::db::ScopeParams, state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
 use flow_like_catalog_core::DEFAULT_GRAPH_QUERY_LIMIT;
-use flow_like_storage::databases::graph::{GraphStore, lancegraph};
+use flow_like_query::graph::GraphOperation;
+use flow_like_storage::databases::graph::GraphQueryResult;
 use utoipa::ToSchema;
 
 #[derive(Debug, serde::Deserialize, ToSchema)]
@@ -38,9 +35,11 @@ pub struct CypherPayload {
     request_body = CypherPayload,
     responses(
         (status = 200, description = "Query results", body = flow_like_types::Value),
-        (status = 400, description = "Bad request"),
+        (status = 400, description = "Bad request, or the query failed"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 503, description = "The query service is unavailable"),
+        (status = 504, description = "The query ran out of time")
     ),
     security(
         ("bearer_auth" = []),
@@ -67,23 +66,21 @@ pub async fn run_cypher(
         RolePermissions::ReadDatabase
     );
 
-    let (connection, overlay) =
-        super::load_scoped_overlay(&state, &user, &app_id, &overlay_id, &scope).await?;
-    let store = lancegraph::LanceGraphStore::new_for(
-        connection,
-        overlay,
-        None,
-        column_reader(&permission, &scope),
+    let results: GraphQueryResult = super::read_overlay(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &overlay_id,
+        &scope,
+        |overlay| GraphOperation::Cypher {
+            overlay: Box::new(overlay),
+            query: payload.query,
+            params: payload.params,
+            limit: payload.limit.unwrap_or(DEFAULT_GRAPH_QUERY_LIMIT),
+        },
     )
     .await?;
-
-    let results = store
-        .cypher_with_metadata(
-            &payload.query,
-            payload.params,
-            Some(payload.limit.unwrap_or(DEFAULT_GRAPH_QUERY_LIMIT)),
-        )
-        .await?;
 
     Ok(Json(if payload.include_metadata {
         serde_json::to_value(results)?

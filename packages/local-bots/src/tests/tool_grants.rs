@@ -26,6 +26,7 @@ fn card(turn_id: &str) -> ApprovalRequest {
         room: None,
         secret: None,
         invite: None,
+        picture: None,
         configuration_changes: None,
         items: Vec::new(),
     }
@@ -144,7 +145,10 @@ fn deleting_a_bot_deletes_its_grants_and_parked_turns() {
         .store
         .park_turn("bt_1", &bot.id, "c1", "m1", &card("bt_1"))
         .unwrap();
-    fixture.store.delete_bot(&bot.id).unwrap();
+    fixture
+        .store
+        .delete_bot(&bot.id, &crate::BuiltInDeletion::Refuse)
+        .unwrap();
     let raw = fixture.raw();
     for table in ["tool_grants", "parked_turns"] {
         let rows: i64 = raw
@@ -358,7 +362,10 @@ fn a_grant_lapses_after_ninety_days_unused_and_a_use_slides_it_once_a_day() {
     assert!(fixture.store.tool_grants(&bot.id).unwrap().is_empty());
     assert!(fixture.store.tool_keys(&bot.id).unwrap().is_empty());
     assert_eq!(
-        fixture.store.delete_tool_key(&bot.id, "code_run", "host:example.com").unwrap(),
+        fixture
+            .store
+            .delete_tool_key(&bot.id, "code_run", "host:example.com")
+            .unwrap(),
         false,
         "the lapsed row was swept"
     );

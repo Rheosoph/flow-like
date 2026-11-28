@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-flow-like-types.workspace = true
+cuid2.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 mimalloc.workspace = true
 lambda_runtime = { version = "1.0.2", features = ["anyhow"] }
 tracing.workspace = true

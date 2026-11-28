@@ -12,9 +12,12 @@ import {
 	TimerOffIcon,
 	UserPlusIcon,
 } from "lucide-react";
+import { useEffect } from "react";
 import { useBotSecretSealing } from "../../hooks/use-bot-secret-sealing";
 import { useBot, useBotLabels, useUpsertBotSecret } from "../../hooks/use-bots";
 import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
+import { emitGuideEvent } from "../../lib/guide/guide-events";
+import { siteReadsOnly } from "../../lib/tool-grant-scopes";
 import { BotAvatar } from "../bots/bot-avatar";
 import type { BotAppearance } from "../bots/types";
 import type { IMessageApproval } from "../interfaces/chat-default/chat-db";
@@ -36,8 +39,19 @@ import {
 	WebContentNotice,
 	useDecisionText,
 } from "./approval-batch";
-import { callPhrase, isBatch } from "./approval-batch-model";
+import {
+	approvalItems,
+	callLine,
+	callPhrase,
+	isBatch,
+} from "./approval-batch-model";
 import type { ApprovalDecision } from "./approval-entry";
+import { ApprovalPicture } from "./approval-picture";
+import {
+	ApprovalReceipt,
+	ReceiptCollapse,
+	useSettledFold,
+} from "./approval-receipt";
 import {
 	BotConfigurationChanges,
 	useBotSettingsApprovalText,
@@ -80,6 +94,8 @@ interface ApprovalCardProps {
 	/** The asking bot's look; without it the card shows a shield instead of its face. */
 	botAppearance?: Partial<BotAppearance>;
 	readOnly: boolean;
+	/** Once answered, expired or cancelled, the card folds to one line that opens it again. */
+	foldSettled?: boolean;
 }
 
 /**
@@ -100,6 +116,7 @@ function SingleApprovalCard({
 	botName,
 	botAppearance,
 	readOnly,
+	foldSettled = false,
 }: Readonly<ApprovalCardProps>) {
 	const { t } = useTranslation("bots");
 	const grantLabel = useGrantLabel(approval.scopes);
@@ -111,16 +128,29 @@ function SingleApprovalCard({
 	const waiting = !decision && !closure;
 	const isConfiguration = requiresFreshToolApproval(approval.tool);
 	const settingsText = useBotSettingsApprovalText(approval.tool);
-	const flagged = approval.afterWebContent === true;
+	const flagged =
+		approval.afterWebContent === true ||
+		approvalItems(approval).some((item) => item.afterWebContent);
 	const rememberable =
-		!isConfiguration && !flagged && approval.scopes.length > 0;
+		!isConfiguration &&
+		approval.scopes.length > 0 &&
+		(!flagged || siteReadsOnly(approval.scopes));
 	const tone = decisionTone(decision, closure);
 	const disabled = readOnly || state.pending || state.elsewhere;
 	const target = approval.scopes
 		.map((scope) => grantLabel(approval.tool, scope))
 		.join(", ");
 
-	const answer = (next: ApprovalDecision) => state.send(next);
+	const fold = useSettledFold(foldSettled, !waiting);
+
+	const answer = (next: ApprovalDecision) => {
+		emitGuideEvent("bots:approval-answered");
+		state.send(next, undefined, fold.focusReceipt);
+	};
+
+	useEffect(() => {
+		if (waiting && !readOnly) emitGuideEvent("bots:approval-shown");
+	}, [waiting, readOnly]);
 
 	const secret = approval.secret;
 	const invite = approval.invite;
@@ -144,11 +174,43 @@ function SingleApprovalCard({
 			sealed,
 		});
 		await state.sendAsync("once");
+		fold.focusReceipt();
 	};
 	const closed = !waiting;
+	const status = closure
+		? closure === "expired"
+			? t("crew.approval.expired", "Expired")
+			: t("crew.approval.cancelled", "Task cancelled")
+		: decision
+			? isConfiguration
+				? decision === "deny"
+					? settingsText.rejected
+					: settingsText.approved
+				: decisionText(decision, !!secret)
+			: undefined;
+	const statusSlot = closure ? "approval-closure" : "approval-answer";
+	if (fold.folded && status) {
+		return (
+			<ApprovalReceipt
+				fold={fold}
+				icon={icon}
+				tone={tone}
+				status={status}
+				statusSlot={statusSlot}
+				line={
+					secret
+						? secret.name
+						: isConfiguration
+							? t("crew.approval.configuration.title", "Update bot settings")
+							: callLine(approval.summary || approval.tool)
+				}
+			/>
+		);
+	}
 	return (
 		<RequestCard
 			data-slot="approval-card"
+			data-guide={waiting ? "approval" : undefined}
 			aria-label={t("crew.approval.label", "Approval request")}
 			tone={tone}
 			live={waiting}
@@ -171,24 +233,13 @@ function SingleApprovalCard({
 					</RequestMark>
 				}
 				eyebrow={
-					closure ? (
-						<span data-slot="approval-closure">
-							{closure === "expired"
-								? t("crew.approval.expired", "Expired")
-								: t("crew.approval.cancelled", "Task cancelled")}
-						</span>
-					) : decision ? (
-						<span data-slot="approval-answer">
-							{isConfiguration
-								? decision === "deny"
-									? settingsText.rejected
-									: settingsText.approved
-								: decisionText(decision, !!secret)}
-						</span>
+					status ? (
+						<span data-slot={statusSlot}>{status}</span>
 					) : (
 						t("crew.approval.label", "Approval request")
 					)
 				}
+				aside={fold.unfolded ? <ReceiptCollapse fold={fold} /> : undefined}
 				className={closed ? "pb-3.5" : undefined}
 				title={
 					secret
@@ -238,6 +289,11 @@ function SingleApprovalCard({
 			{invite && (
 				<RequestCardBody dense>
 					<InviteRequestDetails invite={invite} room={approval.room} />
+				</RequestCardBody>
+			)}
+			{approval.picture && (
+				<RequestCardBody dense>
+					<ApprovalPicture picture={approval.picture} room={approval.room} />
 				</RequestCardBody>
 			)}
 			{approval.configurationChanges && (
@@ -347,6 +403,7 @@ export function ChatApprovalCard({
 			}
 			botAppearance={bot?.appearance}
 			readOnly={false}
+			foldSettled
 		/>
 	);
 }

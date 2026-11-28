@@ -76,12 +76,14 @@ function HeaderActions({
 		<div className="flex items-center gap-2">
 			<Button variant="outline" onClick={onAddFolder} disabled={addingFolder}>
 				{addingFolder ? <Loader2 className="animate-spin" /> : <FolderOpen />}
-				<span className="hidden sm:inline">{t("addFolder", "Add folder")}</span>
+				<span className="sr-only sm:not-sr-only">
+					{t("addFolder", "Add folder")}
+				</span>
 			</Button>
 			<Button asChild>
 				<Link href={projectRoutes.newPackage()}>
 					<Plus />
-					<span className="hidden sm:inline">
+					<span className="sr-only sm:not-sr-only">
 						{t("newPackage", "New package")}
 					</span>
 				</Link>
@@ -595,7 +597,7 @@ export function MinePackages({ navigation }: { navigation: ReactNode }) {
 						onAddFolder={addFolder}
 						addingFolder={mine.isAddingFolder}
 					/>
-				) : results.length === 0 ? (
+				) : mine.error && entries.length === 0 ? null : results.length === 0 ? (
 					<NoMatches
 						onShowAll={() => {
 							setFilter("all");

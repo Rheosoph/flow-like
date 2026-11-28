@@ -155,7 +155,10 @@ async function flush(ms = 20) {
 	});
 }
 
-async function render(props: Partial<PackageDetailViewProps>) {
+async function render(
+	props: Partial<PackageDetailViewProps>,
+	backend: Record<string, unknown> = {},
+) {
 	const { act } = await import("react");
 	const { QueryClient, QueryClientProvider } = await import(
 		"@tanstack/react-query"
@@ -167,7 +170,9 @@ async function render(props: Partial<PackageDetailViewProps>) {
 		profile: undefined,
 		userState: {
 			getSettingsProfile: async () => ({ hub_profile: { id: "hub" } }),
+			getProfile: async () => ({ id: "profile" }),
 		},
+		...backend,
 	} as never);
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
@@ -277,6 +282,61 @@ describe("PackageDetailView owner surface", () => {
 		expect(panel?.id.endsWith("-content-versions")).toBe(true);
 		expect(panel?.textContent).toContain("0.3.0");
 		expect(panel?.querySelectorAll("button")).toHaveLength(0);
+	});
+
+	test("without a device install store the store offers Add to project, not Install", async () => {
+		const { fetcher } = recordingFetcher();
+		const posts: { path: string; body: unknown }[] = [];
+		await render(
+			{
+				pkg: registryEntry(PackagePermissionBits.User),
+				currentUserPermission: PackagePermissionBits.User,
+				hasAccess: true,
+				installMode: "project",
+				fetcher,
+			},
+			{
+				appState: {
+					getApps: async () => [
+						[{ id: "app-sales", visibility: "Private" }, { name: "Sales" }],
+						[
+							{ id: "bot-ws", visibility: "Private", bot_id: "bot" },
+							{ name: "Bot" },
+						],
+					],
+				},
+				apiState: {
+					post: async (_profile: unknown, path: string, body: unknown) => {
+						posts.push({ path, body });
+						return {};
+					},
+				},
+			},
+		);
+
+		expect(byText("button", "Install")).toBeUndefined();
+		const add = byText<HTMLButtonElement>("button", "Add to project");
+		expect(add).toBeDefined();
+		const { act } = await import("react");
+		await act(async () => add?.click());
+		await flush(50);
+
+		const body = window.document.body;
+		expect(body.textContent).toContain("Sales");
+		expect(body.textContent).not.toContain("Bot");
+		const addToSales = body.querySelector(
+			'[aria-label="Add to Sales"]',
+		) as unknown as HTMLButtonElement | null;
+		expect(addToSales).not.toBeNull();
+		await act(async () => addToSales?.click());
+		await flush(50);
+		expect(posts).toEqual([
+			{
+				path: "apps/app-sales/packages",
+				body: { packageId: PACKAGE_ID, version: "0.3.0", autoUpdate: true },
+			},
+		]);
+		expect(body.textContent).toContain("Open packages");
 	});
 
 	test("an expired session with nothing loaded offers Sign in", async () => {

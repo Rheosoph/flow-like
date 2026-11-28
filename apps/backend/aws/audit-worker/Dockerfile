@@ -2,7 +2,6 @@
 # ============================================================
 # Stage 1: Builder
 # ============================================================
-# Links the API crate like the Lambda API, so it needs the same build packages.
 FROM --platform=linux/arm64 public.ecr.aws/amazonlinux/amazonlinux:2023 AS builder
 COPY rust-toolchain.toml /rust-toolchain.toml
 
@@ -14,15 +13,9 @@ RUN yum update -y && \
         clang \
         git \
         lld \
-        glib2-devel \
-        gtk3-devel \
         openssl-devel \
         pkgconf-pkg-config \
-        unzip \
         xz && \
-    curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-linux-aarch_64.zip && \
-    unzip protoc-25.3-linux-aarch_64.zip -d /usr/local && \
-    rm protoc-25.3-linux-aarch_64.zip && \
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none && \
     /root/.cargo/bin/rustup toolchain install && \
     yum remove -y xz && \
@@ -54,6 +47,16 @@ RUN if [ -n "$CRDB_CA_URL" ]; then \
 # Stage 2: Runtime
 # ============================================================
 FROM --platform=linux/arm64 public.ecr.aws/lambda/provided:al2023-arm64
+
+# Patch runtime packages separately from the builder (ALAS2023-2026-3430).
+ARG AL2023_SECURITY_RELEASE=2023.12.20261112
+RUN set -eu; \
+    dnf upgrade -y --releasever="${AL2023_SECURITY_RELEASE}" rpm rpm-libs; \
+    for package in rpm rpm-libs; do \
+        installed_version="$(rpm -q --qf '%{VERSION}-%{RELEASE}' "$package")"; \
+        test "$(rpm --eval "%{lua:print(rpm.vercmp('${installed_version}', '4.16.1.3-29.amzn2023.0.10'))}")" -ge 0; \
+    done; \
+    dnf clean all
 
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
 

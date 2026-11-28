@@ -517,7 +517,10 @@ pub(super) async fn load_bot(
     } else {
         Vec::new()
     };
-    let connectors = if record.capabilities().contains(&BotCapability::Connectors) {
+    let capabilities = record.capabilities();
+    let connectors = if capabilities.contains(&BotCapability::Connectors)
+        || capabilities.contains(&BotCapability::Calendar)
+    {
         connector_rules(app, signed_in, &record.id).await
     } else {
         Vec::new()
@@ -1045,7 +1048,9 @@ pub(super) async fn bot_model(
 pub(super) fn bot_tool_set(tool_name: &str) -> FrontendPlatformToolSet {
     match tool_name {
         "get_app_detail" => FrontendPlatformToolSet::Scout,
-        "database_tool" | "graph_query_tool" => FrontendPlatformToolSet::DataStudio,
+        "database_tool" | "graph_query_tool" | "graph_element_tool" | "graph_overlay_tool" => {
+            FrontendPlatformToolSet::DataStudio
+        }
         "storage_tool" => FrontendPlatformToolSet::BoardRuntime,
         _ if super::super::super::native_bot_tools::supports(tool_name) => {
             FrontendPlatformToolSet::BotTools
@@ -1054,9 +1059,10 @@ pub(super) fn bot_tool_set(tool_name: &str) -> FrontendPlatformToolSet {
     }
 }
 
-/// The global chat's frontend bridge for a bot run. Core has already checked each call against
-/// the bot's limits; this resolves its approval and timeout and dispatches it like FlowPilot's.
-pub(super) struct BotDesktopBridge(pub(super) DesktopPlatformBridge);
+/// The global chat's frontend bridge for a bot run, with the bot's workspace app. Core has
+/// already checked each call against the bot's limits; this resolves its approval and timeout
+/// and dispatches it like FlowPilot's.
+pub(super) struct BotDesktopBridge(pub(super) DesktopPlatformBridge, pub(super) Option<String>);
 
 impl BotDesktopBridge {
     fn for_tool(&self, tool_name: &str) -> DesktopPlatformBridge {
@@ -1067,11 +1073,62 @@ impl BotDesktopBridge {
             steerable: false,
         }
     }
+
+    /// A graph query or write in the bot's workspace runs only once its overlay was read and
+    /// maps no memory table; an overlay that cannot be read refuses the call.
+    async fn workspace_graph_refusal(
+        &self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> Option<String> {
+        let workspace = self.1.as_deref()?;
+        if !flow_like::flow::copilot::WORKSPACE_GUARDED_GRAPH_TOOLS.contains(&tool_name)
+            || arguments.get("app_id").and_then(serde_json::Value::as_str) != Some(workspace)
+        {
+            return None;
+        }
+        let overlay_id = arguments
+            .get("overlay_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let answer = self
+            .for_tool("graph_overlay_tool")
+            .call(
+                "graph_overlay_tool",
+                serde_json::json!({
+                    "operation": "get_overlay",
+                    "app_id": workspace,
+                    "overlay_id": overlay_id,
+                }),
+            )
+            .await;
+        match serde_json::from_str::<serde_json::Value>(&answer)
+            .ok()
+            .and_then(|value| value.get("overlay").cloned())
+        {
+            Some(overlay) => flow_like::flow::copilot::workspace_graph_refusal(tool_name, &overlay),
+            None => Some(
+                serde_json::json!({
+                    "status": "error",
+                    "tool": tool_name,
+                    "code": "bot_graph_unchecked",
+                    "retryable": true,
+                    "message": format!(
+                        "Graph '{overlay_id}' in the bot's workspace could not be read to check it before use, so nothing was run: {answer}"
+                    ),
+                })
+                .to_string(),
+            ),
+        }
+    }
 }
 
 #[async_trait]
 impl PlatformToolBridge for BotDesktopBridge {
     async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
+        if let Some(refusal) = self.workspace_graph_refusal(tool_name, &arguments).await {
+            return refusal;
+        }
         self.for_tool(tool_name).call(tool_name, arguments).await
     }
 
@@ -1618,6 +1675,7 @@ mod tests {
             subtask_model: None,
             classification: DataSensitivity::default(),
             capabilities: vec![BotCapability::SelectedApps, BotCapability::Storage],
+            calendar_wake: Default::default(),
             profile_id: None,
             location: flow_like_types::bot::BotLocation::Desktop,
             device_id: None,
@@ -1739,6 +1797,8 @@ mod tests {
             "interact_app_page",
             "database_tool",
             "graph_query_tool",
+            "graph_element_tool",
+            "graph_overlay_tool",
             "storage_tool",
         ] {
             let desktop = frontend_platform_tool_spec(bot_tool_set(tool_name), tool_name)
@@ -1747,8 +1807,34 @@ mod tests {
             assert_eq!(desktop.name, core.name);
             assert_eq!(desktop.timeout_secs, core.timeout_secs);
             assert_eq!(desktop.approval.effect(), core.approval.effect());
-            assert_eq!((desktop.schema)(), (core.schema)(), "{tool_name}");
+            if tool_name != "graph_overlay_tool" {
+                assert_eq!((desktop.schema)(), (core.schema)(), "{tool_name}");
+            }
         }
+        let overlay =
+            frontend_platform_tool_spec(bot_tool_set("graph_overlay_tool"), "graph_overlay_tool")
+                .unwrap();
+        let narrowed = find_bot_tool_spec("graph_overlay_tool").unwrap();
+        assert_eq!(
+            (narrowed.schema)()["properties"]["operation"]["enum"],
+            json!(["list_overlays", "get_overlay", "get_schema"])
+        );
+        let elements = json!({ "operation": "add_nodes", "app_id": "app" });
+        for spec in [
+            frontend_platform_tool_spec(bot_tool_set("graph_element_tool"), "graph_element_tool")
+                .unwrap(),
+            find_bot_tool_spec("graph_element_tool").unwrap(),
+        ] {
+            assert_eq!(
+                flow_like::flow::copilot::tool_spec::resolve_tool_effect(&spec, &elements),
+                flow_like::flow::copilot::tool_spec::ToolEffect::Mutating
+            );
+        }
+        let read = json!({ "operation": "get_schema", "app_id": "app" });
+        assert_eq!(
+            flow_like::flow::copilot::tool_spec::resolve_tool_effect(&overlay, &read),
+            flow_like::flow::copilot::tool_spec::ToolEffect::ReadOnly
+        );
         let insert = json!({ "operation": "insert", "app_id": "app" });
         let desktop =
             frontend_platform_tool_spec(bot_tool_set("database_tool"), "database_tool").unwrap();

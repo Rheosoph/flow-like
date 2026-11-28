@@ -967,6 +967,7 @@ mod tests {
             status: UserStatus::Active,
             tier: crate::entity::sea_orm_active_enums::UserTier::Pro,
             share_email: None,
+            last_seen_at: Some(created),
         }
     }
 
@@ -1153,6 +1154,10 @@ mod tests {
             image_model: None,
             vision_model: None,
             subtask_model: None,
+            calendar_wake: None,
+            calendar_synced_at: None,
+            others_can_invite: None,
+            others_daily_turns: None,
         }
     }
 

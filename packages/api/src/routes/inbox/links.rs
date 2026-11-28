@@ -2,6 +2,10 @@
 //! group at once while the link is live: not expired, not used up, and its creator still an
 //! active member. Encrypted groups take no links yet, since someone joining may have no key to
 //! seal messages to. A token is a credential: logs and audit records carry the link id only.
+//!
+//! A bot's email invitation to an address without an account is a link too: made by the bot,
+//! good for one join within [`EMAIL_INVITE_DAYS`] days, carrying the address and the reason. It
+//! is never listed to members and does not count toward their links.
 
 use super::{
     INBOX_LINK_LIMIT, INBOX_LINK_NOT_ALLOWED, INBOX_LINK_NOT_FOUND, INBOX_LINK_USED_UP, Reader,
@@ -16,7 +20,8 @@ use super::{
 };
 use crate::{
     audit,
-    entity::{conversation, conversation_invite_link},
+    db::coordination::coordinate,
+    entity::{bot, conversation, conversation_invite_link},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::user::ensure_user_exists,
@@ -28,6 +33,7 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{DateTime, Duration, FixedOffset};
+use flow_like_bot_tools::rooms::EMAIL_INVITE_DAYS;
 use flow_like_types::{
     base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD},
     create_id,
@@ -36,7 +42,7 @@ use flow_like_types::{
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DbErr, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect,
+    QueryFilter, QueryOrder, QuerySelect, QueryTrait,
     sea_query::{Expr, ExprTrait},
 };
 use serde::{Deserialize, Serialize};
@@ -44,6 +50,8 @@ use utoipa::ToSchema;
 
 /// Links one group holds, live or not; revoking frees a slot.
 pub(crate) const MAX_LINKS: u64 = 20;
+/// Email invitations the bots of one owner send per day, all bots and rooms together.
+pub(crate) const MAX_OWNER_EMAIL_INVITES_PER_DAY: u64 = 20;
 const NAME_MAX_CHARS: usize = 80;
 const MAX_LINK_USES: i64 = 10_000;
 const MAX_EXPIRY_HOURS: i64 = 24 * 365;
@@ -277,6 +285,7 @@ pub(crate) async fn create_link_in<C: ConnectionTrait>(
     }
     let held = conversation_invite_link::Entity::find()
         .filter(conversation_invite_link::Column::ConversationId.eq(conversation_id))
+        .filter(conversation_invite_link::Column::Email.is_null())
         .count(txn)
         .await?;
     if held >= MAX_LINKS {
@@ -299,6 +308,8 @@ pub(crate) async fn create_link_in<C: ConnectionTrait>(
         expires_at: link.expires_in.map(|expires_in| now + expires_in),
         created_at: now,
         updated_at: now,
+        email: None,
+        reason: None,
     };
     Ok(conversation_invite_link::ActiveModel::from(row)
         .reset_all()
@@ -306,7 +317,126 @@ pub(crate) async fn create_link_in<C: ConnectionTrait>(
         .await?)
 }
 
-/// The group's links, newest first, for an active member.
+/// What asking for an email invitation came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EmailInvite {
+    /// A new link to send to the address.
+    Created(conversation_invite_link::Model),
+    /// The address already holds a live invitation to this group; nothing was made.
+    Pending,
+    /// The owner's bots sent their [`MAX_OWNER_EMAIL_INVITES_PER_DAY`] email invitations of the
+    /// last day.
+    DailyLimit,
+}
+
+/// Makes `bot_id`'s single-use email invitation into a group it is checked to be in, unless the
+/// address already holds a live one there or the bots of `owner_id` used up their day. Run it
+/// under the conversation's and the owner's locks.
+pub(crate) async fn create_email_invite_in<C: ConnectionTrait>(
+    txn: &C,
+    conversation_id: &str,
+    bot_id: &str,
+    owner_id: &str,
+    address: &str,
+    reason: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<EmailInvite, ApiError> {
+    let address = address.trim().to_lowercase();
+    let pending = conversation_invite_link::Entity::find()
+        .filter(conversation_invite_link::Column::ConversationId.eq(conversation_id))
+        .filter(conversation_invite_link::Column::Email.eq(address.as_str()))
+        .all(txn)
+        .await?
+        .iter()
+        .any(|link| !expired(link, now) && !used_up(link));
+    if pending {
+        return Ok(EmailInvite::Pending);
+    }
+    let owners_bots = bot::Entity::find()
+        .select_only()
+        .column(bot::Column::Id)
+        .filter(bot::Column::OwnerId.eq(owner_id))
+        .into_query();
+    let sent_today = conversation_invite_link::Entity::find()
+        .filter(
+            Condition::any()
+                .add(conversation_invite_link::Column::CreatedBy.eq(bot_id))
+                .add(conversation_invite_link::Column::CreatedBy.in_subquery(owners_bots)),
+        )
+        .filter(conversation_invite_link::Column::Email.is_not_null())
+        .filter(conversation_invite_link::Column::CreatedAt.gt(now - Duration::days(1)))
+        .count(txn)
+        .await?;
+    if sent_today >= MAX_OWNER_EMAIL_INVITES_PER_DAY {
+        return Ok(EmailInvite::DailyLimit);
+    }
+    let row = conversation_invite_link::Model {
+        id: create_id(),
+        conversation_id: conversation_id.to_string(),
+        token: new_token()?,
+        name: None,
+        created_by: bot_id.to_string(),
+        max_uses: 1,
+        count_joined: 0,
+        expires_at: Some(now + Duration::days(EMAIL_INVITE_DAYS)),
+        created_at: now,
+        updated_at: now,
+        email: Some(address),
+        reason: Some(reason.to_string()),
+    };
+    Ok(EmailInvite::Created(
+        conversation_invite_link::ActiveModel::from(row)
+            .reset_all()
+            .insert(txn)
+            .await?,
+    ))
+}
+
+/// [`create_email_invite_in`] under the conversation's lock and the owner's, so parallel asks
+/// in different groups cannot all pass the daily count.
+pub(crate) async fn email_invite(
+    state: &AppState,
+    conversation_id: &str,
+    bot_id: &str,
+    owner_id: &str,
+    address: &str,
+    reason: &str,
+) -> Result<EmailInvite, ApiError> {
+    state
+        .transaction(|txn| {
+            let (id, bot, owner, address, reason) = (
+                conversation_id.to_string(),
+                bot_id.to_string(),
+                owner_id.to_string(),
+                address.to_string(),
+                reason.to_string(),
+            );
+            Box::pin(async move {
+                lock_conversation(txn, &id).await?;
+                coordinate(txn, "bot-owner-email-invites", &[&owner]).await?;
+                create_email_invite_in(txn, &id, &bot, &owner, &address, &reason, now_millis())
+                    .await
+            })
+        })
+        .await
+}
+
+/// Withdraws an email invitation whose email could not be sent, so asking again sends one.
+pub(crate) async fn drop_email_invite<C: ConnectionTrait>(
+    db: &C,
+    link_id: &str,
+) -> Result<(), DbErr> {
+    conversation_invite_link::Entity::delete_many()
+        .filter(conversation_invite_link::Column::Id.eq(link_id))
+        .filter(conversation_invite_link::Column::Email.is_not_null())
+        .filter(conversation_invite_link::Column::CountJoined.eq(0))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+/// The group's links, newest first, for an active member. Email invitations are the invitee's
+/// own and never listed.
 pub(crate) async fn links_in<C: ConnectionTrait>(
     db: &C,
     conversation_id: &str,
@@ -315,6 +445,7 @@ pub(crate) async fn links_in<C: ConnectionTrait>(
     member_conversation(db, conversation_id, member).await?;
     Ok(conversation_invite_link::Entity::find()
         .filter(conversation_invite_link::Column::ConversationId.eq(conversation_id))
+        .filter(conversation_invite_link::Column::Email.is_null())
         .order_by_desc(conversation_invite_link::Column::CreatedAt)
         .order_by_desc(conversation_invite_link::Column::Id)
         .limit(MAX_LINKS)

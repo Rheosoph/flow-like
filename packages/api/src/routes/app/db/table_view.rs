@@ -3,28 +3,15 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{
-        ScopedPaginationParams, column_reader, resolve_connection, validate_table_name,
-    },
+    routes::app::db::{ScopedPaginationParams, read_table, validate_table_name},
     state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_query::table::TableOperation;
 use flow_like_storage::contracts::database::DatabaseSelector;
-use flow_like_storage::{
-    arrow_schema::Schema,
-    databases::vector::{VectorStore, lancedb::LanceDBVectorStore},
-};
-use serde::Serialize;
-
-#[derive(Debug, Serialize)]
-pub struct TableViewResponse {
-    pub schema: Schema,
-    pub count: usize,
-    pub items: Vec<flow_like_types::Value>,
-}
 
 #[utoipa::path(
     get,
@@ -55,7 +42,7 @@ pub async fn table_view(
     Path((app_id, table)): Path<(String, String)>,
     Query(params): Query<ScopedPaginationParams>,
     Query(selector): Query<DatabaseSelector>,
-) -> Result<Json<TableViewResponse>, ApiError> {
+) -> Result<Json<flow_like_types::Value>, ApiError> {
     let permission = ensure_any_permission!(
         user,
         &app_id,
@@ -71,19 +58,20 @@ pub async fn table_view(
     let offset = params.offset.unwrap_or(0).min(100_000) as usize;
     let limit = params.limit.unwrap_or(25).min(250) as usize;
 
-    // Single connection reused for all 3 operations
-    let connection = resolve_connection(&state, &user, &app_id, &params.scope_params()).await?;
-    let db = LanceDBVectorStore::from_connection_with_selector(connection, table, selector)
-        .await?
-        .with_column_reader(column_reader(&permission, &params.scope_params()));
-
-    let schema = db.schema().await?;
-    let count = db.count(None).await?;
-    let items = db.list(None, limit, offset).await?;
-
-    Ok(Json(TableViewResponse {
-        schema,
-        count,
-        items,
-    }))
+    let view = read_table(
+        &state,
+        &user,
+        &permission,
+        &app_id,
+        &params.scope_params(),
+        limit,
+        TableOperation::View {
+            table,
+            selector,
+            limit,
+            offset,
+        },
+    )
+    .await?;
+    Ok(Json(view))
 }

@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import prepareBrowserAudio from "../pcm-codec-patch.mjs";
 
 export default function prepareBrowserCodecs({
+	root,
 	directory,
 	original,
 	write,
@@ -55,14 +57,32 @@ export default function prepareBrowserCodecs({
 	);
 	write("crates/engine/src/perf.rs", perf);
 	let exportCargo = original("crates/export/Cargo.toml");
-	for (const name of ["prores", "dnx", "apv", "aac", "h264enc"]) {
-		exportCargo = replaceOnce(
-			exportCargo,
-			`filmcraft-${name} = { workspace = true }\n`,
-			"",
-			`remove ${name} encoder dependency`,
-		);
-	}
+	exportCargo = replaceOnce(
+		exportCargo,
+		"craft-video = { workspace = true }\n",
+		"",
+		"software video encoder dependency",
+	);
+	let workspace = original("Cargo.toml");
+	const audio = workspace.match(/^craft-audio = .*$/m)?.[0];
+	if (!audio) throw new Error("Film shared audio dependency changed.");
+	workspace = replaceOnce(
+		workspace,
+		audio,
+		audio.replace(
+			/features = \[[^\]]*\]/,
+			'features = ["pcm-encode", "flac-encode"]',
+		),
+		"browser audio features",
+	);
+	const pinnedSourceOverrides = prepareBrowserAudio({
+		id: "filmcraft",
+		root,
+		original,
+		write,
+		replaceOnce,
+		workspace,
+	});
 	write("crates/export/Cargo.toml", exportCargo);
 	let encoders = original("crates/export/src/encoders.rs");
 	encoders = between(
@@ -91,7 +111,7 @@ export default function prepareBrowserCodecs({
 		"use super::encoders::mjpeg_factory;",
 		"software encoder imports",
 	);
-	registry = registry.replaceAll("filmcraft_h264enc::PassStats", "()");
+	registry = registry.replaceAll("craft_video::h264::PassStats", "()");
 	registry = replaceOnce(
 		registry,
 		"vec![h264_factory, prores_factory, dnx_factory, apv_factory, mjpeg_factory]",
@@ -106,20 +126,20 @@ export default function prepareBrowserCodecs({
 	);
 	write("crates/export/src/registry.rs", registry);
 	let format = original("crates/export/src/format.rs").replaceAll(
-		"filmcraft_h264enc::PassStats",
+		"craft_video::h264::PassStats",
 		"()",
 	);
 	format = replaceOnce(
 		format,
 		"!matches!(self, Format::Hevc | Format::Av1)",
-		"!matches!(self, Format::H264 | Format::Hevc | Format::Av1 | Format::Aac | Format::ProRes | Format::DnxHr | Format::Apv | Format::MxfOp1a | Format::MxfOpAtom)",
+		"!matches!(self, Format::H264 | Format::Hevc | Format::Av1 | Format::Aac | Format::ProRes | Format::DnxHr | Format::Apv | Format::MxfOp1a | Format::MxfOpAtom | Format::Mp3)",
 		"unsupported export formats",
 	);
 	write("crates/export/src/format.rs", format);
 	let settings = original("crates/export/src/settings.rs");
 	settings = replaceOnce(
 		settings,
-		"crate::prores_profile(&self.prores_profile).chroma() == filmcraft_prores::ChromaFormat::Yuv444",
+		"crate::prores_profile(&self.prores_profile).chroma() == craft_video::prores::ChromaFormat::Yuv444",
 		"false",
 		"ProRes alpha availability",
 	);
@@ -138,7 +158,7 @@ export default function prepareBrowserCodecs({
 	);
 	settings = between(
 		settings,
-		"                    use filmcraft_prores::Profile;",
+		"                    use craft_video::prores::Profile;",
 		"                Format::DnxHr =>",
 		'                    v += ", unavailable in this browser build";\n                }\n',
 		"ProRes export summary",
@@ -148,6 +168,29 @@ export default function prepareBrowserCodecs({
 		'Format::Apv => v += &format!(", {}", crate::apv_profile(&self.apv_profile).name()),',
 		'Format::Apv => v += ", unavailable in this browser build",',
 		"APV export summary",
+	);
+	settings = between(
+		settings,
+		"        let rate = craft_audio::mp3::nearest_sample_rate",
+		"        (rate, channels, kbps)",
+		"        let rate = self.audio.sample_rate.unwrap_or(seq_sr);\n        let channels = self.audio.channels.clamp(1, 2);\n        let kbps = self.audio.bitrate_kbps;\n",
+		"unused MP3 settings",
+	);
+	const unavailableAudio = `pub(crate) fn export(
+    _project: &std::sync::Arc<filmcraft_project::Project>,
+    _seq: filmcraft_project::ItemId,
+    _settings: &crate::ExportSettings,
+    _range: filmcraft_time::TimeRange,
+    _sources: &dyn filmcraft_render::SourceProvider,
+    _progress: &crate::Progress,
+) -> crate::Result<(u64, u64)> {
+    Err(crate::ExportError::Unsupported("Use the browser export controls.".into()))
+}
+`;
+	write("crates/export/src/mp3_out.rs", unavailableAudio);
+	write(
+		"crates/export/src/aac_out.rs",
+		`${unavailableAudio}pub(crate) fn is_adts_path(path: &str) -> bool { std::path::Path::new(path).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("aac")) }\n`,
 	);
 	write("crates/export/src/settings.rs", settings);
 	let mxf = original("crates/export/src/mxf_out.rs");
@@ -173,4 +216,5 @@ export default function prepareBrowserCodecs({
 		"unused proxy estimate",
 	);
 	write("crates/engine/src/project_manager.rs", manager);
+	return pinnedSourceOverrides;
 }

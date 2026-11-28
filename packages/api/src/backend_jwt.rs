@@ -451,6 +451,12 @@ pub(crate) fn init_for_tests() {
     });
 }
 
+/// The installed public key, for tests that verify with another component's verifier.
+#[cfg(all(test, feature = "query-in-process"))]
+pub(crate) fn public_key_pem_for_tests() -> Option<&'static [u8]> {
+    PUBLIC_KEY_PEM.get().map(Vec::as_slice)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

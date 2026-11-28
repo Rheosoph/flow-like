@@ -1,25 +1,24 @@
 import { create } from "zustand";
 
+export interface IRunExecution {
+	eventIds: string[];
+	boardId: string;
+	/** Currently executing nodes (unique) */
+	nodes: Set<string>;
+	/** Nodes that have finished executing (unique) */
+	already_executed: Set<string>;
+	/** Timestamp (ms since epoch) of the last node update event */
+	lastNodeUpdateMs: number;
+	/** Total number of node executions started (counts duplicates for loops) */
+	totalExecutionsStarted: number;
+	/** Total number of node executions completed (counts duplicates for loops) */
+	totalExecutionsCompleted: number;
+	/** The most recently active node ID */
+	lastActiveNodeId: string | undefined;
+}
+
 interface IRunExecutionState {
-	runs: Map<
-		string,
-		{
-			eventIds: string[];
-			boardId: string;
-			/** Currently executing nodes (unique) */
-			nodes: Set<string>;
-			/** Nodes that have finished executing (unique) */
-			already_executed: Set<string>;
-			/** Timestamp (ms since epoch) of the last node update event */
-			lastNodeUpdateMs: number;
-			/** Total number of node executions started (counts duplicates for loops) */
-			totalExecutionsStarted: number;
-			/** Total number of node executions completed (counts duplicates for loops) */
-			totalExecutionsCompleted: number;
-			/** The most recently active node ID */
-			lastActiveNodeId: string | undefined;
-		}
-	>;
+	runs: Map<string, IRunExecution>;
 	pushUpdate(runId: string, events: IRunUpdateEvent[]): void;
 	addRun: (runId: string, boardId: string, eventIds: string[]) => Promise<void>;
 	removeRun: (runId: string) => void;
@@ -34,56 +33,84 @@ export interface IRunUpdateEvent {
 	method: "remove" | "add" | "update";
 }
 
-export const useRunExecutionStore = create<IRunExecutionState>((set, get) => ({
-	run_nodes: new Map(),
-	runs: new Map(),
-	pushUpdate: (runId: string, events: IRunUpdateEvent[]) => {
-		const add_nodes = new Map();
-		const remove_nodes = new Map();
+function withStartedNodes(
+	run: IRunExecution,
+	nodeIds: readonly string[],
+	now: number,
+): IRunExecution {
+	const nodes = new Set(run.nodes);
+	for (const nodeId of nodeIds) nodes.add(nodeId);
+	return {
+		...run,
+		nodes,
+		lastNodeUpdateMs: now,
+		// Count every execution start, not just unique nodes
+		totalExecutionsStarted: run.totalExecutionsStarted + nodeIds.length,
+		lastActiveNodeId: nodeIds.at(-1) ?? run.lastActiveNodeId,
+	};
+}
 
-		for (const payload of events) {
-			if (payload.method === "add") {
-				if (add_nodes.has(payload.runId)) {
-					add_nodes.set(payload.runId, [
-						...add_nodes.get(payload.runId),
-						...payload.nodeIds,
-					]);
-					continue;
-				}
-				add_nodes.set(payload.runId, payload.nodeIds);
-				continue;
-			}
+function withFinishedNodes(
+	run: IRunExecution,
+	nodeIds: readonly string[],
+	now: number,
+): IRunExecution {
+	const nodes = new Set(run.nodes);
+	const alreadyExecuted = new Set(run.already_executed);
+	for (const nodeId of nodeIds) {
+		nodes.delete(nodeId);
+		alreadyExecuted.add(nodeId);
+	}
+	return {
+		...run,
+		nodes,
+		already_executed: alreadyExecuted,
+		lastNodeUpdateMs: now,
+		// Count every execution completion, not just unique nodes
+		totalExecutionsCompleted: run.totalExecutionsCompleted + nodeIds.length,
+	};
+}
 
-			if (remove_nodes.has(payload.runId)) {
-				remove_nodes.set(payload.runId, [
-					...remove_nodes.get(payload.runId),
-					...payload.nodeIds,
-				]);
-				continue;
-			}
-
-			remove_nodes.set(payload.runId, payload.nodeIds);
+/** Node ids per run of the batch's start events (`started`) or of its other events. */
+function groupNodeIds(
+	events: readonly IRunUpdateEvent[],
+	started: boolean,
+): Map<string, string[]> {
+	const grouped = new Map<string, string[]>();
+	for (const event of events) {
+		if ((event.method === "add") !== started) continue;
+		const nodeIds = grouped.get(event.runId);
+		if (!nodeIds) {
+			grouped.set(event.runId, [...event.nodeIds]);
+			continue;
 		}
+		for (const nodeId of event.nodeIds) nodeIds.push(nodeId);
+	}
+	return grouped;
+}
 
-		// Update lastNodeUpdateMs for each run that received events
+export const useRunExecutionStore = create<IRunExecutionState>((set, get) => ({
+	runs: new Map(),
+	/** One store write per batch: subscribers re-render once, not once per event kind. */
+	pushUpdate: (_runId: string, events: IRunUpdateEvent[]) => {
+		const started = groupNodeIds(events, true);
+		const finished = groupNodeIds(events, false);
+		if (started.size === 0 && finished.size === 0) return;
 		const now = Date.now();
 		set((state) => {
-			const runs = new Map(state.runs);
-			for (const run_id of [...add_nodes.keys(), ...remove_nodes.keys()]) {
-				const run = runs.get(run_id);
-				if (run) {
-					runs.set(run_id, { ...run, lastNodeUpdateMs: now });
-				}
+			let runs: Map<string, IRunExecution> | undefined;
+			for (const runId of new Set([...started.keys(), ...finished.keys()])) {
+				let run = state.runs.get(runId);
+				if (!run) continue;
+				run = { ...run, lastNodeUpdateMs: now };
+				const startedIds = started.get(runId);
+				if (startedIds) run = withStartedNodes(run, startedIds, now);
+				const finishedIds = finished.get(runId);
+				if (finishedIds) run = withFinishedNodes(run, finishedIds, now);
+				runs ??= new Map(state.runs);
+				runs.set(runId, run);
 			}
-			return { runs };
-		});
-
-		add_nodes.forEach((node_ids, run_id) => {
-			get().addNodesOnRun(run_id, node_ids);
-		});
-
-		remove_nodes.forEach((node_ids, run_id) => {
-			get().removeNodesOnRun(run_id, node_ids);
+			return runs ? { runs } : state;
 		});
 	},
 	addRun: async (runId: string, boardId: string, eventIds: string[]) => {
@@ -116,51 +143,19 @@ export const useRunExecutionStore = create<IRunExecutionState>((set, get) => ({
 
 	addNodesOnRun: (runId: string, nodeIds: string[]) =>
 		set((state) => {
+			const run = state.runs.get(runId);
+			if (!run) return state;
 			const runs = new Map(state.runs);
-			const run = runs.get(runId);
-			if (!run) {
-				return state;
-			}
-
-			const newNodes = new Set(run.nodes);
-			nodeIds.forEach((nodeId) => newNodes.add(nodeId));
-
-			// Track last active node (most recent in the batch)
-			const lastActiveNodeId =
-				nodeIds.length > 0 ? nodeIds[nodeIds.length - 1] : run.lastActiveNodeId;
-
-			runs.set(runId, {
-				...run,
-				nodes: newNodes,
-				lastNodeUpdateMs: Date.now(),
-				// Count every execution start, not just unique nodes
-				totalExecutionsStarted: run.totalExecutionsStarted + nodeIds.length,
-				lastActiveNodeId,
-			});
+			runs.set(runId, withStartedNodes(run, nodeIds, Date.now()));
 			return { runs };
 		}),
 
 	removeNodesOnRun: (runId: string, nodeIds: string[]) =>
 		set((state) => {
+			const run = state.runs.get(runId);
+			if (!run) return state;
 			const runs = new Map(state.runs);
-			const run = runs.get(runId);
-			if (!run) {
-				return state;
-			}
-
-			const newNodes = new Set(run.nodes);
-			const newAlreadyExecuted = new Set(run.already_executed);
-			nodeIds.forEach((nodeId) => newNodes.delete(nodeId));
-			nodeIds.forEach((nodeId) => newAlreadyExecuted.add(nodeId));
-
-			runs.set(runId, {
-				...run,
-				nodes: newNodes,
-				already_executed: newAlreadyExecuted,
-				lastNodeUpdateMs: Date.now(),
-				// Count every execution completion, not just unique nodes
-				totalExecutionsCompleted: run.totalExecutionsCompleted + nodeIds.length,
-			});
+			runs.set(runId, withFinishedNodes(run, nodeIds, Date.now()));
 			return { runs };
 		}),
 

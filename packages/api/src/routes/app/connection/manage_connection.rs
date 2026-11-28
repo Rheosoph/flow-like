@@ -149,11 +149,14 @@ pub async fn reject_connection_request(
     let request: app_connection::ActiveModel = request.into();
     request.delete(&state.db).await?;
 
-    let target_name = crate::routes::app::connection::app_display_name(&state, &app_id).await;
+    // Declining is not agreeing to be known: an unlisted app is named by the id it was asked by.
+    let target = crate::routes::app::connection::listed_app_name(&state, &app_id)
+        .await
+        .unwrap_or_else(|| format!("the app {app_id}"));
     crate::routes::app::connection::notify_app_admins(
         &state,
         &source_app_id,
-        format!("Your connection request to {} was declined", target_name),
+        format!("Your connection request to {target} was declined"),
         "The app did not grant access.".to_string(),
     )
     .await;

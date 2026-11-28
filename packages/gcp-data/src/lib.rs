@@ -9,4 +9,5 @@
 
 pub mod firestore;
 pub mod metadata;
+#[cfg(feature = "postgres")]
 pub mod postgres;

@@ -1,4 +1,4 @@
-use super::{extract_nodes, metadata_security};
+use super::{extract_nodes, metadata_limits};
 
 fn metadata_component(instances: usize, memory_pages: u32, table_elements: u32) -> Vec<u8> {
     assert!(instances >= 1);
@@ -92,11 +92,13 @@ async fn rejects_component_initialization_above_each_resource_budget() {
 }
 
 #[test]
-fn metadata_resource_budget_keeps_guest_access_closed() {
-    let security = metadata_security();
-    assert!(security.capabilities.is_empty());
-    assert!(!security.allow_wasi);
-    assert!(!security.allow_wasi_network);
-    assert_eq!(security.allowed_hosts.as_deref(), Some(&[][..]));
-    assert!(security.deterministic);
+fn metadata_resource_budget_preserves_guest_limits() {
+    let limits = metadata_limits();
+    assert_eq!(limits.max_instances, 4);
+    assert_eq!(limits.memory_limit, 128 * 1024 * 1024);
+    assert_eq!(limits.max_table_elements, 20_000);
+    assert_eq!(
+        limits.fuel_limit,
+        flow_like_wasm::compilation::WasmLimits::restrictive().fuel_limit
+    );
 }

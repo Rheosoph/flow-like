@@ -264,7 +264,9 @@ export class GooStage {
 		const frame = this.lastFrame;
 		if (!frame) return [];
 		const rects: GooRect[] = [];
-		if (frame.den.width > 0) rects.push(grown(frame.den, HITBOX_MARGIN));
+		// A tucked den takes no pointer: its margin would block a strip of whatever lies under it.
+		if (frame.den.width > 0 && !this.model?.tucked)
+			rects.push(grown(frame.den, HITBOX_MARGIN));
 		for (const [botId, bot] of frame.bots) {
 			if (bot.opacity < 0.2) continue;
 			const half = bot.size / 2 + HITBOX_MARGIN;

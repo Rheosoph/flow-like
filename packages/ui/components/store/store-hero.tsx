@@ -42,6 +42,7 @@ export function StoreHero({
 	onBuy,
 	onJoinOrRequest,
 	actionsExtra,
+	capabilities,
 }: Readonly<{
 	appId: string;
 	hasThumbnail: boolean;
@@ -64,6 +65,7 @@ export function StoreHero({
 	onBuy: () => void;
 	onJoinOrRequest: () => Promise<void> | void;
 	actionsExtra?: React.ReactNode;
+	capabilities?: React.ReactNode;
 }>) {
 	const { t } = useTranslation("store");
 	const categoryLabel = useAppCategoryLabel();
@@ -74,8 +76,7 @@ export function StoreHero({
 
 	return (
 		<section className="relative">
-			{/* Full-bleed cover */}
-			<div className="relative h-60 md:h-75 overflow-hidden">
+			<div className="relative h-60 md:h-75 overflow-hidden mask-[linear-gradient(to_bottom,black_45%,transparent)]">
 				<img
 					src={coverUrl}
 					alt=""
@@ -99,10 +100,9 @@ export function StoreHero({
 							/>
 						);
 					})()}
-				<div className="absolute inset-x-0 bottom-0 h-3/4 bg-linear-to-t from-background via-background/60 to-transparent" />
+				<div className="absolute inset-x-0 bottom-0 h-3/4 bg-linear-to-t from-background/70 to-transparent" />
 			</div>
 
-			{/* Identity — overlaps cover */}
 			<div className="relative -mt-16 max-w-5xl mx-auto px-6 md:px-10">
 				<div className="flex flex-col sm:flex-row sm:items-end gap-4">
 					<div className="shrink-0 rounded-full bg-background/60 backdrop-blur-xl p-1 shadow-2xl">
@@ -240,6 +240,7 @@ export function StoreHero({
 						</div>
 					</div>
 				</div>
+				{capabilities}
 			</div>
 		</section>
 	);

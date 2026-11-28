@@ -249,7 +249,7 @@ fn item_with_owner(
                 .is_some_and(|payload| payload["owner"] == true);
             let outside = match trigger.source {
                 TriggerSource::Email => !from_owner,
-                TriggerSource::Webhook => true,
+                TriggerSource::Webhook | TriggerSource::Channel => true,
                 TriggerSource::Schedule | TriggerSource::Event => false,
             };
             let role = if outside {

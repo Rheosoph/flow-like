@@ -68,8 +68,24 @@ jobs:
           backend-runtime-docker
           api-remote-catalog
           api-aws-catalog
-          api-aws-forecasting
+          query-forecasting
           api-local-ml-catalog
+          core-copilot
+          execution-queue
+          backend-audit-aws
+          backend-audit-azure
+          backend-audit-gcp
+          backend-compiler-lambda
+          backend-compiler-ecs
+          backend-compiler-k8s
+          backend-event-bridge
+          backend-media-transformer
+          backend-gcp-maintenance
+          backend-gcp-scheduler
+          backend-azure-scheduler
+          backend-aws-file-tracker
+          backend-aws-query
+          backend-aws-api
           wasm-host
           api-runtime
           a2ui-schema
@@ -101,7 +117,7 @@ jobs:
   lightweight-boundaries:
     name: Compile lightweight Rust boundaries
     needs: dependency-boundaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -138,7 +154,7 @@ jobs:
   catalog-boundaries:
     name: Compile catalog Rust boundaries
     needs: dependency-boundaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -155,3 +171,4 @@ jobs:
           catalog-portable
           catalog-portable-execute
           catalog-server
+          core-copilot

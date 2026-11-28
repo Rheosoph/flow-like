@@ -202,14 +202,14 @@ pub async fn create_group(
         group_id
     );
 
-    single_group(&state, &group_id).await
+    single_group(&state, &user, &group_id).await
 }
 
 #[utoipa::path(
     get,
     path = "/apps/{app_id}/groups",
     tag = "groups",
-    description = "List groups this app owns or is a member of.",
+    description = "List groups this app owns or is an active member of. Suites the app was invited to and has not accepted are listed under its group requests. An invited app that has not accepted is shown without name, description and icon unless it is listed in the store or you are a member of it.",
     params(("app_id" = String, Path, description = "Application ID")),
     responses(
         (status = 200, description = "Groups", body = [GroupInfo]),
@@ -230,8 +230,11 @@ pub async fn list_groups(
         .filter(app_group::Column::OwnerAppId.eq(&app_id))
         .all(&state.db)
         .await?;
+    // An invitation is not membership: a suite this app was only invited to is listed under
+    // its requests, without the suite's members.
     let membership_group_ids: Vec<String> = app_group_member::Entity::find()
         .filter(app_group_member::Column::AppId.eq(&app_id))
+        .filter(app_group_member::Column::Status.eq(AppGroupMemberStatus::Active))
         .all(&state.db)
         .await?
         .into_iter()
@@ -259,7 +262,10 @@ pub async fn list_groups(
         .all(&state.db)
         .await?;
 
-    Ok(Json(assemble_groups(&state, groups, members).await?))
+    let viewer = user.sub().ok();
+    Ok(Json(
+        assemble_groups(&state, viewer.as_deref(), groups, members).await?,
+    ))
 }
 
 #[utoipa::path(
@@ -305,7 +311,7 @@ pub async fn get_group(
         return Err(ApiError::FORBIDDEN);
     }
 
-    single_group(&state, &group_id).await
+    single_group(&state, &user, &group_id).await
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -421,7 +427,7 @@ pub async fn update_group(
         group_id
     );
 
-    single_group(&state, &group_id).await
+    single_group(&state, &user, &group_id).await
 }
 
 #[utoipa::path(
@@ -472,9 +478,11 @@ pub async fn delete_group(
     Ok(deleted)
 }
 
-/// Loads a single group with its ordered members and returns its `GroupInfo`.
+/// Loads a single group with its ordered members and returns its `GroupInfo` as `user` may
+/// see it.
 pub(crate) async fn single_group(
     state: &AppState,
+    user: &AppUser,
     group_id: &str,
 ) -> Result<Json<GroupInfo>, ApiError> {
     let group = app_group::Entity::find_by_id(group_id)
@@ -486,7 +494,7 @@ pub(crate) async fn single_group(
         .order_by_asc(app_group_member::Column::Position)
         .all(&state.db)
         .await?;
-    assemble_groups(state, vec![group], members)
+    assemble_groups(state, user.sub().ok().as_deref(), vec![group], members)
         .await?
         .pop()
         .map(Json)

@@ -73,6 +73,7 @@ fn mcp_entry(url: &str, policies: &[(&str, ConnectorPolicy)]) -> ConnectorEntry 
         url: Some(url.into()),
         provider_id: None,
         api_hosts: Vec::new(),
+        calendar: None,
     }
 }
 
@@ -91,6 +92,7 @@ fn account_entry() -> ConnectorEntry {
         url: None,
         provider_id: Some("github".into()),
         api_hosts: vec!["api.github.com".into()],
+        calendar: None,
     }
 }
 
