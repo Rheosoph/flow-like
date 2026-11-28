@@ -16,6 +16,8 @@ export type NativeRealtimeMessage =
 				| "unsupported"
 				| "signed_out"
 				| "closed";
+			/** A push connection delivers wakeups; without it the app polls on its own. */
+			live?: boolean;
 	  }
 	| { type: "reply"; reply: RealtimeReply }
 	| { type: "update"; delivery_id: string; response: RealtimePollResponse };

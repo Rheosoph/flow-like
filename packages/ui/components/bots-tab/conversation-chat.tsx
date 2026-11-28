@@ -34,6 +34,12 @@ import {
 import { isSelfPrincipal } from "./crew-model";
 import { DiscussionProposalCard } from "./discussion-proposal";
 import { discussionEstimate, grantFor } from "./discussion-proposal-model";
+import {
+	DiscussionEnd,
+	DiscussionHeader,
+	DiscussionRoundTrack,
+} from "./discussion-thread";
+import { discussionPlaces, roomDiscussions } from "./discussion-thread-model";
 import type { ConversationBlock, ConversationMessage } from "./fold-entries";
 import { type Mentionable, inlineMentions, mentionedIn } from "./mentions";
 import { MessageMarkLine, MessageMenu } from "./message-marks";
@@ -235,10 +241,44 @@ export function ConversationChat({
 		[thread.conversation.members, directory, thread.me],
 	);
 
+	const botIds = useMemo(
+		() =>
+			new Set(
+				thread.conversation.members
+					.filter((member) => member.kind === "bot")
+					.map((member) => member.principal_id),
+			),
+		[thread.conversation.members],
+	);
+	const discussions = useMemo(
+		() =>
+			discussionPlaces(
+				roomDiscussions(
+					allMessages.filter(
+						(message) => !message.approval && !message.userContext,
+					),
+					(id) => botIds.has(id) || directory(id).isBot,
+				),
+			),
+		[allMessages, botIds, directory],
+	);
+	const activityBots = activity?.bots;
+	const workingBots = useMemo(
+		() =>
+			new Set([
+				...draftSenders,
+				...(activityBots ?? []).map((bot) => bot.botId),
+			]),
+		[activityBots, draftSenders],
+	);
+
 	const { messages, byId, headers, trailing, runStarts, lastMine } =
 		useMemo(() => {
 			const list: ConversationMessage[] = [];
-			const heads = new Map<string, ReactNode[]>();
+			const heads = new Map<
+				string,
+				{ notes: ReactNode[]; speaker?: ReactNode }
+			>();
 			const starts = new Set<string>();
 			let notes: ReactNode[] = [];
 			for (const block of blocks) {
@@ -249,18 +289,18 @@ export function ConversationChat({
 					continue;
 				}
 				block.messages.forEach((message, index) => {
-					const lead = [...notes];
+					const lead = notes;
 					notes = [];
-					if (index === 0 && !block.mine) {
-						lead.push(
+					const speaker =
+						index === 0 && !block.mine ? (
 							<SpeakerLine
 								key={`s:${block.key}`}
 								block={block}
 								thread={thread}
-							/>,
-						);
-					}
-					if (lead.length > 0) heads.set(message.id, lead);
+							/>
+						) : undefined;
+					if (lead.length > 0 || speaker)
+						heads.set(message.id, { notes: lead, speaker });
 					if (index === 0 || lead.length > 0) starts.add(message.id);
 					list.push(message);
 				});
@@ -395,6 +435,8 @@ export function ConversationChat({
 			renderMessageHeader: (message, index) => {
 				const lead = headers.get(message.id);
 				const older = index === 0 ? olderButton : null;
+				const place = discussions.get(message.id);
+				const opens = place?.opens ? place.discussion : undefined;
 				const pinner = marks.pinnedBy.get(message.id);
 				const starred = marks.starred.has(message.id);
 				const marked = Boolean(pinner) || starred;
@@ -402,12 +444,24 @@ export function ConversationChat({
 				const mailedTo = source?.mailedTo;
 				const note = source?.note;
 				const teams = source?.teams;
-				if (!lead && !older && !marked && !mailedTo && !note && !teams)
+				if (
+					!lead &&
+					!older &&
+					!marked &&
+					!mailedTo &&
+					!note &&
+					!teams &&
+					!opens
+				)
 					return null;
 				return (
 					<div className="mb-1.5 flex flex-col gap-3">
 						{older}
-						{lead}
+						{lead?.notes}
+						{opens && (
+							<DiscussionHeader discussion={opens} directory={directory} />
+						)}
+						{lead?.speaker}
 						{marked && (
 							<MessageMarkLine
 								pinnedBy={pinner && thread.text.senderLabel(pinner)}
@@ -454,35 +508,48 @@ export function ConversationChat({
 					},
 			renderMessageFooter: (message) => {
 				const source = byId.get(message.id);
-				const proposal = source?.discussionProposal;
-				if (!source || !proposal || draftIds.has(source.id)) return null;
-				const granted = grantFor(allMessages, source.id);
+				if (!source) return null;
+				const drafting = draftIds.has(source.id);
+				const place = discussions.get(source.id);
+				const proposal = drafting ? undefined : source.discussionProposal;
+				if (!place && !proposal) return null;
+				const granted = proposal && grantFor(allMessages, source.id);
 				return (
 					<div className="pr-4 pl-11.5">
-						<DiscussionProposalCard
-							botName={directory(source.senderId).name}
-							rounds={proposal.rounds}
-							reason={proposal.reason}
-							estimate={discussionEstimate(
-								allMessages,
-								source.id,
-								proposal.rounds,
-							)}
-							allowedBy={
-								granted && {
-									name: directory(granted.senderId).isMe
-										? null
-										: directory(granted.senderId).name,
-									rounds: granted.rounds,
+						{place && <DiscussionRoundTrack place={place} />}
+						{proposal && (
+							<DiscussionProposalCard
+								botName={directory(source.senderId).name}
+								rounds={proposal.rounds}
+								reason={proposal.reason}
+								estimate={discussionEstimate(
+									allMessages,
+									source.id,
+									proposal.rounds,
+								)}
+								allowedBy={
+									granted && {
+										name: directory(granted.senderId).isMe
+											? null
+											: directory(granted.senderId).name,
+										rounds: granted.rounds,
+									}
 								}
-							}
-							limited={othersBots}
-							onAllow={
-								readOnly || disabledReason || !onAllowDiscussion
-									? undefined
-									: () => onAllowDiscussion(source, proposal.rounds)
-							}
-						/>
+								limited={othersBots}
+								onAllow={
+									readOnly || disabledReason || !onAllowDiscussion
+										? undefined
+										: () => onAllowDiscussion(source, proposal.rounds)
+								}
+							/>
+						)}
+						{place?.ends && !drafting && (
+							<DiscussionEnd
+								place={place}
+								directory={directory}
+								active={workingBots}
+							/>
+						)}
 					</div>
 				);
 			},
@@ -517,6 +584,8 @@ export function ConversationChat({
 			allMessages,
 			othersBots,
 			onAllowDiscussion,
+			discussions,
+			workingBots,
 		],
 	);
 

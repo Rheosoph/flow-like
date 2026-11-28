@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useMemo } from "react";
 import type { BotAppearance } from "../components/bots/types";
+import { adaptiveInterval } from "../lib/adaptive-polling";
 import {
 	userAvatarUrl,
 	userDisplayName,
@@ -32,6 +33,9 @@ type LookupSource = Pick<IUserState, "lookupUser" | "lookupUsers">;
  * enough that a lone hover still resolves without a visible wait.
  */
 const BATCH_WINDOW_MS = 20;
+
+/** A person's profile rarely changes while it is shown, so its refresh backs off. */
+const LOOKUP_POLL = { baseMs: 30_000 } as const;
 
 interface Waiter {
 	resolve: (user: UserLookupResult) => void;
@@ -185,7 +189,8 @@ export function useUserLookup(userId?: string | null) {
 		...userLookupQueryOptions(source, userId),
 		enabled: Boolean(userId) && local === undefined,
 		placeholderData: local ?? undefined,
-		refetchInterval: (query) => (query.state.data?.bot ? false : 30_000),
+		refetchInterval: (query) =>
+			query.state.data?.bot ? false : adaptiveInterval(query, LOOKUP_POLL),
 	});
 }
 

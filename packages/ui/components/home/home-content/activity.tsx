@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 import { Fragment, useMemo } from "react";
 import { toast } from "sonner";
+import { adaptiveRefetchInterval } from "../../../lib/adaptive-polling";
 import { asArray } from "../../../lib/response-shape";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
@@ -51,6 +52,8 @@ import {
 	useHomeScope,
 } from "./shared";
 
+const WIDGET_POLL = adaptiveRefetchInterval({ baseMs: 60_000 });
+
 export function HomeNotifications({ widget, editing }: HomeContentProps) {
 	const backend = useBackend();
 	const scope = useHomeScope();
@@ -69,7 +72,7 @@ export function HomeNotifications({ widget, editing }: HomeContentProps) {
 		// The kind is applied by the source, so asking for one cannot come back
 		// empty just because the newest rows are all of the other kind.
 		queryFn: () => backend.userState.listNotifications(unread, kind, 0, limit),
-		refetchInterval: editing ? false : 60_000,
+		refetchInterval: editing ? false : WIDGET_POLL,
 	});
 	if (notifications.isLoading || notifications.isError)
 		return (
@@ -764,7 +767,7 @@ export function HomeSchedules({ widget }: HomeContentProps) {
 		queryKey: ["home", ...scope, "schedules"],
 		queryFn: () => backend.eventState.getUserSchedules(),
 		staleTime: 60_000,
-		refetchInterval: 60_000,
+		refetchInterval: WIDGET_POLL,
 	});
 	// The response covers every app whose events this account can read, which is
 	// a wider set than the widget shows: it is narrowed to the profile library

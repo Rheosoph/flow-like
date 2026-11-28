@@ -38,6 +38,7 @@ pub mod telemetry_groups;
 pub mod transport;
 pub mod usage;
 pub mod vault;
+pub mod wake;
 
 #[cfg(all(feature = "runtime", feature = "bot-host"))]
 pub mod bot_host;

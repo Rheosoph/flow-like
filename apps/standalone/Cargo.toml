@@ -18,6 +18,7 @@ runtime = [
     "dep:flow-like-catalog",
     "dep:flow-like-storage",
     "dep:flow-like-types",
+    "dep:flow-like-channels",
     "dep:jsonschema",
     "dep:flow-like-wasm",
     "dep:croner",
@@ -103,6 +104,7 @@ flow-like-runtime = { workspace = true, optional = true, features = ["app-runtim
 flow-like-catalog = { workspace = true, optional = true, features = ["remote-metadata", "portable-execute", "local"] }
 flow-like-storage = { workspace = true, optional = true, features = ["files", "database-runtime"] }
 flow-like-types = { workspace = true, optional = true }
+flow-like-channels = { workspace = true, optional = true, features = ["aws-receiver", "azure", "gcp", "nats"] }
 jsonschema = { workspace = true, optional = true }
 flow-like-wasm = { workspace = true, optional = true, features = ["model"] }
 croner = { version = "2.2.0", optional = true }

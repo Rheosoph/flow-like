@@ -11,6 +11,7 @@ use super::{
     view::team_view,
 };
 use crate::{
+    audit,
     entity::{bot_team, bot_team_bot},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -172,6 +173,7 @@ pub async fn accept_lead(
         })
         .await?;
     settle(&state, effects).await;
+    audit_lead(&state, &user, "bot.team.lead.accept", &team_id, &bot_id).await;
     Ok(Json(team_view(&state, &sub, &team_id).await?))
 }
 
@@ -209,6 +211,7 @@ pub async fn decline_lead(
             })
         })
         .await?;
+    audit_lead(&state, &user, "bot.team.lead.decline", &team_id, &bot_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -248,5 +251,112 @@ pub async fn resign_lead(
         })
         .await?;
     settle(&state, effects).await;
+    audit_lead(&state, &user, "bot.team.lead.resign", &team_id, &bot_id).await;
     Ok(Json(team_view(&state, &sub, &team_id).await?))
+}
+
+/// The lead and lead-offer changes from `before` to `after`, as audit actions with their bot.
+pub(crate) fn lead_events(
+    before: &bot_team::Model,
+    after: &bot_team::Model,
+) -> Vec<(&'static str, String)> {
+    let mut events = Vec::new();
+    if before.lead_bot_id != after.lead_bot_id {
+        match (&after.lead_bot_id, &before.lead_bot_id) {
+            (Some(bot_id), _) => events.push(("bot.team.lead.set", bot_id.clone())),
+            (None, Some(previous)) => events.push(("bot.team.lead.clear", previous.clone())),
+            (None, None) => {}
+        }
+    }
+    if before.lead_offer_bot_id != after.lead_offer_bot_id {
+        match (&after.lead_offer_bot_id, &before.lead_offer_bot_id) {
+            (Some(bot_id), _) => events.push(("bot.team.lead.offer", bot_id.clone())),
+            (None, Some(previous)) if after.lead_bot_id.as_ref() != Some(previous) => {
+                events.push(("bot.team.lead.withdraw", previous.clone()));
+            }
+            _ => {}
+        }
+    }
+    events
+}
+
+/// Audits a change of the team's lead or lead offer; the bot is the one led or offered.
+pub(crate) async fn audit_lead(
+    state: &AppState,
+    user: &AppUser,
+    action: &str,
+    team_id: &str,
+    bot_id: &str,
+) {
+    audit!(
+        state,
+        user,
+        action,
+        "BotTeam",
+        team_id,
+        serde_json::json!({ "bot_id": bot_id })
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lead_events;
+    use crate::entity::bot_team;
+
+    fn team(lead: Option<&str>, offer: Option<&str>) -> bot_team::Model {
+        let at = chrono::DateTime::from_timestamp(1_700_000_000, 0)
+            .unwrap()
+            .fixed_offset();
+        bot_team::Model {
+            id: "security".into(),
+            name: "Security".into(),
+            purpose: None,
+            parent_id: None,
+            lead_bot_id: lead.map(str::to_string),
+            lead_offer_bot_id: offer.map(str::to_string),
+            lead_offer_by: offer.map(|_| "mara".to_string()),
+            lead_offer_at: offer.map(|_| at),
+            direct_asks: false,
+            conversation_id: None,
+            created_by: "mara".into(),
+            created_at: at,
+            updated_at: at,
+        }
+    }
+
+    fn events(
+        before: (Option<&str>, Option<&str>),
+        after: (Option<&str>, Option<&str>),
+    ) -> Vec<(&'static str, String)> {
+        lead_events(&team(before.0, before.1), &team(after.0, after.1))
+    }
+
+    #[test]
+    fn lead_changes_name_the_bot_they_concern() {
+        assert_eq!(
+            events((None, None), (None, Some("vault"))),
+            [("bot.team.lead.offer", "vault".to_string())]
+        );
+        assert_eq!(
+            events((None, None), (Some("patch"), None)),
+            [("bot.team.lead.set", "patch".to_string())]
+        );
+        assert_eq!(
+            events((Some("patch"), None), (None, None)),
+            [("bot.team.lead.clear", "patch".to_string())]
+        );
+        assert_eq!(
+            events((Some("patch"), Some("vault")), (None, None)),
+            [
+                ("bot.team.lead.clear", "patch".to_string()),
+                ("bot.team.lead.withdraw", "vault".to_string())
+            ]
+        );
+        assert_eq!(
+            events((None, Some("vault")), (Some("vault"), None)),
+            [("bot.team.lead.set", "vault".to_string())],
+            "an accepted offer is no withdrawal"
+        );
+        assert!(events((Some("patch"), None), (Some("patch"), None)).is_empty());
+    }
 }

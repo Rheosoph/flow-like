@@ -1,11 +1,16 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { adaptiveRefetchInterval } from "../lib/adaptive-polling";
 import { useBackend, useSignedIn } from "../state/backend-state";
 import type { IBot, IBotPresence } from "../state/backend-state/bot-state";
 import { botKeys } from "./use-bots";
 
 export const BOT_PRESENCE_POLL_MS = 60_000;
+
+const BOT_PRESENCE_POLL = adaptiveRefetchInterval({
+	baseMs: BOT_PRESENCE_POLL_MS,
+});
 
 /**
  * Where a bot stands: server and built-in bots are always there, a bot on this computer has no
@@ -21,8 +26,8 @@ export function botPresence(
 }
 
 /**
- * The hub's presence of the account's bots, read again every minute and when the window gets
- * focus again. It only runs while something that shows it is mounted.
+ * The hub's presence of the account's bots, read again every minute (less often while it stays the
+ * same) and when the window gets focus again. It only runs while something that shows it is mounted.
  */
 export function useBotPresence(enabled = true) {
 	const state = useBackend().botState;
@@ -32,7 +37,7 @@ export function useBotPresence(enabled = true) {
 		queryFn: () => (state?.getPresence ? state.getPresence() : {}),
 		enabled: enabled && signedIn && typeof state?.getPresence === "function",
 		staleTime: 10_000,
-		refetchInterval: BOT_PRESENCE_POLL_MS,
+		refetchInterval: BOT_PRESENCE_POLL,
 		refetchOnWindowFocus: "always",
 	});
 }

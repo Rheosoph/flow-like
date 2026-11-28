@@ -61,8 +61,8 @@ function wakeOutcome(
 		if (reply) {
 			return {
 				tone: "good",
-				title: "It answers, early in a chain",
-				detail: `A bot's reply wakes the bot it answers while at most 3 bot messages led to it; after that only an @mention hands the word over.${BOT_CAP}`,
+				title: "It answers",
+				detail: `A bot's reply hands Byte the word like an @mention does, for up to ${DISCUSSION_MESSAGES} messages after each message from a person, or ${LONG_DISCUSSION_MESSAGES} when someone allows a longer discussion. A reply that ends the discussion wakes no one.${BOT_CAP}`,
 			};
 		}
 		return {

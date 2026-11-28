@@ -24,7 +24,7 @@ use crate::{
 };
 use flow_like::flow::copilot::{
     ReplyFiles, TalkingWith, ToolTrail, TurnRequester,
-    bot_discussion::DiscussionProposals,
+    bot_discussion::DiscussionReply,
     bot_notes::NotesHandle,
     bot_talk::AnsweredRound,
     decision::{self, Decision, DecisionParticipant},
@@ -119,7 +119,7 @@ struct Live {
     notes: Option<NotesHandle>,
     trail: Option<ToolTrail>,
     reply_files: Option<ReplyFiles>,
-    discussion: Option<DiscussionProposals>,
+    discussion: Option<DiscussionReply>,
 }
 
 #[derive(Default)]
@@ -810,8 +810,7 @@ impl Inner {
                 Vec::new()
             },
         };
-        let discussion =
-            (in_room && !asks && !ephemeral_user_context).then(DiscussionProposals::new);
+        let discussion = (in_room && !asks && !ephemeral_user_context).then(DiscussionReply::new);
         if reacting && no_prompt {
             return self.stay_silent(lead).await;
         }
@@ -1664,8 +1663,8 @@ impl Inner {
             if let Some(trail) = &trail {
                 trail.attach(&mut body);
             }
-            if let Some(proposals) = &discussion {
-                proposals.attach(&mut body);
+            if let Some(reply) = &discussion {
+                reply.attach(&mut body);
             }
         }
         if failure.is_none() && acknowledgement {

@@ -1293,6 +1293,34 @@ pub struct PersonClassification {
     pub classification: DataClassification,
 }
 
+/// A bot that would stop answering in a team's room after a change to the team.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SilencedBot {
+    pub bot_id: String,
+    /// The bot's level, which someone in the room would be classified below.
+    pub classification: DataClassification,
+}
+
+/// What adding one person or bot would change in a team's room.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CandidateEffect {
+    /// The person or bot that would join.
+    pub id: String,
+    /// Bots that answer in the room now and wouldn't once it joins; for a bot, the bot itself
+    /// when it wouldn't answer there.
+    pub silenced: Vec<SilencedBot>,
+}
+
+/// What adding each of some people or bots would change in a team's room, before anyone is
+/// invited. Candidates that change nothing are left out.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TeamPreview {
+    #[serde(default)]
+    pub people: Vec<CandidateEffect>,
+    #[serde(default)]
+    pub bots: Vec<CandidateEffect>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

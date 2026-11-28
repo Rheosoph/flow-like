@@ -111,6 +111,15 @@ pub struct ClassificationRequest {
     pub classification: Option<DataClassification>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(default)]
+pub struct TeamPreviewRequest {
+    /// People you are about to invite; only the team's admins preview people.
+    pub user_ids: Vec<String>,
+    /// Bots you are about to add or invite.
+    pub bot_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct BriefingResponse {
     pub bot_id: String,

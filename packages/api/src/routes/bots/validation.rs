@@ -1,5 +1,8 @@
 use super::model::{BotSettings, CreateBotRequest, UpdateBotRequest};
-use crate::error::ApiError;
+use crate::{
+    bot_host::cap::{DEFAULT_OTHERS_DAILY_TURNS, MAX_OTHERS_DAILY_TURNS},
+    error::ApiError,
+};
 use axum::http::StatusCode;
 use flow_like_types::{
     Value,
@@ -65,6 +68,7 @@ fn new_bot(
         execution_mode: BotExecutionMode::Native,
         device_id: None,
         others_can_invite: false,
+        others_daily_turns: DEFAULT_OTHERS_DAILY_TURNS,
     };
     let fields = UpdateBotRequest {
         name: Some(Some(request.name)),
@@ -85,6 +89,7 @@ fn new_bot(
         execution_mode: request.execution_mode,
         device_id: Some(request.device_id),
         others_can_invite: request.others_can_invite,
+        others_daily_turns: request.others_daily_turns,
     };
     Ok((preset_id, empty, fields))
 }
@@ -208,7 +213,22 @@ fn patch_scope(
         &mut next.others_can_invite,
         patch.others_can_invite.take(),
         Ok,
+    )?;
+    replace(
+        &mut next.others_daily_turns,
+        patch.others_daily_turns.take(),
+        others_daily_turns,
     )
+}
+
+/// How many turns all other people may start on a bot in a day.
+fn others_daily_turns(turns: u32) -> Result<u32, ApiError> {
+    if (1..=MAX_OTHERS_DAILY_TURNS).contains(&turns) {
+        return Ok(turns);
+    }
+    Err(ApiError::bad_request(format!(
+        "others_daily_turns must be between 1 and {MAX_OTHERS_DAILY_TURNS}; got {turns}"
+    )))
 }
 
 /// `null` resets a built-in bot to its localized default name; a bot the owner created keeps one.
@@ -455,6 +475,7 @@ pub(super) fn system_defaults(kind: BotSystemKind) -> BotSettings {
         execution_mode: BotExecutionMode::Native,
         device_id: None,
         others_can_invite: false,
+        others_daily_turns: DEFAULT_OTHERS_DAILY_TURNS,
     }
 }
 
@@ -488,6 +509,19 @@ mod tests {
 
     fn code(error: &ApiError) -> (StatusCode, &str) {
         (error.status(), error.public_code())
+    }
+
+    #[test]
+    fn other_peoples_daily_turns_default_to_100_and_stay_within_bounds() {
+        let current = custom();
+        assert_eq!(current.others_daily_turns, DEFAULT_OTHERS_DAILY_TURNS);
+        let raised = patch(&current, None, json!({ "others_daily_turns": 400 })).unwrap();
+        assert_eq!(raised.others_daily_turns, 400);
+        assert_eq!(current.changed_fields(&raised), ["others_daily_turns"]);
+        for turns in [0, MAX_OTHERS_DAILY_TURNS + 1] {
+            let error = patch(&current, None, json!({ "others_daily_turns": turns })).unwrap_err();
+            assert_eq!(error.status(), StatusCode::BAD_REQUEST, "{turns}");
+        }
     }
 
     #[test]

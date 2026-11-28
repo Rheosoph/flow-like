@@ -45,18 +45,15 @@ pub(crate) enum ConnectionState {
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum RealtimeMessage {
-    State {
-        state: ConnectionState,
-    },
+    /// `live`: a push connection delivers wakeups; without one the session polls on its own.
+    State { state: ConnectionState, live: bool },
     Update {
         delivery_id: String,
         response: RealtimePollResponse,
     },
     /// A reply its host is still writing. It belongs to no replay batch: nothing acknowledges
     /// it and nothing resends it.
-    Reply {
-        reply: RealtimeReply,
-    },
+    Reply { reply: RealtimeReply },
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -83,6 +80,7 @@ struct PendingDelivery {
 struct SessionState {
     subscribers: HashMap<Owner, Subscriber>,
     connection: ConnectionState,
+    live: bool,
     revision: u64,
     rotation: usize,
 }
@@ -92,6 +90,7 @@ impl Default for SessionState {
         Self {
             subscribers: HashMap::new(),
             connection: ConnectionState::Connecting,
+            live: false,
             revision: 0,
             rotation: 0,
         }
@@ -259,6 +258,7 @@ pub(crate) async fn realtime_subscribe(
             events
                 .send(RealtimeMessage::State {
                     state: state.connection,
+                    live: state.live,
                 })
                 .map_err(|_| "The realtime subscriber disconnected")?;
             state.revision = state.revision.wrapping_add(1);
@@ -379,13 +379,26 @@ fn set_state(session: &Session, connection: ConnectionState) {
     let mut state = lock(&session.state);
     if state.connection != connection {
         state.connection = connection;
-        state.subscribers.retain(|_, subscriber| {
-            subscriber
-                .events
-                .send(RealtimeMessage::State { state: connection })
-                .is_ok()
-        });
+        broadcast_state(&mut state);
     }
+}
+
+fn set_live(session: &Session, live: bool) {
+    let mut state = lock(&session.state);
+    if state.live != live {
+        state.live = live;
+        broadcast_state(&mut state);
+    }
+}
+
+fn broadcast_state(state: &mut SessionState) {
+    let message = RealtimeMessage::State {
+        state: state.connection,
+        live: state.live,
+    };
+    state
+        .subscribers
+        .retain(|_, subscriber| subscriber.events.send(message.clone()).is_ok());
 }
 
 /// Hands a reply to the windows that watch its conversation.
@@ -827,6 +840,7 @@ async fn run(session: Arc<Session>) {
         let live = provider
             .as_ref()
             .is_some_and(ProviderConnection::is_healthy);
+        set_live(&session, live);
         let max_wait_ms = max_wait.load(Ordering::Relaxed);
         request.timeout_ms = pacing::timeout_ms(live, max_wait_ms);
         pacing.begin(std::mem::take(&mut woken), now);

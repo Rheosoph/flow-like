@@ -715,13 +715,25 @@ async fn main() -> Result<()> {
                         cancel.child_token(),
                     ),
                 ));
+                let wake = std::sync::Arc::new(flow_like_standalone::wake::DeviceWake::default());
+                #[cfg(feature = "runtime")]
+                background.push(diagnostics.spawn_monitored(
+                    diagnostics::DEVICE_WAKE,
+                    &cancel,
+                    flow_like_standalone::wake::run(
+                        device.clone(),
+                        wake.clone(),
+                        cancel.child_token(),
+                    ),
+                ));
                 background.push(diagnostics.spawn_monitored(
                     diagnostics::FLEET_PUBLISHER,
                     &cancel,
-                    flow_like_standalone::fleet::publish(
+                    flow_like_standalone::fleet::publish_woken(
                         state_dir.clone(),
                         device.clone(),
                         boot_id.clone(),
+                        Some(wake.subscribe()),
                         cancel.child_token(),
                     ),
                 ));
@@ -738,9 +750,10 @@ async fn main() -> Result<()> {
                 background.push(diagnostics.spawn_monitored(
                     diagnostics::BOT_HOST,
                     &cancel,
-                    flow_like_standalone::bot_host::run(
+                    flow_like_standalone::bot_host::run_woken(
                         state_dir.clone(),
                         device.clone(),
+                        Some(wake.subscribe()),
                         cancel.child_token(),
                     ),
                 ));

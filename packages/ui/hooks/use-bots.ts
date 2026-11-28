@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import { approvalResponseRequest } from "../components/bots-tab/approval-entry";
+import { adaptiveRefetchInterval } from "../lib/adaptive-polling";
 import { botSecretRequest } from "../lib/bot-secret-sealing";
 import {
 	AUTO_APPROVE_TOOL,
@@ -80,6 +81,7 @@ export const botKeys = {
 	connectedAccounts: () => [...botKeys.all, "connected-accounts"] as const,
 	mailAddress: (botId: string) =>
 		[...botKeys.all, "mail-address", botId] as const,
+	newBotMailDomain: () => [...botKeys.all, "new-bot-mail-domain"] as const,
 	mailThreads: (botId: string) =>
 		[...botKeys.all, "mail-threads", botId] as const,
 	mailThread: (botId: string, threadId: string) =>
@@ -1112,12 +1114,28 @@ export function useBotMailAddress(botId?: string | null) {
 	});
 }
 
+/** Where a bot created next would get its address, before it exists. */
+export function useNewBotMailDomain() {
+	const state = useBackend().botState;
+	return useQuery({
+		queryKey: botKeys.newBotMailDomain(),
+		queryFn: () => requireBotState(state).getNewBotMailDomain?.(),
+		enabled: Boolean(state?.getNewBotMailDomain),
+	});
+}
+
+/** Checks a name for the bot's address; `null` checks it for a bot about to be created. */
 export function useCheckBotMailAddress() {
 	const state = useBackend().botState;
 	return useCallback(
-		(botId: string, alias: string) =>
-			requireBotState(state).checkMailAddress?.(botId, alias) ??
-			Promise.resolve({ available: false }),
+		(botId: string | null, alias: string) => {
+			const bots = requireBotState(state);
+			const check =
+				botId === null
+					? bots.checkNewBotMailAddress?.(alias)
+					: bots.checkMailAddress?.(botId, alias);
+			return check ?? Promise.resolve({ available: false });
+		},
 		[state],
 	);
 }
@@ -1144,6 +1162,8 @@ export function useReleaseBotMailAddress() {
 	});
 }
 
+const MAIL_THREADS_POLL = adaptiveRefetchInterval({ baseMs: 30_000 });
+
 /** The bot's mail threads, newest activity first. */
 export function useBotMailThreads(botId?: string | null) {
 	const state = useBackend().botState;
@@ -1152,7 +1172,7 @@ export function useBotMailThreads(botId?: string | null) {
 		queryFn: () =>
 			requireBotState(state).listMailThreads?.(botId as string) ?? [],
 		enabled: Boolean(state?.listMailThreads && botId),
-		refetchInterval: 30_000,
+		refetchInterval: MAIL_THREADS_POLL,
 	});
 }
 

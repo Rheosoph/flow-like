@@ -22,6 +22,7 @@ const UNAVAILABLE: Duration = Duration::from_secs(2);
 const UNAVAILABLE_CAP: Duration = Duration::from_secs(30);
 const RECOVERY_RUNS: Duration = Duration::from_secs(5);
 const RECOVERY_NOTIFICATIONS: Duration = Duration::from_secs(30);
+const RECOVERY_NOTIFICATIONS_CAP: Duration = Duration::from_secs(300);
 const INTERVAL_RUNS: Duration = Duration::from_secs(2);
 const INTERVAL_NOTIFICATIONS: Duration = Duration::from_secs(30);
 /// The server sends at most one run wakeup per 250 ms per account, and a wakeup can be lost in transit.
@@ -85,6 +86,8 @@ pub(super) struct Pacing {
     blocked: u32,
     unavailable: HashMap<String, (u32, Instant)>,
     chase: Option<Instant>,
+    quiet: u32,
+    was_live: bool,
 }
 
 impl Pacing {
@@ -135,6 +138,9 @@ impl Pacing {
 
     /// A wakeup-triggered poll, or the overdue chase itself, replaces the pending chase.
     pub fn begin(&mut self, woken: bool, now: Instant) {
+        if woken {
+            self.quiet = 0;
+        }
         if woken || self.chase.is_some_and(|at| at <= now) {
             self.chase = None;
         }
@@ -176,10 +182,19 @@ impl Pacing {
         {
             self.chase = Some(now + CHASE);
         }
+        self.quiet = if !live || !polled.runs.is_empty() || changed(response) {
+            0
+        } else if !self.was_live {
+            1
+        } else {
+            self.quiet.saturating_add(1)
+        };
+        self.was_live = live;
     }
 
     /// When the next poll is due after a successful one; `None` polls again at once. A long poll
-    /// that came back early without changes was not held, so it paces like an interval.
+    /// that came back early without changes was not held, so it paces like an interval. Live
+    /// notification-only recovery polls back off while they keep coming back quiet.
     pub fn due(
         &self,
         polled: &RealtimePollRequest,
@@ -210,7 +225,11 @@ impl Pacing {
             if runs {
                 RECOVERY_RUNS
             } else {
-                RECOVERY_NOTIFICATIONS
+                backoff(
+                    RECOVERY_NOTIFICATIONS,
+                    RECOVERY_NOTIFICATIONS_CAP,
+                    self.quiet,
+                )
             }
         } else if max_wait_ms > 0 && (held || changed(response)) {
             return None;
@@ -607,6 +626,103 @@ mod tests {
             pacing.due(&request, &quiet, true, 0, Duration::ZERO, now),
             Some(now + Duration::from_secs(5))
         );
+    }
+
+    fn poll_and_due(
+        pacing: &mut Pacing,
+        request: &RealtimePollRequest,
+        response: &RealtimePollResponse,
+        live: bool,
+        woken: bool,
+        now: Instant,
+    ) -> Duration {
+        pacing.begin(woken, now);
+        pacing.succeeded(request, response, live, now);
+        pacing
+            .due(request, response, live, 0, Duration::ZERO, now)
+            .unwrap()
+            - now
+    }
+
+    fn quiet_streak(pacing: &mut Pacing, now: Instant, polls: usize) -> Vec<u64> {
+        let request = polled(&[], true);
+        let idle = RealtimePollResponse::default();
+        (0..polls)
+            .map(|_| poll_and_due(pacing, &request, &idle, true, false, now).as_secs())
+            .collect()
+    }
+
+    #[test]
+    fn quiet_live_notification_polls_back_off_to_the_cap() {
+        let mut pacing = Pacing::default();
+        let delays = quiet_streak(&mut pacing, Instant::now(), 6);
+        assert_eq!(delays, [30, 60, 120, 240, 300, 300]);
+    }
+
+    #[test]
+    fn a_wakeup_resets_the_quiet_live_backoff() {
+        let mut pacing = Pacing::default();
+        let now = Instant::now();
+        quiet_streak(&mut pacing, now, 4);
+        pacing.begin(true, now);
+        let due = pacing
+            .due(
+                &polled(&[], true),
+                &RealtimePollResponse::default(),
+                true,
+                0,
+                Duration::ZERO,
+                now,
+            )
+            .unwrap();
+        assert_eq!(due - now, Duration::from_secs(30));
+        assert_eq!(quiet_streak(&mut pacing, now, 2), [30, 60]);
+    }
+
+    #[test]
+    fn a_response_with_changes_resets_the_quiet_live_backoff() {
+        let mut pacing = Pacing::default();
+        let now = Instant::now();
+        let request = polled(&[], true);
+        quiet_streak(&mut pacing, now, 4);
+        let notified = RealtimePollResponse {
+            notifications: Some(RealtimeNotificationUpdate {
+                revision: "next".into(),
+                overview: Default::default(),
+            }),
+            ..Default::default()
+        };
+        let delay = poll_and_due(&mut pacing, &request, &notified, true, false, now);
+        assert_eq!(delay, Duration::from_secs(30));
+        assert_eq!(quiet_streak(&mut pacing, now, 2), [30, 60]);
+    }
+
+    #[test]
+    fn live_polls_with_runs_keep_the_run_recovery_and_reset_the_streak() {
+        let mut pacing = Pacing::default();
+        let now = Instant::now();
+        quiet_streak(&mut pacing, now, 4);
+        let delay = poll_and_due(
+            &mut pacing,
+            &polled(&["run"], true),
+            &RealtimePollResponse::default(),
+            true,
+            false,
+            now,
+        );
+        assert_eq!(delay, RECOVERY_RUNS);
+        assert_eq!(quiet_streak(&mut pacing, now, 2), [30, 60]);
+    }
+
+    #[test]
+    fn the_first_live_poll_after_a_non_live_one_starts_at_the_base() {
+        let mut pacing = Pacing::default();
+        let now = Instant::now();
+        quiet_streak(&mut pacing, now, 4);
+        let request = polled(&[], true);
+        let idle = RealtimePollResponse::default();
+        poll_and_due(&mut pacing, &request, &idle, false, false, now);
+        assert_eq!(quiet_streak(&mut pacing, now, 3), [30, 60, 120]);
     }
 
     #[test]

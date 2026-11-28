@@ -4,7 +4,7 @@ use flow_like_storage::object_store::{
     Error as ObjectStoreError, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions,
     PutPayload, PutResult, UpdateVersion,
 };
-use flow_like_types::Message;
+use flow_like_types::{Bytes, Message};
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -34,11 +34,27 @@ pub async fn compress_to_file<T>(
 where
     T: Message,
 {
+    let (result, _) = compress_to_file_with_bytes(store, file_path, input).await?;
+    Ok(result)
+}
+
+/// [`compress_to_file`] that also returns the exact bytes it stored, for a caller that copies
+/// this revision elsewhere without reading it back.
+pub async fn compress_to_file_with_bytes<T>(
+    store: Arc<dyn ObjectStore>,
+    file_path: Path,
+    input: &T,
+) -> flow_like_types::Result<(PutResult, Bytes)>
+where
+    T: Message,
+{
     let mut data = Vec::new();
     input.encode(&mut data)?;
-    let compressed = compress_prepend_size(&data);
-    let result = store.put(&file_path, PutPayload::from(compressed)).await?;
-    Ok(result)
+    let compressed = Bytes::from(compress_prepend_size(&data));
+    let result = store
+        .put(&file_path, PutPayload::from(compressed.clone()))
+        .await?;
+    Ok((result, compressed))
 }
 
 /// Compress and write a protobuf only when the destination does not already

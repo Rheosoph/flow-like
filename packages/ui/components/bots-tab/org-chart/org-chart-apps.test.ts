@@ -8,6 +8,7 @@ import {
 	appFamily,
 	appLinks,
 	canUnpin,
+	litBus,
 	matchesFilter,
 	scheduleOf,
 	teamDeck,
@@ -164,5 +165,47 @@ describe("triggerKinds", () => {
 		expect(
 			triggerKinds(["email", "cron", "simple_chat", "api", "rest", "page"]),
 		).toEqual(["chat", "mail", "schedule", "webhook"]);
+	});
+});
+
+describe("litBus", () => {
+	const halves = (lit: boolean[], source: number) =>
+		litBus(lit, source).map(({ left, right }) => [left, right]);
+
+	test("lights the way from a card left of the trunk to the trunk", () => {
+		expect(halves([true, false], 1.5)).toEqual([
+			[false, true],
+			[true, false],
+		]);
+	});
+
+	test("lights the way from a card right of the trunk back to it", () => {
+		expect(halves([false, false, false, true], 1.5)).toEqual([
+			[false, false],
+			[false, true],
+			[true, true],
+			[true, false],
+		]);
+	});
+
+	test("the card under the source lights no bus", () => {
+		expect(halves([false, true, false], 1.5)).toEqual([
+			[false, false],
+			[false, false],
+			[false, false],
+		]);
+	});
+
+	test("an even row meets its source between the middle cards", () => {
+		expect(halves([true, false, false, false], 2)).toEqual([
+			[false, true],
+			[true, true],
+			[false, false],
+			[false, false],
+		]);
+	});
+
+	test("nothing lit, nothing lights", () => {
+		expect(halves([false, false, false], 1.5).flat().some(Boolean)).toBe(false);
 	});
 });

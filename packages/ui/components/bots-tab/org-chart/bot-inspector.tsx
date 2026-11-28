@@ -13,6 +13,10 @@ import {
 	teamById,
 } from "../../../lib/bot-teams/org-model";
 import { parseDataClassification } from "../../../lib/data-classification";
+import {
+	DEFAULT_OTHERS_DAILY_TURNS,
+	REQUESTER_DAILY_TURNS,
+} from "../../../state/backend-state/bot-state";
 import type {
 	IOrgBot,
 	ITeam,
@@ -48,7 +52,6 @@ import { AskBadge, LeadStar, OrgBotAvatar } from "./org-chart-parts";
 import { ReachAction } from "./reach-parts";
 
 const PREVIEW_LINES = 8;
-const LEAD_TURNS_PER_PERSON_A_DAY = 20;
 
 function BotChip({ bot }: Readonly<{ bot: IOrgBot }>) {
 	const { select, nameOf } = useOrgChart();
@@ -252,7 +255,8 @@ function MoveTo({ bot }: Readonly<{ bot: IOrgBot }>) {
 
 function LeadOfferCard({ team, bot }: Readonly<{ team: ITeam; bot: IOrgBot }>) {
 	const { t } = useTranslation("bots");
-	const { org, nameOf, actions } = useOrgChart();
+	const { org, nameOf, actions, ownBots } = useOrgChart();
+	const settings = ownBots.find((own) => own.id === bot.id);
 	const orgName = teamById(org, rootTeamId(org, team.id) ?? team.id)?.name;
 	const args = { teamId: team.id, botId: bot.id };
 	const fail = { onError: (error: Error) => toast.error(error.message) };
@@ -261,12 +265,13 @@ function LeadOfferCard({ team, bot }: Readonly<{ team: ITeam; bot: IOrgBot }>) {
 			<p className="text-sm">
 				{t(
 					"teams.reach.leadOffer",
-					"{{team}} asks {{bot}} to lead it. Everyone in {{org}} can then talk to it, and its turns are on you (up to {{limit}} per person a day).",
+					"{{team}} asks {{bot}} to lead it. Everyone in {{org}} can then talk to it, and its turns are on you: up to {{perPerson}} per person and {{total}} in total a day, which you can change in its safety settings.",
 					{
 						team: team.name,
 						bot: nameOf(bot),
 						org: orgName ?? team.name,
-						limit: LEAD_TURNS_PER_PERSON_A_DAY,
+						perPerson: REQUESTER_DAILY_TURNS,
+						total: settings?.others_daily_turns ?? DEFAULT_OTHERS_DAILY_TURNS,
 					},
 				)}
 			</p>

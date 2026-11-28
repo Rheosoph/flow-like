@@ -440,12 +440,16 @@ describe("whether a desktop or device bot is online", () => {
 
 	test("polls every minute and reads again when the window gets focus", async () => {
 		await visit("bot=bot_scout");
-		const observers = client.getQueryCache().find({
+		const query = client.getQueryCache().find({
 			queryKey: botKeys.presence(),
-		})?.observers;
+		});
+		const observers = query?.observers;
 		expect(observers?.length).toBeGreaterThan(0);
 		for (const observer of observers ?? []) {
-			expect(observer.options.refetchInterval).toBe(60_000);
+			const interval = observer.options.refetchInterval;
+			expect(
+				typeof interval === "function" && query ? interval(query) : interval,
+			).toBe(60_000);
 			expect(observer.options.refetchOnWindowFocus).toBe("always");
 		}
 		expect(BOT_PRESENCE_POLL_MS).toBe(60_000);

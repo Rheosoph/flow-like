@@ -6,6 +6,8 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { adaptiveRefetchInterval } from "../lib/adaptive-polling";
 import type { DataClassification } from "../lib/data-classification";
 import { useBackend } from "../state/backend-state";
 import type {
@@ -28,7 +30,7 @@ export const botTeamKeys = {
 };
 
 const ORG_STALE_TIME = 30_000;
-const ORG_REFRESH = 60_000;
+const ORG_REFRESH = adaptiveRefetchInterval({ baseMs: 60_000 });
 
 const EMPTY_ORG: IOrgView = {
 	teams: [],
@@ -123,6 +125,30 @@ export function usePinnableApps(teamId: string | null, enabled: boolean) {
 		queryKey: botTeamKeys.pinnable(teamId ?? ""),
 		queryFn: () => requireTeamState(state).listPinnableApps(teamId as string),
 		enabled: Boolean(state && teamId && enabled),
+		staleTime: ORG_STALE_TIME,
+	});
+}
+
+/**
+ * Which bots would stop answering in the team room if each of these people or bots joined.
+ * Only admins preview people; the result is empty while nothing is asked for.
+ */
+export function useTeamPreview(
+	teamId: string | null | undefined,
+	userIds: readonly string[],
+	botIds: readonly string[],
+) {
+	const state = useBackend().botTeamState;
+	const users = useMemo(() => [...userIds].sort(), [userIds]);
+	const bots = useMemo(() => [...botIds].sort(), [botIds]);
+	return useQuery({
+		queryKey: [...botTeamKeys.all, "preview", teamId ?? "", users, bots],
+		queryFn: () =>
+			requireTeamState(state).previewTeam(teamId as string, {
+				user_ids: users,
+				bot_ids: bots,
+			}),
+		enabled: Boolean(state && teamId && (users.length > 0 || bots.length > 0)),
 		staleTime: ORG_STALE_TIME,
 	});
 }

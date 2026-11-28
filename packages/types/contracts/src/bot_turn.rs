@@ -44,16 +44,20 @@ pub fn hop_limit(handed_over: bool, discussion: Option<u32>) -> u32 {
     }
 }
 
-/// Whether a bot's message hands `bot_id` the word: in a group it @mentions the bot and is not an
-/// `ask_bot` question, which keeps [`MAX_HOPS`].
+/// Whether a bot's message hands `bot_id` the word: in a group it @mentions the bot or replies to
+/// a message of it (`replies_to_bot`), so a forgotten mention doesn't end a discussion. An
+/// `ask_bot` question keeps [`MAX_HOPS`], and a message that proposes a longer discussion or ends
+/// it ([`crate::bot_message::MessageBody::rests_discussion`]) hands the word to no one.
 pub fn hands_over(
     kind: crate::inbox::ConversationKind,
     body: &crate::bot_message::MessageBody,
     bot_id: &str,
+    replies_to_bot: bool,
 ) -> bool {
     kind == crate::inbox::ConversationKind::Group
         && body.ask.is_none()
-        && body.mentions.iter().any(|mention| mention == bot_id)
+        && !body.rests_discussion()
+        && (replies_to_bot || body.mentions.iter().any(|mention| mention == bot_id))
 }
 /// Turns one owner may have running at once.
 pub const MAX_RUNNING_PER_OWNER: usize = 3;
@@ -529,9 +533,66 @@ mod tests {
             mentions: vec!["bot_story".into()],
             ..MessageBody::default()
         };
-        assert!(hands_over(ConversationKind::Group, &naming, "bot_story"));
-        assert!(!hands_over(ConversationKind::Group, &naming, "bot_tiro"));
-        assert!(!hands_over(ConversationKind::Direct, &naming, "bot_story"));
+        assert!(hands_over(
+            ConversationKind::Group,
+            &naming,
+            "bot_story",
+            false
+        ));
+        assert!(!hands_over(
+            ConversationKind::Group,
+            &naming,
+            "bot_tiro",
+            false
+        ));
+        assert!(!hands_over(
+            ConversationKind::Direct,
+            &naming,
+            "bot_story",
+            false
+        ));
+        let untagged = MessageBody {
+            text: "I'd keep the second supplier.".into(),
+            reply_to: Some("m_story".into()),
+            ..MessageBody::default()
+        };
+        assert!(
+            hands_over(ConversationKind::Group, &untagged, "bot_story", true),
+            "a reply to the partner hands the word back without a mention"
+        );
+        assert!(!hands_over(
+            ConversationKind::Group,
+            &untagged,
+            "bot_story",
+            false
+        ));
+        use crate::bot_message::{DiscussionOutcome, DiscussionProposal};
+        let ended = MessageBody {
+            discussion_outcome: Some(DiscussionOutcome {
+                agreed: true,
+                summary: "Supplier B, from March.".into(),
+            }),
+            ..untagged.clone()
+        };
+        assert!(!hands_over(
+            ConversationKind::Group,
+            &ended,
+            "bot_story",
+            true
+        ));
+        let proposing = MessageBody {
+            discussion_proposal: Some(DiscussionProposal {
+                rounds: 10,
+                reason: "Three suppliers to compare".into(),
+            }),
+            ..naming.clone()
+        };
+        assert!(!hands_over(
+            ConversationKind::Group,
+            &proposing,
+            "bot_story",
+            true
+        ));
         let question = MessageBody {
             ask: Some(BotAsk {
                 id: "ask_1".into(),
@@ -544,7 +605,12 @@ mod tests {
             }),
             ..naming
         };
-        assert!(!hands_over(ConversationKind::Group, &question, "bot_story"));
+        assert!(!hands_over(
+            ConversationKind::Group,
+            &question,
+            "bot_story",
+            true
+        ));
     }
 
     #[test]

@@ -1,9 +1,12 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { adaptiveRefetchInterval } from "../lib/adaptive-polling";
 import { listDevices } from "../lib/devices";
 import { useBackend } from "../state/backend-state";
 import { useInvoke } from "./use-invoke";
+
+const DEVICES_POLL = adaptiveRefetchInterval({ baseMs: 30_000 });
 
 /** The signed-in account's devices as the hub lists them; shared by everything in the bots UI that names a device. */
 export function useAccountDevices(enabled = true, refresh = false) {
@@ -22,7 +25,7 @@ export function useAccountDevices(enabled = true, refresh = false) {
 		},
 		enabled: enabled && !!profile,
 		staleTime: 30_000,
-		refetchInterval: refresh ? 30_000 : false,
+		refetchInterval: refresh ? DEVICES_POLL : false,
 	});
 	return {
 		devices: devices.data,

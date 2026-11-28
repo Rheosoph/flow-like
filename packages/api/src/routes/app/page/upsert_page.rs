@@ -175,8 +175,10 @@ pub async fn upsert_page(
     let mut seeded = None;
     if board.content_hash() != board_before_page {
         page_id_guard.ensure_held()?;
-        let put = board.save(None).await?;
-        seeded = state.seed_board_cache(&app_id, &board_id, board, &put);
+        let saved = board.save_with_source(None).await?;
+        seeded = state
+            .seed_board_cache(&app_id, &board_id, board, &saved.put)
+            .map(|cached| (cached, saved.source));
     }
     rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
 
@@ -209,9 +211,9 @@ pub async fn upsert_page(
         .await?;
 
     page_id_guard.release().await;
-    if let Some(cached) = &seeded {
+    if let Some((cached, source)) = &seeded {
         crate::routes::app::prerun_shared::prewarm_draft_revision(
-            &state, &app_id, &board_id, cached,
+            &state, &app_id, &board_id, cached, source,
         )
         .await;
     }

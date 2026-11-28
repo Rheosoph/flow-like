@@ -7,6 +7,8 @@ import type {
 	IPinnableApp,
 	ITeam,
 	ITeamBriefing,
+	ITeamPreview,
+	ITeamPreviewRequest,
 	ITeamThread,
 	IUpdateTeamRequest,
 	TeamRole,
@@ -307,6 +309,18 @@ export class WebBotTeamState implements IBotTeamState {
 
 	async endChat(botId: string, userId: string): Promise<void> {
 		await apiDelete(chatPath(botId, userId), this.backend.auth);
+	}
+
+	async previewTeam(
+		teamId: string,
+		request: ITeamPreviewRequest,
+	): Promise<ITeamPreview> {
+		const response = await apiPost<Partial<ITeamPreview>>(
+			`${teamPath(teamId)}/preview`,
+			request,
+			this.backend.auth,
+		);
+		return { people: list(response?.people), bots: list(response?.bots) };
 	}
 
 	async setClassification(

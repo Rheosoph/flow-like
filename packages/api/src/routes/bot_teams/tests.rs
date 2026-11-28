@@ -29,6 +29,8 @@ pub(super) async fn world() -> DatabaseConnection {
     for table in [
         schema.create_table_from_entity(crate::entity::bot_team_person::Entity),
         schema.create_table_from_entity(bot_team_bot::Entity),
+        schema.create_table_from_entity(crate::entity::bot_team_app::Entity),
+        schema.create_table_from_entity(crate::entity::bot_app::Entity),
     ] {
         db.execute(&table).await.unwrap();
     }

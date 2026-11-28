@@ -9,7 +9,7 @@
 [tools]
 bun = "latest"
 rust = "beta-2026-09-27"
-node = "22"
+node = "24"
 python = "3.12"
 uv = "latest"
 

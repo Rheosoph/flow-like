@@ -265,7 +265,7 @@ export interface RealtimeProviderStatus {
 
 /** What a tab knows about its account's realtime connection. */
 export interface RealtimeStatus {
-	runner: "shared-worker" | "in-tab";
+	runner: "shared-worker" | "in-tab" | "native";
 	state: RealtimeConnectionState;
 	provider?: RealtimeProviderStatus;
 }

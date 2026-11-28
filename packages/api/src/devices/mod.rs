@@ -14,6 +14,7 @@ pub(crate) mod jwt;
 pub(crate) mod management;
 pub(crate) mod openapi_registry;
 pub(crate) mod readiness;
+pub(crate) mod realtime;
 pub(crate) mod recovery;
 pub(crate) mod repository;
 pub(crate) mod view;

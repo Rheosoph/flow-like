@@ -1163,6 +1163,8 @@
 			"instructionsPlaceholder": "",
 			"local": "",
 			"localOnServer": "",
+			"notOnDevice": "",
+			"ownKeyOnDevice": "",
 			"memoryHint": "",
 			"memoryHost": "",
 			"memoryHostHint": "",
@@ -1231,6 +1233,7 @@
 			"unsaved": ""
 		},
 		"duplicated": "",
+		"emailClaimFailed": "",
 		"errors": {
 			"appLimit": "",
 			"appRefusesBots": "",
@@ -1289,6 +1292,8 @@
 			"handles": "",
 			"othersCanInvite": "",
 			"othersCanInviteHint": "",
+			"othersDailyTurns": "",
+			"othersDailyTurnsHint": "",
 			"privacy": "",
 			"subtitle": "",
 			"title": ""
@@ -2808,6 +2813,19 @@
 		"grantText": "",
 		"limit": "",
 		"payer": "",
+		"thread": {
+			"agreed": "",
+			"between": "",
+			"disagreed": "",
+			"goOn": "",
+			"label": "",
+			"pair": "",
+			"replying": "",
+			"round": "",
+			"roundsUsed": "",
+			"turn": "",
+			"upTo": ""
+		},
 		"title": "",
 		"waiting": ""
 	},
@@ -3157,7 +3175,11 @@
 			"you": "",
 			"yourBots": "",
 			"zoomIn": "",
-			"zoomOut": ""
+			"zoomOut": "",
+			"preview": {
+				"person": "",
+				"bot": ""
+			}
 		},
 		"requests": {
 			"answer": {

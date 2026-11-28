@@ -586,14 +586,33 @@ fn a_bots_hand_over_wakes_a_local_room_bot_up_to_the_discussion_budget() {
     let mut own = plain("My view.");
     own.message_id = "own".into();
     own.sender_id = "bot".into();
-    let mut answer = from_peer("m3", MAX_HOPS + 1, &[]);
+    let mut answer = from_peer("m3", MAX_DISCUSSION_HOPS, &[]);
     answer.envelope["body"]["reply_to"] = json!("own");
     assert!(
-        !wakes(&[answer.clone(), own.clone()], group),
-        "a reply that doesn't name the bot keeps the hop limit"
+        wakes(&[answer.clone(), own.clone()], group),
+        "a reply to the bot hands it the word without a mention"
     );
-    answer.envelope["body"]["hops"] = json!(MAX_HOPS);
-    assert!(wakes(&[answer, own], group));
+    answer.envelope["body"]["hops"] = json!(MAX_DISCUSSION_HOPS + 1);
+    assert!(!wakes(&[answer.clone(), own.clone()], group));
+
+    answer.envelope["body"]["hops"] = json!(1);
+    for (field, mark) in [
+        (
+            "discussion_outcome",
+            json!({ "agreed": true, "summary": "Plan B." }),
+        ),
+        (
+            "discussion_proposal",
+            json!({ "rounds": 10, "reason": "Three plans to weigh." }),
+        ),
+    ] {
+        let mut resting = answer.clone();
+        resting.envelope["body"][field] = mark;
+        assert!(
+            !wakes(&[resting, own.clone()], group),
+            "a reply with {field} hands the word to no one"
+        );
+    }
 }
 
 #[test]

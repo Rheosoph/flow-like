@@ -3,6 +3,9 @@
 import { useTranslation } from "@flow-like/locales";
 import { ArrowDown, ArrowUp, Plus, X } from "lucide-react";
 import { type ReactNode, useId } from "react";
+import { supportsCustomRequestParams } from "../../../../lib/bit/custom-request-params";
+import { isCloudRunnableLlmModel } from "../../../../lib/bit/local-model-filter";
+import type { IBit } from "../../../../lib/schema/bit/bit";
 import { cn } from "../../../../lib/utils";
 import {
 	BOT_LIMITS,
@@ -48,9 +51,7 @@ export function BrainStep({
 	const ids = useId();
 	const { options } = useBotModelOptions();
 	const length = instructions.trim().length;
-	const primaryIsLocal = options.some(
-		(option) => option.id === model.primary && option.local,
-	);
+	const primary = options.find((option) => option.id === model.primary);
 	return (
 		<BotStepPanel
 			title={t("editor.brain.title")}
@@ -109,8 +110,11 @@ export function BrainStep({
 				options={options}
 				onModelChange={onModelChange}
 			/>
-			{location === "server" && primaryIsLocal && (
+			{location === "server" && primary?.local && (
 				<BotNotice tone="warning">{t("editor.brain.localOnServer")}</BotNotice>
+			)}
+			{location === "device" && primary && (
+				<DeviceModelNotice bit={primary.bit} />
 			)}
 			<BotDecisionModelField
 				value={model.decision ?? null}
@@ -120,6 +124,18 @@ export function BrainStep({
 			{children}
 		</BotStepPanel>
 	);
+}
+
+/** What a device bot does with its primary model: one the device can't call, or one it calls with the owner's key. */
+function DeviceModelNotice({ bit }: Readonly<{ bit: IBit }>) {
+	const { t } = useTranslation("bots");
+	if (!isCloudRunnableLlmModel(bit))
+		return (
+			<BotNotice tone="warning">{t("editor.brain.notOnDevice")}</BotNotice>
+		);
+	if (supportsCustomRequestParams(bit.parameters?.provider?.provider_name))
+		return <BotNotice>{t("editor.brain.ownKeyOnDevice")}</BotNotice>;
+	return null;
 }
 
 function FallbackList({

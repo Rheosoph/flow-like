@@ -1,14 +1,17 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Loader2Icon, SearchIcon } from "lucide-react";
+import { Loader2Icon, SearchIcon, TriangleAlertIcon } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useTeamPreview } from "../../../hooks/use-bot-teams";
 import { useProjectUserSearch } from "../../../hooks/use-project-user-search";
 import { isTeamAdmin, teamPath } from "../../../lib/bot-teams/org-model";
 import { userDisplayName, userSecondaryLabel } from "../../../lib/user-display";
 import type {
+	ICandidateEffect,
 	IOrgBot,
+	ISilencedBot,
 	ITeam,
 	TeamRole,
 } from "../../../state/backend-state/bot-team-state";
@@ -44,6 +47,46 @@ import { OrgBotAvatar, PersonName } from "./org-chart-parts";
 import { PinAppDialog } from "./pin-app-dialog";
 
 const TOP_LEVEL = "__top__";
+const MAX_PREVIEW_PEOPLE = 20;
+const MAX_PREVIEW_BOTS = 30;
+
+function silencedOf(
+	effects: readonly ICandidateEffect[] | undefined,
+	id: string,
+): ISilencedBot[] {
+	return effects?.find((effect) => effect.id === id)?.silenced ?? [];
+}
+
+function SilenceWarning({ children }: Readonly<{ children: ReactNode }>) {
+	return (
+		<span className="flex items-start gap-1 text-xs text-warning">
+			<TriangleAlertIcon className="mt-0.5 size-3 shrink-0" aria-hidden />
+			<span>{children}</span>
+		</span>
+	);
+}
+
+function PersonSilenceWarning({
+	silenced,
+}: Readonly<{ silenced: readonly ISilencedBot[] }>) {
+	const { t } = useTranslation("bots");
+	const { botOf, nameOf } = useOrgChart();
+	if (silenced.length === 0) return null;
+	const names = silenced
+		.map((entry) => botOf(entry.bot_id))
+		.filter((bot): bot is IOrgBot => Boolean(bot))
+		.map(nameOf)
+		.join(", ");
+	return (
+		<SilenceWarning>
+			{t(
+				"teams.org.preview.person",
+				"If they join, {{bots}} will stop answering in the team room.",
+				{ bots: names },
+			)}
+		</SilenceWarning>
+	);
+}
 const PARENT_PAD_PX = 8;
 const PARENT_INDENT_PX = 14;
 
@@ -165,6 +208,7 @@ function PersonInviteRow({
 	detail,
 	already,
 	disabled,
+	silenced,
 	onInvite,
 }: Readonly<{
 	userId: string;
@@ -172,6 +216,7 @@ function PersonInviteRow({
 	detail?: string;
 	already: boolean;
 	disabled: boolean;
+	silenced: readonly ISilencedBot[];
 	onInvite: () => void;
 }>) {
 	const { t } = useTranslation("bots");
@@ -185,6 +230,7 @@ function PersonInviteRow({
 						{detail}
 					</span>
 				)}
+				<PersonSilenceWarning silenced={silenced} />
 			</span>
 			<Button
 				size="sm"
@@ -225,6 +271,14 @@ export function AddPeopleDialog({
 	);
 	const orgName = teamPath(org, team.id)[0]?.name ?? team.name;
 	const searching = query.trim() !== "";
+	const candidates = (
+		searching
+			? rows.map(({ user }) => user.id)
+			: suggestions.map((person) => person.userId)
+	)
+		.filter((userId) => !present.has(userId))
+		.slice(0, MAX_PREVIEW_PEOPLE);
+	const preview = useTeamPreview(team.id, candidates, []).data;
 	const invite = (userId: string) =>
 		actions.invitePeople.mutate(
 			{ teamId: team.id, userIds: [userId], role },
@@ -315,6 +369,7 @@ export function AddPeopleDialog({
 									detail={userSecondaryLabel(user)}
 									already={present.has(user.id)}
 									disabled={busy}
+									silenced={silencedOf(preview?.people, user.id)}
 									onInvite={() => invite(user.id)}
 								/>
 							))}
@@ -333,6 +388,7 @@ export function AddPeopleDialog({
 									detail={person.teams.join(" · ")}
 									already={false}
 									disabled={busy}
+									silenced={silencedOf(preview?.people, person.userId)}
 									onInvite={() => invite(person.userId)}
 								/>
 							))}
@@ -356,8 +412,14 @@ export function AddPeopleDialog({
 function AddBotRow({
 	team,
 	bot,
+	silenced,
 	onDone,
-}: Readonly<{ team: ITeam; bot: IOrgBot; onDone: () => void }>) {
+}: Readonly<{
+	team: ITeam;
+	bot: IOrgBot;
+	silenced: ISilencedBot | undefined;
+	onDone: () => void;
+}>) {
 	const { t } = useTranslation("bots");
 	const { me, nameOf, placeBot, actions } = useOrgChart();
 	const action = dropAction(team, bot, me);
@@ -370,6 +432,15 @@ function AddBotRow({
 					<span className="truncate text-xs text-muted-foreground">
 						<PersonName userId={bot.owner_id} />
 					</span>
+				)}
+				{silenced && (
+					<SilenceWarning>
+						{t(
+							"teams.org.preview.bot",
+							"Won't answer in the team room: someone there isn't classified for {{level}}.",
+							{ level: silenced.classification },
+						)}
+					</SilenceWarning>
 				)}
 			</span>
 			<Button
@@ -404,6 +475,11 @@ export function AddBotDialog({
 				(bot) => bot.owner_id !== me && !isFlux(bot) && !inTeam.has(bot.id),
 			)
 		: [];
+	const candidates = [...mine, ...others]
+		.map((bot) => bot.id)
+		.slice(0, MAX_PREVIEW_BOTS);
+	const preview = useTeamPreview(team.id, [], candidates).data;
+	const silencedBot = (botId: string) => silencedOf(preview?.bots, botId)[0];
 	return (
 		<Dialog open onOpenChange={(open) => !open && onClose()}>
 			<DialogContent>
@@ -431,6 +507,7 @@ export function AddBotDialog({
 									key={bot.id}
 									team={team}
 									bot={bot}
+									silenced={silencedBot(bot.id)}
 									onDone={onClose}
 								/>
 							))}
@@ -455,6 +532,7 @@ export function AddBotDialog({
 										key={bot.id}
 										team={team}
 										bot={bot}
+										silenced={silencedBot(bot.id)}
 										onDone={onClose}
 									/>
 								))}

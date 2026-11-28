@@ -1167,9 +1167,9 @@ pub async fn apply_flow_ir_commit(
 
     super::sink_rebind::try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
     mutation_guard.ensure_held()?;
-    let saved = super::scoring::save_board_and_refresh_summary(&state, &app_id, &board).await;
-    let put = match saved {
-        Ok(put) => put,
+    let saved = match super::scoring::save_board_and_refresh_summary(&state, &app_id, &board).await
+    {
+        Ok(saved) => saved,
         Err(error) => {
             if let Some(error) = ApiError::from_board_format_error(&error) {
                 return Err(error);
@@ -1228,7 +1228,7 @@ pub async fn apply_flow_ir_commit(
             "The FlowScript claim acknowledgement raced after its mutation and durable receipt were persisted; keeping the canonical applied board"
         );
     }
-    super::sync_board::seed_board_revision(&state, &app_id, &board_id, board, &put).await;
+    super::sync_board::seed_board_revision(&state, &app_id, &board_id, board, &saved).await;
     Ok(Json(result))
 }
 

@@ -11,6 +11,7 @@ import type {
 	IInboxAttachmentPart,
 	IInboxDesktopTarget,
 	IInboxDiscussionGrant,
+	IInboxDiscussionOutcome,
 	IInboxDiscussionProposal,
 	IInboxEntry,
 	IInboxFileHandle,
@@ -29,6 +30,11 @@ import {
 	readDiscussionGrant,
 	readDiscussionProposal,
 } from "./discussion-proposal-model";
+import {
+	readDiscussionHops,
+	readDiscussionOutcome,
+	readHops,
+} from "./discussion-thread-model";
 import {
 	type UserContextCardData,
 	userContextRequestOf,
@@ -237,6 +243,12 @@ export interface ConversationMessage {
 	discussionProposal?: IInboxDiscussionProposal;
 	/** A person's permission for that: the rounds the bots it wakes may discuss. */
 	discussion?: IInboxDiscussionGrant;
+	/** A bot message's bot turns behind it: its place in a discussion. */
+	hops?: number;
+	/** The bot turns the discussion a bot's message belongs to may reach. */
+	discussionHops?: number;
+	/** How the discussion a bot's message ended went. */
+	discussionOutcome?: IInboxDiscussionOutcome;
 	/** The window or browser tab the sender pointed the bot at. */
 	pointedAt?: IInboxDesktopTarget;
 	/** Recipients of the email this message was sent as. */
@@ -677,6 +689,13 @@ export function foldInboxEntries(
 				plainBody(entry)?.discussion_proposal,
 			);
 			const discussion = readDiscussionGrant(plainBody(entry)?.discussion);
+			const hops = readHops(plainBody(entry)?.hops);
+			const discussionHops = readDiscussionHops(
+				plainBody(entry)?.discussion_hops,
+			);
+			const discussionOutcome = readDiscussionOutcome(
+				plainBody(entry)?.discussion_outcome,
+			);
 			const pointedAt = pointedAtOf(entry);
 			const ui = uiPartsOf(entry);
 			const rawUsage = plainBody(entry)?.usage_stats;
@@ -714,6 +733,9 @@ export function foldInboxEntries(
 				...(note ? { note } : {}),
 				...(discussionProposal ? { discussionProposal } : {}),
 				...(discussion ? { discussion } : {}),
+				...(hops ? { hops } : {}),
+				...(discussionHops ? { discussionHops } : {}),
+				...(discussionOutcome ? { discussionOutcome } : {}),
 				...(pointedAt ? { pointedAt } : {}),
 				...(mailedTo.length > 0 ? { mailedTo } : {}),
 				...(approval

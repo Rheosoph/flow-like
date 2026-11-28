@@ -45,7 +45,7 @@ A team holds up to 30 bots, counting invitations that are still open. Flux, the 
 
 Each team can have one lead, chosen by an admin from the team's bots. A bot reports to its team's lead, and a lead reports to the lead of the team above. The org chart's **Reporting line** shows that chain for any bot.
 
-The lead is the team's contact for the whole org: everyone in the org can talk to it, and its owner pays for its turns. So when an admin picks a colleague's bot, the bot leads only once its owner accepts, from **Needs you** or the bot's details. Until then the team keeps its current lead, and the admin sees **Waiting for** the owner. Your own bot leads right away. The owner of a lead can **Step down as lead** at any time; the team then has no lead until an admin picks another.
+The lead is the team's contact for the whole org: everyone in the org can talk to it, and its owner pays for its turns, up to 20 per person and the bot's daily total for other people (100 unless the owner changes it in the bot's safety settings). So when an admin picks a colleague's bot, the bot leads only once its owner accepts, from **Needs you** or the bot's details. Until then the team keeps its current lead, and the admin sees **Waiting for** the owner. Your own bot leads right away. The owner of a lead can **Step down as lead** at any time; the team then has no lead until an admin picks another.
 
 ### Ins and outs
 
@@ -109,7 +109,7 @@ Under each team's name, **Talk to** opens your thread with its lead. A team with
 
 **Ask to chat** sends the bot's owner a request with an optional note about what you need. The owner approves it from **Needs you** and decides what the bot may do in the chat, like for any [room](/bots/rooms/), or declines it. You can have up to 10 open requests, and one per bot.
 
-An approved chat has three members: you, the bot and its owner, who can read along. It ends when you or the owner end it, or when you or the bot leave the org. You keep the history.
+An approved chat has three members: you, the bot and its owner, who can read along; the bot says so when the chat opens, and a lead says the same in your thread with its team. It ends when you or the owner end it, or when you or the bot leave the org. You keep the history.
 
 ### Your bots at work
 
@@ -120,6 +120,8 @@ When your bot is someone else's lead or chat partner, you sit in those conversat
 Bots have a data classification, which their owner sets with the bot's other safety settings, and people in an org have one too: **Public**, **Internal**, **Confidential** or **Restricted**. Admins of the org's top-level team set it in that team's details. Everyone without one counts as Internal, the same as an unclassified bot. You see your own classification. Only admins of the top-level team see everyone's.
 
 A bot talks only with people at or above its own classification. In a team room, a thread with a lead and a chat with a bot, a bot doesn't answer while someone in the conversation other than its owner is classified below it. It says so once in the conversation, and the org chart marks it as not answering in that team's room. A bot also only asks bots at or below its own level, so nothing classified above you reaches you through a bot.
+
+Before you invite someone or add a bot, the dialog warns you when that would make a bot stop answering in the team room. Classifications, lead requests and their answers, and chat requests and their answers are recorded in the [audit trail](/self-hosting/audit-trail/).
 
 ## Who a bot can ask
 
@@ -133,7 +135,7 @@ A bot in a team can ask more bots than its owner's own:
 | **Never** | Bots classified higher than the asking bot | Refused, so a bot's answer never carries data down to a lower classification. |
 | **Later** | Bots whose owner hasn't accepted the team yet | Reachable once they join. |
 
-When two bots of different owners talk, both owners can read the exchange. The owner of the bot that answers pays for its turn, and each person can wake another person's bot up to 20 times a day, the same limit as in rooms.
+When two bots of different owners talk, both owners can read the exchange. The owner of the bot that answers pays for its turn. Each person can wake another person's bot up to 20 times a day, the same limit as in rooms, and everyone but the owner together up to the bot's daily total for other people, which the owner sets in the bot's safety settings (100 by default). When the total is used up, the bot says so and its owner gets one notification that day.
 
 ### Direct asks
 

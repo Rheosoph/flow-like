@@ -349,3 +349,61 @@ async fn read_along_and_reaction_turns_do_not_use_up_a_requesters_limit() {
     assert_eq!(enqueue_in(&db, &named, now).await.unwrap(), 1);
     assert_eq!(turn_of(&db, "c-named").await.unprompted, None);
 }
+
+#[tokio::test]
+async fn everyone_but_the_owner_shares_one_daily_allowance_per_bot() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    crate::entity::bot::Entity::update_many()
+        .col_expr(
+            crate::entity::bot::Column::OthersDailyTurns,
+            sea_orm::sea_query::Expr::value(3),
+        )
+        .filter(crate::entity::bot::Column::Id.eq("bot_1"))
+        .exec(&db)
+        .await
+        .unwrap();
+    super::fixture::conversation(
+        &db,
+        "c1",
+        "GROUP",
+        "PLAIN",
+        &["user-a", "user-c", "user-d", "user-e", "bot_1"],
+    )
+    .await;
+    let now = at(100_000);
+    for (sender, trigger) in [("user-c", "c-1"), ("user-c", "c-2"), ("user-d", "d-1")] {
+        let request = room_request(sender, trigger, ConversationKind::Group);
+        assert_eq!(enqueue_in(&db, &request, now).await.unwrap(), 1);
+    }
+    let over = room_request("user-e", "e-1", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &over, now).await.unwrap(), 0);
+    let notice = crate::entity::inbox_entry::Entity::find()
+        .filter(crate::entity::inbox_entry::Column::MessageId.eq(
+            flow_like_types::bot_turn::rate_limit_message_id("bot_1", "e-1"),
+        ))
+        .filter(crate::entity::inbox_entry::Column::InboxId.eq("user-e"))
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("the room is told");
+    assert!(
+        notice.envelope["body"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("requests from other people"),
+        "{}",
+        notice.envelope
+    );
+    let again = room_request("user-e", "e-2", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &again, now).await.unwrap(), 0);
+    let told = notices(&db, "user-a").await;
+    assert_eq!(told.len(), 1, "the owner hears once a day");
+    assert!(told[0].id.starts_with("botothers_bot_1_"), "{}", told[0].id);
+
+    let owner = room_request("user-a", "a-1", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &owner, now).await.unwrap(), 1);
+    let tomorrow = now + Duration::hours(WINDOW_HOURS + 1);
+    let later = room_request("user-e", "e-3", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &later, tomorrow).await.unwrap(), 1);
+}

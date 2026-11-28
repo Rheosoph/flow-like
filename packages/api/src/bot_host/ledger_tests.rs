@@ -225,12 +225,20 @@ async fn a_persons_unaddressed_message_wakes_every_reading_bot_but_a_bots_messag
     assert!(!queues_turn(&by_bot, &addressed));
     let mut answered = recipient("bot_4", "user-a", SERVER);
     answered.replied_to = true;
+    answered.hops = MAX_DISCUSSION_HOPS;
+    assert!(
+        queues_turn(&by_bot, &answered),
+        "a reply to the bot hands it the word without a mention"
+    );
+    answered.hops = MAX_DISCUSSION_HOPS + 1;
+    assert!(!queues_turn(&by_bot, &answered));
+    by_bot.hands_over = false;
     answered.hops = MAX_HOPS;
     assert!(queues_turn(&by_bot, &answered));
     answered.hops = MAX_HOPS + 1;
     assert!(
         !queues_turn(&by_bot, &answered),
-        "a reply that doesn't name the bot keeps the hop limit"
+        "a reply that hands over nothing, such as an ask, keeps the hop limit"
     );
 }
 

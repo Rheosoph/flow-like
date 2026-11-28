@@ -62,6 +62,7 @@ pub(crate) mod wait_schema {
         super::bots::release,
         super::bots::reply,
         super::bots::forget,
+        super::realtime::connect,
     ),
     components(schemas(
         DeviceView,

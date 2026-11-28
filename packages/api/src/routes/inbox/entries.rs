@@ -861,11 +861,17 @@ async fn deliver<'e, C: ConnectionTrait>(
         });
     }
     let bot_sender = bots.iter().any(|bot| bot.id == event.sender_id);
-    let hands_over = bot_sender
-        && conversation_kind == ConversationKind::Group
+    let bot_body = match &outgoing.content {
+        Content::Plain(envelope) if bot_sender => MessageBody::parse(&envelope["body"]).ok(),
+        _ => None,
+    };
+    let rests = bot_body.as_ref().is_some_and(MessageBody::rests_discussion);
+    let hands_over = conversation_kind == ConversationKind::Group
         && event.kind == InboxEntryKind::Message
         && !super::conversations::is_exchange(conversation)
-        && matches!(&outgoing.content, Content::Plain(envelope) if envelope["body"].get("ask").is_none_or(Value::is_null));
+        && bot_body
+            .as_ref()
+            .is_some_and(|body| body.ask.is_none() && !rests);
     let chain = if bot_sender {
         crate::bot_host::chain_of(txn, event.sender_id, outgoing.links.reply_to.as_deref()).await?
     } else {
@@ -891,6 +897,11 @@ async fn deliver<'e, C: ConnectionTrait>(
     if speaks_to_direct_bot(event.sender_id, conversation_kind, bots, outgoing) {
         for recipient in &mut delivery.recipients {
             recipient.mentioned = true;
+        }
+    }
+    if rests {
+        for recipient in &mut delivery.recipients {
+            recipient.replied_to = false;
         }
     }
     if let Content::Plain(envelope) = &outgoing.content

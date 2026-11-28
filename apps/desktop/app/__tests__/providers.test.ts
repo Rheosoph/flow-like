@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../lib/init-idb-sqlite", () => ({}));
 vi.mock("../../lib/init-blob-offload", () => ({ initBlobOffload: () => {} }));
 vi.mock("next/dynamic", () => ({ default: () => () => null }));
+vi.mock("@flow-like/flow-like-ui/components/guide/guide-provider", () => ({
+	GuideProvider: () => null,
+}));
 vi.mock("@flow-like/flow-like-ui", async () => {
 	const query = await import("@tanstack/react-query");
 	return {
@@ -43,6 +46,7 @@ vi.mock("@flow-like/flow-like-ui/hooks/use-network-status", () => ({
 	useNetworkStatus: () => true,
 }));
 vi.mock("@flow-like/flow-like-ui/lib/platform", () => ({
+	isTauri: () => false,
 	isWebkitLite: () => true,
 }));
 vi.mock("@flow-like/flow-like-ui/lib/query-persister", () => ({

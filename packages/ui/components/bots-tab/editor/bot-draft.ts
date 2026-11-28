@@ -7,6 +7,7 @@ import {
 	type BotExecutionMode,
 	type BotLocation,
 	type BotSystemKey,
+	DEFAULT_OTHERS_DAILY_TURNS,
 	FLOWPILOT_CAPABILITY,
 	type IBot,
 	type IBotModelPolicy,
@@ -52,6 +53,8 @@ export interface BotDraft {
 	deviceId: string | null;
 	/** People who share an app with the owner find the bot and can invite it. */
 	othersCanInvite: boolean;
+	/** Turns all people other than the owner may start on it in a day. */
+	othersDailyTurns: number;
 }
 
 /**
@@ -149,6 +152,7 @@ export function createEmptyBotDraft(): BotDraft {
 		executionMode: "native",
 		deviceId: null,
 		othersCanInvite: false,
+		othersDailyTurns: DEFAULT_OTHERS_DAILY_TURNS,
 	};
 }
 
@@ -194,6 +198,7 @@ export function botDraftFromBot(bot: IBot): BotDraft {
 		executionMode: bot.execution_mode ?? "native",
 		deviceId: bot.device_id,
 		othersCanInvite: bot.others_can_invite === true,
+		othersDailyTurns: bot.others_daily_turns ?? DEFAULT_OTHERS_DAILY_TURNS,
 	};
 }
 
@@ -314,6 +319,7 @@ function draftFields(draft: BotDraft): BotFields {
 		execution_mode: draft.executionMode,
 		device_id: draft.location === "device" ? draft.deviceId : null,
 		others_can_invite: draft.othersCanInvite,
+		others_daily_turns: draft.othersDailyTurns,
 	};
 }
 
@@ -337,6 +343,7 @@ function botFields(bot: IBot): BotFields {
 		execution_mode: bot.execution_mode ?? "native",
 		device_id: bot.device_id ?? null,
 		others_can_invite: bot.others_can_invite === true,
+		others_daily_turns: bot.others_daily_turns ?? DEFAULT_OTHERS_DAILY_TURNS,
 	};
 }
 
@@ -365,6 +372,7 @@ export function buildCreateBotRequest(draft: BotDraft): ICreateBotRequest {
 		vision_model,
 		subtask_model,
 		others_can_invite,
+		others_daily_turns,
 		...fields
 	} = draftFields(draft);
 	const { execution_mode, ...compatibleFields } = fields;
@@ -378,6 +386,9 @@ export function buildCreateBotRequest(draft: BotDraft): ICreateBotRequest {
 		...(vision_model ? { vision_model } : {}),
 		...(subtask_model ? { subtask_model } : {}),
 		...(others_can_invite ? { others_can_invite } : {}),
+		...(others_daily_turns !== DEFAULT_OTHERS_DAILY_TURNS
+			? { others_daily_turns }
+			: {}),
 		name: draft.name.trim(),
 		preset_id: draft.presetId,
 	};

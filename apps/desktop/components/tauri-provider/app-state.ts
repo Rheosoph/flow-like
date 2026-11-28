@@ -56,6 +56,7 @@ import {
 } from "@flow-like/flow-like-ui/lib/schema/app/showcase";
 import type { AppPackage } from "@flow-like/flow-like-ui/lib/schema/wasm";
 import {
+	hasExpiredAssetUrl,
 	mergeMetadataMedia,
 	stabilizeMetadata,
 	stabilizeMetadataEntries,
@@ -99,6 +100,36 @@ function remoteAppEntries(
 	entries: [IApp, IMetadata | undefined][] | undefined,
 ): [IApp, IMetadata | undefined][] {
 	return asArray(entries).filter(isAppEntry);
+}
+
+/**
+ * The native copy of a cloud app holds the artwork signature from the day it
+ * was first cached, long dead. That copy is the interim answer while the remote
+ * sync runs, so every refetch swapped each card's artwork for its placeholder
+ * and back. Media the cache already shows stays until the sync answers, as long
+ * as it is still valid.
+ */
+function withShownMedia(
+	local: [IApp, IMetadata | undefined][],
+	shown: [IApp, IMetadata | undefined][] | undefined,
+): [IApp, IMetadata | undefined][] {
+	const shownMeta = new Map(
+		remoteAppEntries(shown).map(([app, meta]) => [app.id, meta]),
+	);
+	if (shownMeta.size === 0) return local;
+	return local.map((entry) => {
+		const [app, meta] = entry;
+		const known = shownMeta.get(app.id);
+		if (
+			!meta ||
+			!known ||
+			hasExpiredAssetUrl([known.icon, known.thumbnail, known.preview_media])
+		) {
+			return entry;
+		}
+		const merged = mergeMetadataMedia(meta, known);
+		return merged === meta ? entry : [app, merged];
+	});
 }
 
 function expectRemoteApp(app: IApp | undefined, appId: string): IApp {
@@ -793,6 +824,10 @@ export class AppState implements IAppState {
 			}
 		}
 
+		const shownApps = withShownMedia(
+			localApps,
+			this.backend.queryClient.getQueryData([this.getApps.name || "backendFn"]),
+		);
 		const promise = injectDataFunction(
 			syncRemote,
 			this,
@@ -800,11 +835,11 @@ export class AppState implements IAppState {
 			this.getApps,
 			[],
 			[],
-			localApps,
+			shownApps,
 		);
 
 		this.backend.backgroundTaskHandler(promise);
-		return localApps;
+		return shownApps;
 	}
 
 	async getApp(appId: string): Promise<IApp> {

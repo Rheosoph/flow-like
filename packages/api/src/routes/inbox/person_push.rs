@@ -112,6 +112,7 @@ fn push_targets_for(
 }
 
 /// [`push_targets_for`] for a message that names nobody.
+#[cfg(test)]
 pub(crate) fn push_targets(members: &[conversation_member::Model], sender: &str) -> Vec<String> {
     push_targets_for(members, sender, |_| false)
 }

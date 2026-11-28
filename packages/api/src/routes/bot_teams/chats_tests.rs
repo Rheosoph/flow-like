@@ -1,16 +1,18 @@
 use super::{
-    access::{TEAM_LIMIT, TEAM_NOT_FOUND},
+    access::{TEAM_FORBIDDEN, TEAM_LIMIT, TEAM_NOT_FOUND},
     chats::{
         MAX_PENDING_CHATS, TEAM_CHAT_DECLINED, TEAM_CHAT_EXISTS, TEAM_CHAT_LEAD, accept_chat_in,
         decline_chat_in, end_chat_in, request_chat_in, sync_chats_of,
     },
     effects::Effects,
-    model::{AcceptChatRequest, ChatRequestBody},
+    model::{AcceptChatRequest, ChatRequestBody, TeamPreviewRequest},
     people::remove_person_in,
+    preview::preview_in,
     tests::{create, join, own_bot, world},
     threads::{TEAM_CLASSIFIED, TEAM_NO_LEAD, open_thread_in},
 };
 use crate::{
+    bot_host::team_gate::gate_notice_message_id,
     entity::{
         bot, bot_org_classification, bot_team, bot_team_bot, bot_team_chat, bot_turn,
         conversation_member, inbox_entry,
@@ -142,12 +144,31 @@ async fn turns(db: &DatabaseConnection) -> Vec<bot_turn::Model> {
 async fn notices(db: &DatabaseConnection, conversation_id: &str, bot_id: &str) -> usize {
     inbox_entry::Entity::find()
         .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
-        .filter(inbox_entry::Column::SenderId.eq(bot_id))
+        .filter(inbox_entry::Column::MessageId.eq(gate_notice_message_id(bot_id, conversation_id)))
         .filter(inbox_entry::Column::InboxId.eq("anna"))
         .all(db)
         .await
         .unwrap()
         .len()
+}
+
+/// What `bot_id` said in `conversation_id`, in `reader`'s copy.
+async fn said_by(
+    db: &DatabaseConnection,
+    conversation_id: &str,
+    bot_id: &str,
+    reader: &str,
+) -> Vec<String> {
+    inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(inbox_entry::Column::SenderId.eq(bot_id))
+        .filter(inbox_entry::Column::InboxId.eq(reader))
+        .all(db)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|entry| entry.envelope["body"]["text"].as_str().map(str::to_string))
+        .collect()
 }
 
 #[tokio::test]
@@ -664,7 +685,9 @@ async fn the_gate_silences_a_bot_above_a_person_once_and_lets_it_answer_otherwis
     assert_eq!(notices(&db, &conversation, "jonas-bot").await, 1);
     let notice = inbox_entry::Entity::find()
         .filter(inbox_entry::Column::ConversationId.eq(&conversation))
-        .filter(inbox_entry::Column::SenderId.eq("jonas-bot"))
+        .filter(
+            inbox_entry::Column::MessageId.eq(gate_notice_message_id("jonas-bot", &conversation)),
+        )
         .filter(inbox_entry::Column::InboxId.eq("anna"))
         .one(&db)
         .await
@@ -732,4 +755,118 @@ async fn the_gate_covers_a_lead_thread_with_the_leads_owner_exempt() {
         .unwrap();
     assert_eq!(turns(&db).await.len(), 1);
     assert_eq!(notices(&db, &thread.conversation_id, "jonas-bot").await, 1);
+}
+
+fn owner_reads_along(said: &[String]) -> usize {
+    said.iter()
+        .filter(|text| text.contains("can read along here"))
+        .count()
+}
+
+#[tokio::test]
+async fn the_person_is_told_once_that_the_bots_owner_reads_along() {
+    let db = world().await;
+    let kestrel = org(&db).await;
+    let conversation = open_chat(&db).await;
+    let chat = said_by(&db, &conversation, "jonas-bot", "anna").await;
+    assert_eq!(owner_reads_along(&chat), 1, "{chat:?}");
+    let mut effects = Effects::default();
+    sync_chats_of(
+        &db,
+        &["jonas-bot".to_string()],
+        &[],
+        "jonas",
+        at(12),
+        &mut effects,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        owner_reads_along(&said_by(&db, &conversation, "jonas-bot", "anna").await),
+        1
+    );
+
+    lead(&db, &kestrel, "mara-bot").await;
+    let (thread, _) = open_thread_in(&db, "anna", &kestrel, at(13)).await.unwrap();
+    open_thread_in(&db, "anna", &kestrel, at(14)).await.unwrap();
+    let told = said_by(&db, &thread.conversation_id, "mara-bot", "anna").await;
+    assert_eq!(owner_reads_along(&told), 1, "{told:?}");
+    assert!(told.iter().any(|text| text.starts_with("My owner")));
+
+    let (own, _) = open_thread_in(&db, "mara", &kestrel, at(15)).await.unwrap();
+    assert_eq!(
+        owner_reads_along(&said_by(&db, &own.conversation_id, "mara-bot", "mara").await),
+        0,
+        "nobody watches a thread with your own lead"
+    );
+}
+
+fn preview_of(users: &[&str], bots: &[&str]) -> TeamPreviewRequest {
+    TeamPreviewRequest {
+        user_ids: users.iter().map(|id| id.to_string()).collect(),
+        bot_ids: bots.iter().map(|id| id.to_string()).collect(),
+    }
+}
+
+fn quiet(effects: &[flow_like_types::bot_team::CandidateEffect], id: &str) -> Vec<String> {
+    effects
+        .iter()
+        .find(|effect| effect.id == id)
+        .map(|effect| {
+            effect
+                .silenced
+                .iter()
+                .map(|bot| bot.bot_id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_preview_names_the_bots_that_would_stop_answering_in_the_room() {
+    let db = world().await;
+    let kestrel = org(&db).await;
+    for person in ["mara", "jonas", "anna"] {
+        classify_person(&db, &kestrel, person, "confidential").await;
+    }
+    classify_bot(&db, "jonas-bot", "confidential").await;
+    insert_bot(&db, "vault", "jonas", "SERVER").await;
+    classify_bot(&db, "vault", "restricted").await;
+    insert_bot(&db, "stranger", "outsider", "SERVER").await;
+    classify_bot(&db, "stranger", "restricted").await;
+
+    let people = preview_in(&db, "mara", &kestrel, &preview_of(&["tomas"], &[]))
+        .await
+        .unwrap();
+    assert_eq!(quiet(&people.people, "tomas"), ["jonas-bot"]);
+    assert_eq!(
+        people.people[0].silenced[0].classification,
+        flow_like_types::data_classification::DataClassification::Confidential
+    );
+
+    let bots = preview_in(
+        &db,
+        "anna",
+        &kestrel,
+        &preview_of(&[], &["vault", "stranger"]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(quiet(&bots.bots, "vault"), ["vault"]);
+    assert_eq!(
+        bots.bots.len(),
+        1,
+        "a bot whose owner is outside the org can't join"
+    );
+
+    let member = preview_in(&db, "anna", &kestrel, &preview_of(&["tomas"], &[]))
+        .await
+        .unwrap_err();
+    assert_code(&member, StatusCode::FORBIDDEN, TEAM_FORBIDDEN);
+
+    classify_person(&db, &kestrel, "anna", "internal").await;
+    let already = preview_in(&db, "mara", &kestrel, &preview_of(&["tomas"], &[]))
+        .await
+        .unwrap();
+    assert!(already.people.is_empty(), "jonas-bot is quiet already");
 }

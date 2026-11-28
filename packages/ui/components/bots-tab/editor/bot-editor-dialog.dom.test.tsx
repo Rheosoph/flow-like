@@ -88,6 +88,7 @@ interface Calls {
 	restrictionChanges: RestrictionChange[];
 	secrets: { name: string; request: IUpsertBotSecretRequest }[];
 	workspaces: string[];
+	addressClaims: { botId: string; alias: string }[];
 }
 
 interface Fixture {
@@ -106,6 +107,8 @@ interface Fixture {
 	clone?: true | string;
 	/** Every create, save and copy is refused with this. */
 	refuseWith?: Error;
+	/** The server gives bots addresses on this domain. */
+	mail?: { domain: string; taken?: string[]; refuseClaim?: string };
 }
 
 /** What the host's clone answers: a custom bot named as a copy. */
@@ -129,6 +132,7 @@ function fakeBackend(
 		localHost = false,
 		clone,
 		refuseWith,
+		mail,
 	}: Fixture,
 ): IBackendState {
 	const attached = new Map(initialApps.map((app) => [app.app_id, app]));
@@ -203,6 +207,27 @@ function fakeBackend(
 			calls.secrets.push({ name, request });
 			return secret({ name });
 		},
+		...(mail && {
+			getNewBotMailDomain: async () => ({
+				configured: true,
+				domain: mail.domain,
+			}),
+			checkNewBotMailAddress: async (alias: string) =>
+				mail.taken?.includes(alias)
+					? { available: false, reason: "This address is already taken" }
+					: { available: true },
+			claimMailAddress: async (botId: string, alias: string) => {
+				calls.addressClaims.push({ botId, alias });
+				if (mail.refuseClaim) throw new Error(mail.refuseClaim);
+				return {
+					configured: true,
+					domain: mail.domain,
+					address: `${alias}@${mail.domain}`,
+					alias,
+					enabled: true,
+				};
+			},
+		}),
 		...(localHost && {
 			local: {
 				list: async () => [],
@@ -313,6 +338,7 @@ function noCalls() {
 		restrictionChanges: [],
 		secrets: [],
 		workspaces: [],
+		addressClaims: [],
 	};
 	return calls;
 }
@@ -379,6 +405,7 @@ async function renderDialog(fixture: Fixture = {}) {
 	const { BotEditorDialog } = await import("./bot-editor-dialog");
 	const toastError = spyOn(toast, "error").mockImplementation(() => "");
 	const toastSuccess = spyOn(toast, "success").mockImplementation(() => "");
+	const toastWarning = spyOn(toast, "warning").mockImplementation(() => "");
 	const signedIn = useAuthStatusStore.getState().signedIn;
 	useAuthStatusStore.getState().setSignedIn(!fixture.signedOut);
 	const calls = noCalls();
@@ -413,6 +440,7 @@ async function renderDialog(fixture: Fixture = {}) {
 		client.clear();
 		toastError.mockRestore();
 		toastSuccess.mockRestore();
+		toastWarning.mockRestore();
 		useAuthStatusStore.setState({ signedIn });
 		await window.happyDOM.close();
 		restore();
@@ -456,6 +484,8 @@ async function renderDialog(fixture: Fixture = {}) {
 	const toastErrors = () => toastError.mock.calls.map(([message]) => message);
 	const toastSuccesses = () =>
 		toastSuccess.mock.calls.map(([message]) => message);
+	const toastWarnings = () =>
+		toastWarning.mock.calls.map(([message]) => message);
 	const steps = () => stepLabels(body);
 	return {
 		body,
@@ -471,6 +501,7 @@ async function renderDialog(fixture: Fixture = {}) {
 		toastErrors,
 		toastError,
 		toastSuccesses,
+		toastWarnings,
 		steps,
 		client,
 		calls,
@@ -629,6 +660,85 @@ function serverLimit(message = FULL_SERVER) {
 		message,
 	});
 }
+
+describe("BotEditorDialog email address of a new bot", () => {
+	const mail = { domain: "bots.example.com", taken: ["taken"] };
+	/** Past the availability check's debounce. */
+	const waitForCheck = () =>
+		act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+
+	async function pickAddress(fixture: Fixture, alias: string) {
+		const view = await renderDialog(fixture);
+		await view.click("Secretary");
+		await view.click("Abilities");
+		await view.settle();
+		await view.type(view.field("input[aria-label='Address name']"), alias);
+		await waitForCheck();
+		return view;
+	}
+
+	test("is picked in Abilities and claimed right after the bot is created", async () => {
+		const view = await pickAddress({ mail }, "taken");
+		expect(view.body.textContent).toContain("@bots.example.com");
+		expect(view.body.textContent).toContain("This address is already taken");
+
+		await view.type(view.field("input[aria-label='Address name']"), "Scout");
+		await waitForCheck();
+		expect(view.body.textContent).toContain("Available");
+
+		await view.click("Data & safety");
+		await view.click("Create bot");
+		await view.settle();
+		expect(view.calls.addressClaims).toEqual([
+			{ botId: "bot_new", alias: "scout" },
+		]);
+		expect(view.calls.saved.map((saved) => saved.id)).toEqual(["bot_new"]);
+		expect(view.toastWarnings()).toEqual([]);
+	});
+
+	test("a refused claim still creates the bot and says where to pick another", async () => {
+		const view = await pickAddress(
+			{ mail: { ...mail, refuseClaim: "This email address is already taken" } },
+			"scout",
+		);
+		await view.click("Data & safety");
+		await view.click("Create bot");
+		await view.settle();
+		expect(view.calls.addressClaims).toEqual([
+			{ botId: "bot_new", alias: "scout" },
+		]);
+		expect(view.calls.saved.map((saved) => saved.id)).toEqual(["bot_new"]);
+		expect(view.toastWarnings()).toEqual([
+			"The bot is ready, but scout couldn't be claimed as its address. Pick another one in its Details.",
+		]);
+	});
+
+	test("switching email off before Create claims nothing", async () => {
+		const view = await pickAddress({ mail }, "scout");
+		const label = [...view.body.querySelectorAll("label")].find(
+			(element) => element.textContent === "Email",
+		);
+		await view.press(view.field(`[id='${label?.getAttribute("for")}']`));
+		await view.click("Data & safety");
+		await view.click("Create bot");
+		await view.settle();
+		expect(view.calls.created[0].capabilities).not.toContain("email");
+		expect(view.calls.addressClaims).toEqual([]);
+	});
+
+	test("signed out on the desktop, a new bot is told it gets no address", async () => {
+		const view = await renderDialog({ localHost: true, signedOut: true });
+		await view.click("Secretary");
+		await view.click("Abilities");
+		await view.settle();
+		expect(view.body.textContent).toContain(
+			"Bots that only live on this computer have no address",
+		);
+		expect(view.body.querySelector("input[aria-label='Address name']")).toBe(
+			null,
+		);
+	});
+});
 
 describe("BotEditorDialog when the plan's bots on the server are used up", () => {
 	test("creating says so with the plan's numbers and the ways out", async () => {
